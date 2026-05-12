@@ -141,6 +141,30 @@ See [FEATURES.md](./FEATURES.md) — 84 features across 12 tiers.
 - Delete operations only move files to macOS Trash, never physically delete
 - Color tags are stored locally, not written to macOS extended attributes
 
+## Troubleshooting
+
+### "App is damaged and can't be opened"
+
+When opening Aether Explorer for the first time, macOS may show "Aether Explorer.app is damaged and can't be opened. You should move it to the Trash."
+
+**Cause:** This is a development build without Apple Developer code signing. macOS Gatekeeper blocks unsigned apps.
+
+**Fix:**
+
+```bash
+# After moving the app to /Applications, run in Terminal:
+sudo xattr -rd com.apple.quarantine /Applications/Aether\ Explorer.app
+```
+
+Or via System Settings:
+
+1. Open **System Settings → Privacy & Security**
+2. Scroll down to the **Security** section
+3. Click the **Open Anyway** button
+4. Click **Open** in the confirmation dialog
+
+> Note: If you don't see the "Open Anyway" option, run the xattr command above first.
+
 ## License
 
 MIT

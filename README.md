@@ -143,6 +143,30 @@ aether-explorer/
 - 删除操作只会移至 macOS 废纸篓，不做物理删除
 - 颜色标签当前保存在本地设置中，不写入 macOS 扩展属性
 
+## 常见问题
+
+### 「已损坏，无法打开」
+
+首次打开 DMG 安装的 Aether Explorer，macOS 可能会提示「已损坏，无法打开」。
+
+**原因：** 这是开发构建版本，没有 Apple Developer 签名认证。macOS Gatekeeper 会拦截未签名应用。
+
+**解决方法：**
+
+```bash
+# 将应用拖入 Applications 文件夹后，终端执行：
+sudo xattr -rd com.apple.quarantine /Applications/Aether\ Explorer.app
+```
+
+或者：
+
+1. 打开 **系统设置 → 隐私与安全性**
+2. 向下滚动到「安全性」部分
+3. 点击「仍要打开」按钮
+4. 在弹出的确认对话框中选择「打开」
+
+> 注意：如果你看不到「仍要打开」选项，请先运行上面的 xattr 命令。
+
 ## License
 
 MIT
