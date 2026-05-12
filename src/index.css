@@ -1,0 +1,166 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@layer utilities {
+  .scrollbar-hide {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Global Themed Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--primary);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--primary);
+  opacity: 0.8;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  
+  --color-surface: var(--surface);
+  --color-on-surface: var(--on-surface);
+  --color-surface-variant: var(--surface-variant);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
+  
+  --color-primary: var(--primary, #d0bcff);
+  --color-on-primary: var(--on-primary);
+  
+  --color-secondary: var(--secondary);
+  --color-on-secondary: var(--on-secondary);
+  
+  --color-tertiary: var(--tertiary);
+  --color-on-tertiary: var(--on-tertiary);
+
+  --radius-xs: 0.5rem;
+  --radius-DEFAULT: 1rem;
+  --radius-lg: 1.5rem;
+  --radius-xl: 2rem;
+  --radius-2xl: 3rem;
+}
+
+@layer base {
+  /* Solid background — temporarily disabled transparency for debugging */
+  html, body, #root {
+    background: #fdfdfd !important;
+  }
+
+  :root, .light {
+    --surface: #fdfdfd;
+    --on-surface: #141317;
+    --surface-variant: #e7e0ec;
+    --surface-container-low: #f7f2f9;
+    --surface-container: #f3edf7;
+    --surface-container-high: #ece6f0;
+    --surface-container-highest: #e6e0e9;
+
+    --on-primary: #ffffff;
+
+    --secondary: #625b71;
+    --on-secondary: #ffffff;
+
+    --tertiary: #7d5260;
+    --on-tertiary: #ffffff;
+  }
+
+  .dark {
+    --surface: #141317;
+    --on-surface: #ffffff;
+    --surface-variant: #49454f;
+    --surface-container-low: #1c1b1f;
+    --surface-container: #201f23;
+    --surface-container-high: #2b292d;
+    --surface-container-highest: #36343b;
+
+    --on-primary: #fff;
+
+    --secondary: #ccc2dc;
+    --on-secondary: #332d41;
+
+    --tertiary: #efb8c8;
+    --on-tertiary: #492532;
+  }
+
+  body {
+    @apply font-sans;
+    color: var(--on-surface);
+  }
+}
+
+/* Window rounded corners — Material Design 3 extra-large radius */
+html, body, #root {
+  border-radius: 24px;
+  overflow: hidden;
+}
+
+/* Auto-hide scrollbar — visible only on hover */
+.auto-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  -ms-overflow-style: auto;
+  scrollbar-gutter: stable;
+}
+.auto-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.auto-scrollbar:hover,
+.group\/sidebar:hover .auto-scrollbar {
+  scrollbar-color: color-mix(in srgb, var(--primary) 45%, transparent) transparent;
+}
+.auto-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.auto-scrollbar::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.auto-scrollbar:hover::-webkit-scrollbar-thumb,
+.group\/sidebar:hover .auto-scrollbar::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+/* Glassmorphism Utilities */
+.glass-panel {
+  @apply backdrop-blur-3xl;
+}
+
+.acrylic-blur {
+  @apply backdrop-blur-xl;
+}
+
+.m3-card {
+  @apply border border-transparent bg-on-surface/[0.06];
+}
+
+.mac-btn {
+  @apply w-3 h-3 rounded-full;
+}

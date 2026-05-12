@@ -1,0 +1,37 @@
+# 依赖
+node_modules/
+
+# 构建产物
+build/
+dist/
+
+# 测试覆盖
+coverage/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+
+# 环境变量
+.env*
+!.env.example
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 工作流（开发过程文件，不参与版本控制）
+.workflow/
+
+# 锁文件（保留 npm lock）
+*.lock
+!package-lock.json

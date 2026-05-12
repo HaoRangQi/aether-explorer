@@ -1,0 +1,369 @@
+import { useEffect, useRef, useState } from 'react';
+import type { MouseEvent } from 'react';
+import { motion } from 'motion/react';
+import { useTranslation } from 'react-i18next';
+import {
+  Home,
+  FileText,
+  Download,
+  Terminal,
+  Clock,
+  Cloud,
+  ChevronDown,
+  ChevronRight,
+  HardDrive,
+  RefreshCw,
+  Upload,
+  Wifi,
+  Globe,
+  Trash2,
+  Circle,
+  Settings
+} from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
+import { ViewMode, ThemeSettings, VolumeInfo } from '../types';
+
+interface DiskInfo {
+  filesystem: string;
+  size: string;
+  used: string;
+  available: string;
+  capacity: string;
+  capacity_value?: number;
+  mount: string;
+}
+
+interface SidebarProps {
+  currentView: ViewMode;
+  onViewChange: (view: ViewMode) => void;
+  onOpenTab: (id: string, labelKey: string, options?: { label?: string; initialPath?: string }) => void;
+  theme: ThemeSettings;
+}
+
+export default function Sidebar({ currentView, onViewChange, onOpenTab, theme }: SidebarProps) {
+  const { t } = useTranslation();
+  const [diskInfo, setDiskInfo] = useState<DiskInfo | null>(null);
+  const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
+  const [volumeMessage, setVolumeMessage] = useState('');
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const volumeMessageTimerRef = useRef<number | null>(null);
+
+  const loadVolumes = () => {
+    invoke<VolumeInfo[]>('list_volumes')
+      .then(items => setVolumes(items.filter(item => item.is_external)))
+      .catch(() => setVolumes([]));
+  };
+
+  const normalizeCapacity = (value?: string | number) => {
+    if (typeof value === 'number') return `${Math.max(0, Math.min(100, Math.round(value)))}%`;
+    const match = String(value || '').match(/\d+(?:\.\d+)?/);
+    if (!match) return '0%';
+    return `${Math.max(0, Math.min(100, Math.round(Number(match[0]))))}%`;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<DiskInfo>('get_disk_info', { path: '/' })
+      .then(info => {
+        if (!cancelled) setDiskInfo(info);
+      })
+      .catch(() => {
+        if (!cancelled) setDiskInfo(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      invoke<VolumeInfo[]>('list_volumes')
+        .then(items => {
+          if (!cancelled) setVolumes(items.filter(item => item.is_external));
+        })
+        .catch(() => {
+          if (!cancelled) setVolumes([]);
+        });
+    };
+    load();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        load();
+      }
+    }, 6000);
+    const visibilityHandler = () => {
+      if (document.visibilityState === 'visible') {
+        load();
+      }
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      if (volumeMessageTimerRef.current) window.clearTimeout(volumeMessageTimerRef.current);
+    };
+  }, []);
+
+  const handleMenuClick = (id: string, labelKey: string) => {
+    // Navigate to view, and if it's downloads/documents/home add new tab 
+    onViewChange(id as ViewMode);
+    if (id !== 'settings' && id !== 'storage') {
+      onOpenTab(id, labelKey);
+    }
+  };
+
+  const toggleSection = (title: string) => {
+    setCollapsedSections(prev => ({ ...prev, [title]: !prev[title] }));
+  };
+
+  const openVolume = (volume: VolumeInfo) => {
+    onOpenTab(`volume-${volume.name.replace(/\s+/g, '-').toLowerCase()}`, 'tabs.volume', {
+      label: volume.name,
+      initialPath: volume.path,
+    });
+  };
+
+  const ejectVolume = async (volume: VolumeInfo) => {
+    try {
+      await invoke('eject_volume', { path: volume.path });
+      setVolumeMessage(`已弹出 ${volume.name}`);
+      loadVolumes();
+    } catch (err) {
+      setVolumeMessage(`弹出失败：${String(err)}`);
+    }
+    if (volumeMessageTimerRef.current) window.clearTimeout(volumeMessageTimerRef.current);
+    volumeMessageTimerRef.current = window.setTimeout(() => setVolumeMessage(''), 2600);
+  };
+
+  const handleDragStart = (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, a, [data-no-drag]')) return;
+    getCurrentWindow().startDragging().catch(() => {
+      invoke('start_window_drag').catch(() => {});
+    });
+  };
+
+  const sections = [
+    {
+      title: 'sidebar.system',
+      collapsible: false,
+      items: [
+        { id: 'settings', label: 'sidebar.settings', icon: Settings },
+      ]
+    },
+    {
+      title: 'sidebar.favorites',
+      collapsible: true,
+      items: [
+        { id: 'favorites-list', label: 'sidebar.favoritesList', icon: () => <Circle className="w-3.5 h-3.5 fill-primary text-primary" /> },
+        { id: 'applications', label: 'sidebar.applications', icon: Terminal },
+        { id: 'desktop', label: 'sidebar.home', icon: Home },
+        { id: 'documents', label: 'sidebar.documents', icon: FileText, RightElement: () => <Cloud className="w-3 h-3 text-on-surface/30" /> },
+        { id: 'downloads', label: 'sidebar.downloads', icon: Download },
+        { id: 'recent', label: 'sidebar.recent', icon: Clock },
+      ]
+    },
+      {
+        title: 'sidebar.locations',
+        collapsible: true,
+        items: [
+          { id: 'icloud', label: 'sidebar.icloud', icon: Cloud },
+          { id: 'macos', label: 'sidebar.macos', icon: HardDrive },
+          { id: 'network', label: 'sidebar.network', icon: Globe },
+          { id: 'trash', label: 'sidebar.trash', icon: Trash2 },
+        ]
+      },
+    {
+      title: 'sidebar.tags',
+      collapsible: true,
+      items: [
+        { id: 'tag-red', label: 'sidebar.red', icon: () => <div className="w-3 h-3 rounded-full bg-[#ff5f56]" /> },
+        { id: 'tag-orange', label: 'sidebar.orange', icon: () => <div className="w-3 h-3 rounded-full bg-[#ffbd2e]" /> },
+        { id: 'tag-yellow', label: 'sidebar.yellow', icon: () => <div className="w-3 h-3 rounded-full bg-[#fcd430]" /> },
+        { id: 'tag-green', label: 'sidebar.green', icon: () => <div className="w-3 h-3 rounded-full bg-[#27c93f]" /> },
+        { id: 'tag-blue', label: 'sidebar.blue', icon: () => <div className="w-3 h-3 rounded-full bg-[#007aff]" /> },
+        { id: 'tag-purple', label: 'sidebar.purple', icon: () => <div className="w-3 h-3 rounded-full bg-[#bf5af2]" /> },
+        { id: 'tag-gray', label: 'sidebar.gray', icon: () => <div className="w-3 h-3 rounded-full bg-[#8e8e93]" /> },
+        { id: 'tag-all', label: 'sidebar.allTags', icon: () => <div className="w-3 h-3 rounded-full border-2 border-on-surface/40" /> },
+      ]
+    }
+  ];
+
+  return (
+    <nav className="w-sidebar-width max-w-sidebar-width border-r border-transparent flex flex-col pt-4 pb-8 z-40 shrink-0 overflow-hidden group/sidebar">
+      {/* Mac Window Controls */}
+      <div className="flex items-center gap-2 px-5 mb-8" data-no-drag>
+        <button
+          onClick={() => getCurrentWindow().close()}
+          className="w-3 h-3 rounded-full bg-[#ff5f56] border border-[#e0443e] hover:brightness-90 cursor-pointer"
+          title="关闭"
+        />
+        <button
+          onClick={() => getCurrentWindow().minimize()}
+          className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123] hover:brightness-90 cursor-pointer"
+          title="最小化"
+        />
+        <button
+          onClick={() => getCurrentWindow().toggleMaximize()}
+          className="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29] hover:brightness-90 cursor-pointer"
+          title="全屏"
+        />
+        <div
+          className="h-5 flex-1 cursor-grab active:cursor-grabbing"
+          data-tauri-drag-region
+          onMouseDown={handleDragStart}
+          title="拖动窗口"
+        />
+      </div>
+
+      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-3 space-y-6 auto-scrollbar">
+        {sections.map((section, idx) => (
+          <div key={idx} className="space-y-1">
+            {section.collapsible ? (
+              <button
+                onClick={() => toggleSection(section.title)}
+              className="w-full px-3 flex items-center justify-between text-[11px] font-black text-on-surface/45 mb-2 hover:text-primary transition-colors min-w-0"
+                title={collapsedSections[section.title] ? '展开' : '收起'}
+              >
+                <span className="truncate">{t(section.title)}</span>
+                <span className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity shrink-0">
+                  {collapsedSections[section.title] ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </span>
+              </button>
+            ) : (
+              <h3 className="px-3 text-[11px] font-black text-on-surface/45 mb-2 truncate">{t(section.title)}</h3>
+            )}
+            {(!section.collapsible || !collapsedSections[section.title]) && section.items.map((item) => {
+              const isActive = currentView === item.id || currentView.startsWith(item.id + '-');
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => handleMenuClick(item.id, item.label)}
+                  className={`w-full flex items-center px-3 py-1 rounded-lg transition-all duration-300 group relative cursor-pointer font-semibold
+                    ${isActive ? 'text-on-surface font-black' : 'text-on-surface/75 hover:bg-on-surface/[0.04] hover:text-on-surface'}
+                  `}
+                >
+                  {isActive && (
+                    <motion.div
+                      layoutId="sidebar-pill"
+                      className="absolute inset-0 bg-primary/10 border border-primary/20 rounded-lg z-0"
+                      transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
+                    />
+                  )}
+                  <div className="flex items-center gap-2 relative z-10 w-full text-left">
+                    <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-all duration-300
+                      ${isActive ? 'bg-primary text-on-primary shadow-md shadow-primary/20' : 'bg-primary/5 text-on-surface/40 group-hover:bg-primary/10'}
+                    `}>
+                      {/* @ts-ignore */}
+                      <Icon className="w-3.5 h-3.5" />
+                    </div>
+                    <span className="text-[13px] flex-1 truncate text-left tracking-tight font-semibold">{t(item.label)}</span>
+                    {item.RightElement && <div className="shrink-0 scale-75 origin-right"><item.RightElement /></div>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+
+        <div className="space-y-1">
+          <div className="w-full px-3 flex items-center justify-between text-[11px] font-black text-on-surface/45 mb-2 min-w-0">
+            <button
+              onClick={() => toggleSection('sidebar.externalDisks')}
+              className="flex items-center gap-1 hover:text-primary transition-colors min-w-0"
+              title={collapsedSections['sidebar.externalDisks'] ? '展开' : '收起'}
+            >
+              <span className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity shrink-0">
+                {collapsedSections['sidebar.externalDisks'] ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </span>
+              <span className="truncate">外置磁盘</span>
+            </button>
+            <button
+              onClick={loadVolumes}
+              className="p-0.5 rounded hover:bg-primary/10 hover:text-primary transition-all opacity-0 group-hover/sidebar:opacity-100 shrink-0"
+              title="刷新外置磁盘"
+            >
+              <RefreshCw className="w-3 h-3" />
+            </button>
+          </div>
+          {!collapsedSections['sidebar.externalDisks'] && (
+            <div className="space-y-1">
+              {volumes.length === 0 ? (
+                  <div className="mx-3 max-w-full overflow-hidden px-2.5 py-2 rounded-lg bg-primary/5 border border-primary/10 text-[10.5px] text-on-surface/35 leading-snug break-words">
+                  未检测到 USB 或外置磁盘
+                </div>
+              ) : volumes.map(volume => {
+                const isActive = currentView.includes(`volume-${volume.name.replace(/\s+/g, '-').toLowerCase()}`);
+                return (
+                  <div key={volume.path} className="group relative">
+                    <button
+                      onClick={() => openVolume(volume)}
+                      className={`w-full flex items-center px-3 py-1.5 rounded-lg transition-all duration-300 relative cursor-pointer font-semibold ${isActive ? 'text-on-surface font-black bg-primary/10' : 'text-on-surface/75 hover:bg-on-surface/[0.04] hover:text-on-surface'}`}
+                    >
+                      <div className="flex items-center gap-2 relative z-10 w-full text-left min-w-0">
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-all duration-300 ${isActive ? 'bg-primary text-on-primary shadow-md shadow-primary/20' : 'bg-primary/5 text-on-surface/40 group-hover:bg-primary/10'}`}>
+                          <HardDrive className="w-3.5 h-3.5" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[13px] truncate tracking-tight">{volume.name}</span>
+                            <span className="text-[9px] text-primary font-black shrink-0">{volume.capacity}</span>
+                          </div>
+                          <div className="h-1 rounded-full bg-on-surface/10 overflow-hidden mt-1">
+                            <div className="h-full rounded-full bg-primary" style={{ width: `${volume.capacity_value}%` }} />
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                    {volume.is_ejectable && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          ejectVolume(volume);
+                        }}
+                        className="absolute right-1 top-1.5 p-1.5 rounded-lg bg-primary/10 text-on-surface/35 opacity-0 group-hover:opacity-100 hover:text-primary hover:bg-primary/20 transition-all"
+                        title={`弹出 ${volume.name}`}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {volumeMessage && (
+            <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-primary/10 text-[11px] text-primary font-bold">
+              {volumeMessage}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {diskInfo && (
+        <button
+          onClick={() => handleMenuClick('storage', 'sidebar.storage')}
+          className={`mx-3 mt-4 px-3 py-2 rounded-lg border text-left transition-all shrink-0 ${currentView === 'storage' ? 'bg-primary/10 border-primary/20 text-on-surface' : 'bg-primary/5 border-primary/10 hover:bg-primary/10 text-on-surface/70'}`}
+        >
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <HardDrive className="w-3.5 h-3.5 text-primary shrink-0" />
+              <span className="text-[11px] font-bold truncate">{t('sidebar.storage')}</span>
+            </div>
+            <span className="text-[10px] font-black text-primary shrink-0 tabular-nums">{normalizeCapacity(diskInfo.capacity_value ?? diskInfo.capacity)}</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-on-surface/10 overflow-hidden mb-1.5">
+            <div className="h-full rounded-full bg-primary" style={{ width: normalizeCapacity(diskInfo.capacity_value ?? diskInfo.capacity) }} />
+          </div>
+          <div className="flex justify-between gap-2 text-[10px] text-on-surface/35 font-mono whitespace-nowrap leading-none">
+            <span className="truncate min-w-0">{diskInfo.used} / {diskInfo.size}</span>
+            <span className="shrink-0">余 {diskInfo.available}</span>
+          </div>
+        </button>
+      )}
+    </nav>
+  );
+}
