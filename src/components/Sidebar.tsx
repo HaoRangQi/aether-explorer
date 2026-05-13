@@ -176,7 +176,7 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
       items: [
         { id: 'favorites-list', label: 'sidebar.favoritesList', icon: () => <Circle className="w-3.5 h-3.5 fill-primary text-primary" /> },
         { id: 'applications', label: 'sidebar.applications', icon: Terminal },
-        { id: 'desktop', label: 'sidebar.home', icon: Home },
+        { id: 'desktop', label: 'tabs.home', icon: Home },
         { id: 'documents', label: 'sidebar.documents', icon: FileText, RightElement: () => <Cloud className="w-3 h-3 text-on-surface/30" /> },
         { id: 'downloads', label: 'sidebar.downloads', icon: Download },
         { id: 'recent', label: 'sidebar.recent', icon: Clock },
