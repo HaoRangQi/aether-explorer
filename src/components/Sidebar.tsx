@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
-import { ViewMode, ThemeSettings, VolumeInfo } from '../types';
+import { ViewMode, ThemeSettings, VolumeInfo, TabData } from '../types';
 
 interface DiskInfo {
   filesystem: string;
@@ -39,9 +39,10 @@ interface SidebarProps {
   onViewChange: (view: ViewMode) => void;
   onOpenTab: (id: string, labelKey: string, options?: { label?: string; initialPath?: string }) => void;
   theme: ThemeSettings;
+  tabs: TabData[];
 }
 
-export default function Sidebar({ currentView, onViewChange, onOpenTab, theme }: SidebarProps) {
+export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, tabs }: SidebarProps) {
   const { t } = useTranslation();
   const [diskInfo, setDiskInfo] = useState<DiskInfo | null>(null);
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
@@ -106,11 +107,27 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme }:
   }, []);
 
   const handleMenuClick = (id: string, labelKey: string) => {
-    // Navigate to view, and if it's downloads/documents/home add new tab 
-    onViewChange(id as ViewMode);
-    if (id !== 'settings' && id !== 'storage') {
+    if (id === 'settings' || id === 'storage') {
+      onViewChange(id as ViewMode);
+      return;
+    }
+    // 查找所有同名标签页
+    const matchingTabs = tabs.filter(t => t.labelTranslationKey === labelKey);
+    if (matchingTabs.length > 0) {
+      // 当前标签页已是同类型，不做跳转
+      if (matchingTabs.some(t => t.id === currentView)) return;
+      // 否则定位到第一个同名标签页
+      onViewChange(matchingTabs[0].id as ViewMode);
+    } else {
+      // 没有同名标签则新建
       onOpenTab(id, labelKey);
     }
+  };
+
+  const handleMenuDoubleClick = (id: string, labelKey: string) => {
+    if (id === 'settings' || id === 'storage') return;
+    // 双击：始终新建标签页
+    onOpenTab(id, labelKey);
   };
 
   const toggleSection = (title: string) => {
@@ -242,6 +259,7 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme }:
                 <button
                   key={item.id}
                   onClick={() => handleMenuClick(item.id, item.label)}
+                  onDoubleClick={() => handleMenuDoubleClick(item.id, item.label)}
                   className={`w-full flex items-center px-3 py-1 rounded-lg transition-all duration-300 group relative cursor-pointer font-semibold
                     ${isActive ? 'text-on-surface font-black' : 'text-on-surface/75 hover:bg-on-surface/[0.04] hover:text-on-surface'}
                   `}

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTranslation } from 'react-i18next';
-import { Settings2, Sparkles, Terminal } from 'lucide-react';
+import { Terminal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { emitTo, listen } from '@tauri-apps/api/event';
 import { Menu, MenuItem, PredefinedMenuItem, Submenu } from '@tauri-apps/api/menu';
@@ -381,7 +381,7 @@ export default function App() {
         createNewWindow();
       } else if (key === 'w') {
         event.preventDefault();
-        if (tabs.length > 1) handleCloseTab(view);
+        handleCloseTab(view);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -406,7 +406,7 @@ export default function App() {
                 await MenuItem.new({
                   text: '关闭标签页',
                   accelerator: 'CmdOrCtrl+W',
-                  action: () => { if (tabs.length > 1) handleCloseTab(view); },
+                  action: () => { handleCloseTab(view); },
                 }),
                 await PredefinedMenuItem.new({ item: 'Separator' }),
                 await PredefinedMenuItem.new({ text: '关闭窗口', item: 'CloseWindow' }),
@@ -446,7 +446,10 @@ export default function App() {
   }, []); // createNewWindow 是稳定的，不需要作为依赖
 
   const handleCloseTab = (id: string) => {
-    if (tabs.length === 1) return;
+    if (tabs.length === 1) {
+      getCurrentWindow().close().catch(() => {});
+      return;
+    }
 
     const newTabs = tabs.filter(tab => tab.id !== id);
     setTabs(newTabs);
@@ -519,7 +522,7 @@ export default function App() {
         />
 
         <div className="flex flex-1 relative z-10 overflow-hidden">
-          <Sidebar currentView={view} onViewChange={setView} onOpenTab={handleOpenTab} theme={theme} />
+          <Sidebar currentView={view} onViewChange={setView} onOpenTab={handleOpenTab} theme={theme} tabs={tabs} />
 
           <main className="flex-1 flex flex-col h-full overflow-hidden">
             <TopBar
@@ -590,10 +593,6 @@ export default function App() {
                </div>
             </div>
             <div className="flex gap-4 items-center">
-              <button onClick={() => setView('storage')} className="hover:text-primary transition-colors flex items-center gap-1.5 uppercase tracking-widest text-[9px] font-black opacity-60 hover:opacity-100">
-                <Settings2 className="w-3 h-3" /> {t('footer.storageMgmt', '存储管理')}
-              </button>
-              <div className="w-px h-3 bg-on-surface/10" />
               {theme.enableDevTools && (
                 <button
                   onClick={handleOpenDevTools}
@@ -603,10 +602,6 @@ export default function App() {
                   <Terminal className="w-3 h-3 text-primary" /> 控制台
                 </button>
               )}
-              {theme.enableDevTools && <div className="w-px h-3 bg-on-surface/10" />}
-              <button className="hover:text-primary transition-colors flex items-center gap-1.5 uppercase tracking-widest text-[9px] font-black opacity-60 hover:opacity-100">
-                <Sparkles className="w-3 h-3 text-primary" /> {t('footer.cloudSync', '云端同步')}
-              </button>
             </div>
           </footer>
         </main>
