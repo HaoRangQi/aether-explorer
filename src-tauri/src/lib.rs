@@ -472,6 +472,55 @@ fn decompress_file(path: String, output_dir: String) -> Result<String, String> {
     Ok(output_dir)
 }
 
+fn dir_size_recursive(dir: &Path) -> (u64, u64) {
+    let mut total_bytes: u64 = 0;
+    let mut file_count: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+
+    while let Some(current) = stack.pop() {
+        let entries = match fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(_) => continue, // 跳过无权限的目录
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if path.is_symlink() {
+                continue;
+            }
+            match entry.metadata() {
+                Ok(meta) => {
+                    if meta.is_dir() {
+                        stack.push(path);
+                    } else {
+                        total_bytes += meta.len();
+                        file_count += 1;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+    (total_bytes, file_count)
+}
+
+#[tauri::command]
+fn get_dir_size(path: String) -> Result<serde_json::Value, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err("不是一个目录".into());
+    }
+    let (bytes, file_count) = dir_size_recursive(dir);
+    Ok(serde_json::json!({
+        "bytes": bytes,
+        "formatted": format_size(bytes),
+        "file_count": file_count
+    }))
+}
+
 #[tauri::command]
 fn get_file_info(path: String) -> Result<FileEntry, String> {
     let p = Path::new(&path);
@@ -510,6 +559,12 @@ fn add_dir_to_zip(
             std::io::copy(&mut input, &mut *writer).map_err(|e| format!("写入失败: {}", e))?;
         }
     }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.open_devtools();
     Ok(())
 }
 
@@ -813,6 +868,8 @@ pub fn run() {
             compress_files,
             decompress_file,
             get_file_info,
+            get_dir_size,
+            open_devtools,
             quick_look,
             reveal_in_finder,
             open_path

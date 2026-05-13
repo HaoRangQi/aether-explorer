@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, LayoutGrid, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2 } from 'lucide-react';
+import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, LayoutGrid, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -90,6 +90,77 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [isMarqueeDragging, setIsMarqueeDragging] = useState(false);
   const [typeaheadQuery, setTypeaheadQuery] = useState('');
   const typeaheadTimerRef = useRef<number | null>(null);
+  const clipboardRef = useRef<string[]>([]); // 存储复制/剪切的文件路径
+
+  const [dirSize, setDirSize] = useState<{ bytes: number; formatted: string; file_count: number } | null>(null);
+  const [dirSizeLoading, setDirSizeLoading] = useState(false);
+  const [inspectorOverride, setInspectorOverride] = useState(false); // 一次性弹出
+
+  // 关闭面板（手动关闭或选中文件时）
+  const closeInspector = () => {
+    setInspectorOverride(false);
+    // 如果自动预览开关也是关的，清掉 dirSize
+    if (!theme.showPreviewPanel) {
+      setDirSize(null);
+      setDirSizeLoading(false);
+    }
+  };
+
+  const handleCopyToClipboard = (items = selectedFiles) => {
+    if (items.length === 0) return;
+    clipboardRef.current = items.map(f => f.path);
+    showFeedback(`已复制 ${items.length} 个项目`);
+    setContextMenu(null);
+  };
+
+  const handlePasteFromClipboard = async () => {
+    const paths = clipboardRef.current;
+    if (paths.length === 0) {
+      showFeedback('剪贴板为空');
+      return;
+    }
+    try {
+      await Promise.all(paths.map(path => copyFile(path, currentPath)));
+      refreshCurrentDir();
+      showFeedback(`已粘贴 ${paths.length} 个项目`);
+    } catch (e) {
+      showFeedback(`粘贴失败：${String(e)}`);
+    }
+    setContextMenu(null);
+  };
+
+  const handleShowInspector = (useCurrentDir = false) => {
+    const calcAndOpen = () => {
+      setInspectorOverride(true);
+      setContextMenu(null);
+      const target = useCurrentDir ? null : lastSelectedFile;
+      if (target) {
+        if (target.type === 'folder') {
+          setDirSizeLoading(true);
+          setDirSize(null);
+          invoke<{ bytes: number; formatted: string; file_count: number }>('get_dir_size', { path: target.path })
+            .then(result => { setDirSize(result); setDirSizeLoading(false); })
+            .catch(() => { setDirSizeLoading(false); });
+        } else {
+          setDirSizeLoading(false);
+          setDirSize(null);
+        }
+      } else {
+        setDirSizeLoading(true);
+        setDirSize(null);
+        invoke<{ bytes: number; formatted: string; file_count: number }>('get_dir_size', { path: currentPath })
+          .then(result => { setDirSize(result); setDirSizeLoading(false); })
+          .catch(() => { setDirSizeLoading(false); });
+      }
+    };
+    // 空白调用且面板已开：先关再开（强制刷新内容）
+    if (useCurrentDir && inspectorOverride) {
+      setInspectorOverride(false);
+      setTimeout(calcAndOpen, 150);
+      return;
+    }
+    calcAndOpen();
+  };
   const [lastActivatedFileId, setLastActivatedFileId] = useState<string | null>(null);
   const [pulseFileId, setPulseFileId] = useState<string | null>(null);
   const pulseTimerRef = useRef<number | null>(null);
@@ -450,7 +521,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         return;
       }
       // Cmd+Down: 进入选中的文件夹
-      if ((e.metaKey || e.ctrlKey) && e.key === 'ArrowDown' && lastSelectedFile?.is_dir) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'ArrowDown' && lastSelectedFile?.type === 'folder') {
         e.preventDefault();
         handleOpenFile(lastSelectedFile);
         return;
@@ -460,6 +531,30 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         const nextQuery = typeaheadQuery === e.key ? e.key : `${typeaheadQuery}${e.key}`;
         setTypeaheadQuery(nextQuery);
         focusFileByPrefix(nextQuery);
+        return;
+      }
+      // 箭头上下: 选择上一个/下一个文件
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (currentLevelFiles.length === 0) return;
+        const currentIndex = selectedFileIds.length
+          ? currentLevelFiles.findIndex(file => file.id === selectedFileIds[selectedFileIds.length - 1])
+          : -1;
+        let nextIndex: number;
+        if (currentIndex === -1) {
+          nextIndex = e.key === 'ArrowDown' ? 0 : currentLevelFiles.length - 1;
+        } else {
+          nextIndex = e.key === 'ArrowDown'
+            ? Math.min(currentIndex + 1, currentLevelFiles.length - 1)
+            : Math.max(currentIndex - 1, 0);
+        }
+        const nextFile = currentLevelFiles[nextIndex];
+        if (nextFile) {
+          onSelectFiles([nextFile.id]);
+          // 滚动到可见区域
+          const el = document.querySelector(`[data-id="${nextFile.id}"]`);
+          el?.scrollIntoView({ block: 'nearest' });
+        }
         return;
       }
       // Escape: 取消选择/关闭菜单
@@ -1053,6 +1148,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         text: t('explorer.refresh', '刷新'),
         action: () => { void refreshCurrentDir(); },
       }));
+      await addSeparator();
+      items.push(await MenuItem.new({
+        text: t('explorer.paste', '粘贴'),
+        action: () => { void handlePasteFromClipboard(); },
+      }));
+      items.push(await MenuItem.new({
+        text: t('explorer.getInfo', '查看简介'),
+        action: () => { void handleShowInspector(true); },
+      }));
     } else {
       items.push(await MenuItem.new({
         text: t('explorer.open', '打开'),
@@ -1084,6 +1188,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       items.push(await MenuItem.new({
         text: '在终端打开',
         action: () => { void handleOpenTerminal(primary); },
+      }));
+      await addSeparator();
+      items.push(await MenuItem.new({
+        text: t('explorer.copy', '复制'),
+        action: () => { void handleCopyToClipboard(getActionFiles(primary)); },
+      }));
+      items.push(await MenuItem.new({
+        text: t('explorer.getInfo', '查看简介'),
+        action: () => { void handleShowInspector(); },
       }));
       items.push(await MenuItem.new({
         text: t('explorer.quickLook', 'Quick Look'),
@@ -1797,9 +1910,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 </div>
               </div>
 
-            <div 
+            <div
               ref={containerRef}
               data-explorer-surface="true"
+              onClick={() => {
+                // 左键空白区域关闭一次性简介面板
+                if (inspectorOverride) closeInspector();
+              }}
               onContextMenu={(e) => {
                 if ((e.target as HTMLElement).closest('.file-item')) return;
                 void handleContextMenu(e, [], true);
@@ -2051,16 +2168,26 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
       {/* Inspector Panel */}
       <AnimatePresence>
-        {lastSelectedFile && theme.showPreviewPanel && (
+        {(inspectorOverride || (lastSelectedFile && theme.showPreviewPanel)) && (
           <motion.aside
             initial={{ x: 360, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: 360, opacity: 0 }}
             className="w-[336px] my-3 mr-3 ml-2 rounded-2xl glass-panel border border-primary/20 bg-primary/5 flex flex-col shrink-0 shadow-xl overflow-hidden relative backdrop-blur-2xl"
           >
+            {/* 关闭按钮（一次性弹出模式时显示） */}
+            {inspectorOverride && !theme.showPreviewPanel && (
+              <button onClick={closeInspector} className="absolute top-3 right-3 z-10 w-7 h-7 rounded-full bg-primary/10 hover:bg-primary/30 flex items-center justify-center transition-colors">
+                <X className="w-3.5 h-3.5 text-on-surface/60" />
+              </button>
+            )}
             <div className="p-5 border-b border-transparent">
               <div className="h-40 rounded-2xl overflow-hidden bg-primary/10 border border-primary/10 relative shadow-lg group">
-                {lastSelectedFile.type === 'image' && lastSelectedFile.thumbnail && !imagePreviewFailed ? (
+                {!lastSelectedFile ? (
+                  <div className="w-full h-full flex items-center justify-center">
+                    {getFileIcon('folder')}
+                  </div>
+                ) : lastSelectedFile.type === 'image' && lastSelectedFile.thumbnail && !imagePreviewFailed ? (
                   <img
                     src={lastSelectedFile.thumbnail}
                     alt="Preview"
@@ -2102,14 +2229,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     </div>
                   </div>
                 )}
-                {lastSelectedFile.dimensions && (
+                {lastSelectedFile?.dimensions && (
                   <div className="absolute bottom-2 right-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-[10px] text-white">
                     {lastSelectedFile.dimensions}
                   </div>
                 )}
               </div>
-              <h3 className="text-[16px] font-bold text-on-surface mt-4 break-words leading-tight">{lastSelectedFile.name}</h3>
-              <p className="text-[11px] text-primary font-bold mt-1 opacity-80">{getFileTypeLabel(lastSelectedFile.type)}</p>
+              <h3 className="text-[16px] font-bold text-on-surface mt-4 break-words leading-tight">{lastSelectedFile?.name || currentPath}</h3>
+              <p className="text-[11px] text-primary font-bold mt-1 opacity-80">{lastSelectedFile ? getFileTypeLabel(lastSelectedFile.type) : '文件夹'}</p>
             </div>
 
             <div className="flex-1 p-5 space-y-5 overflow-y-auto auto-scrollbar">
@@ -2122,13 +2249,23 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <h4 className="text-[11px] font-bold text-on-surface/40 uppercase tracking-widest">{t('explorer.details')}</h4>
                 <div className="grid grid-cols-3 gap-2 text-[13px] leading-relaxed">
                   <div className="text-on-surface/40">{t('explorer.size')}</div>
-                  <div className="text-on-surface col-span-2">{lastSelectedFile.size}</div>
+                  <div className="text-on-surface col-span-2">
+                    {dirSizeLoading ? (
+                      <span className="inline-block h-4 w-24 rounded bg-gradient-to-r from-primary/20 via-primary/40 to-primary/20 bg-[length:200%_100%] animate-shimmer" />
+                    ) : dirSize ? (
+                      <span>{dirSize.formatted} <span className="text-on-surface/40 text-[11px]">({dirSize.file_count} 个文件)</span></span>
+                    ) : lastSelectedFile.type === 'folder' ? (
+                      <span className="text-on-surface/40 text-[11px]">点击查看简介以统计</span>
+                    ) : (
+                      lastSelectedFile.size
+                    )}
+                  </div>
                   <div className="text-on-surface/40">{t('explorer.type')}</div>
-                  <div className="text-on-surface col-span-2">{getFileTypeLabel(lastSelectedFile.type)}</div>
+                  <div className="text-on-surface col-span-2">{lastSelectedFile ? getFileTypeLabel(lastSelectedFile.type) : '文件夹'}</div>
                   <div className="text-on-surface/40">{t('explorer.modified')}</div>
-                  <div className="text-on-surface col-span-2">{lastSelectedFile.modified}</div>
+                  <div className="text-on-surface col-span-2">{lastSelectedFile?.modified || '--'}</div>
                   <div className="text-on-surface/40">{t('explorer.location')}</div>
-                  <div className="text-on-surface col-span-2 break-all opacity-80">{lastSelectedFile.path}</div>
+                  <div className="text-on-surface col-span-2 break-all opacity-80">{lastSelectedFile?.path || currentPath}</div>
                 </div>
               </div>
 
@@ -2216,12 +2353,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary" onClick={() => handleSort('name')}>
                   <List className="w-4 h-4" /> {t('explorer.sortBy', '按名称排序')}
                 </button>
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => setActiveDropdown(activeDropdown === 'more' ? null : 'more')} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
                   <LayoutGrid className="w-4 h-4" /> {t('explorer.viewOptions', '显示选项')}
                 </button>
                 <div className="my-1 h-px bg-primary/10" />
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => handleShowInspector(true)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
                   <Info className="w-4 h-4" /> {t('explorer.getInfo', '查看简介')}
+                </button>
+                <button onClick={handlePasteFromClipboard} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Copy className="w-4 h-4" /> {t('explorer.paste', '粘贴')}
                 </button>
               </>
             ) : files.find(f => f.id === contextMenu.fileIds[0]) ? (
@@ -2258,6 +2398,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 </button>
                 <button onClick={() => handleOpenTerminal(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
                   <Terminal className="w-4 h-4" /> 在终端打开
+                </button>
+                <button onClick={() => handleShowInspector()} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Info className="w-4 h-4" /> {t('explorer.getInfo', '查看简介')}
+                </button>
+                <div className="my-1 h-px bg-primary/10" />
+                <button onClick={() => handleCopyToClipboard(getActionFiles(ctxFile))} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Copy className="w-4 h-4" /> {t('explorer.copy', '复制')}
                 </button>
                 <div className="my-1 h-px bg-primary/10" />
                 <button onClick={() => handleCopyFile(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">

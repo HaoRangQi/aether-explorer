@@ -31,7 +31,8 @@ const DEFAULT_THEME: ThemeSettings = {
   columnWidth: 280,
   columnHeight: 60,
   showHiddenFiles: false,
-  showPreviewPanel: true,
+  showPreviewPanel: false,
+  enableDevTools: false,
   wallpaperBlur: 0,
   contextMenuExtensions: [
     { id: 'terminal-dev', label: '用终端打开并启动开发', enabled: true, actionType: 'terminal', terminalApp: 'Terminal', terminalArgs: 'npm run dev', workingDirectory: 'selection', confirmExecution: false },
@@ -305,6 +306,13 @@ export default function App() {
     }
   }, [theme.language, theme.followSystemLanguage, i18n]);
 
+  // DevTools 开关（调用 Rust 命令打开，关闭需手动）
+  useEffect(() => {
+    if (theme.enableDevTools) {
+      invoke('open_devtools').catch(err => console.error('打开控制台失败:', err));
+    }
+  }, [theme.enableDevTools]);
+
   // Listen for system theme changes when in auto mode
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -366,13 +374,21 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!event.metaKey || event.shiftKey || event.altKey || event.ctrlKey || event.key.toLowerCase() !== 'n') return;
-      event.preventDefault();
-      createNewWindow();
+      const key = event.key.toLowerCase();
+      const isCmd = event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey;
+      if (!isCmd) return;
+
+      if (key === 'n') {
+        event.preventDefault();
+        createNewWindow();
+      } else if (key === 'w') {
+        event.preventDefault();
+        if (tabs.length > 1) handleCloseTab(view);
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []); // createNewWindow 是稳定的，不需要作为依赖
+  }, [tabs.length, view]); // 需要感知 tabs 变化
 
   useEffect(() => {
     let disposed = false;
@@ -388,6 +404,11 @@ export default function App() {
                   text: '新建窗口',
                   accelerator: 'CmdOrCtrl+N',
                   action: () => createNewWindow(),
+                }),
+                await MenuItem.new({
+                  text: '关闭标签页',
+                  accelerator: 'CmdOrCtrl+W',
+                  action: () => { if (tabs.length > 1) handleCloseTab(view); },
                 }),
                 await PredefinedMenuItem.new({ item: 'Separator' }),
                 await PredefinedMenuItem.new({ text: '关闭窗口', item: 'CloseWindow' }),

@@ -89,6 +89,8 @@ export default {
     location: 'Location',
     tags: 'Tags',
     add: 'Add',
+    copy: 'Copy',
+    paste: 'Paste',
     copyTo: 'Copy to ...',
     rename: 'Rename',
     delete: 'Delete',

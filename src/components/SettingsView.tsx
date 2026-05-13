@@ -971,6 +971,19 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
             </div>
             <span className="text-[11px] font-black text-primary bg-primary/10 px-3 py-1 rounded-full">已启用</span>
           </div>
+
+          <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group">
+            <div className="space-y-1">
+              <h4 className="text-[15px] font-bold text-on-surface">开发者控制台</h4>
+              <p className="text-[12px] text-on-surface/50">开启后自动弹出 WebView 开发者工具。正式版本中也能打开控制台。</p>
+            </div>
+            <button
+              onClick={() => onThemeChange({ ...theme, enableDevTools: !theme.enableDevTools })}
+              className={`w-14 h-8 rounded-full p-1.5 transition-colors duration-300 flex items-center ${theme.enableDevTools ? 'bg-primary' : 'bg-on-surface/[0.1]'}`}
+            >
+              <motion.div animate={{ x: theme.enableDevTools ? 24 : 0 }} className="w-5 h-5 rounded-full shadow-lg bg-white" />
+            </button>
+          </div>
         </div>
       </section>
 

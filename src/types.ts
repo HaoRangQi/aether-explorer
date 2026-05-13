@@ -69,6 +69,7 @@ export interface ThemeSettings {
   columnHeight?: number;
   showHiddenFiles?: boolean;
   showPreviewPanel?: boolean;
+  enableDevTools?: boolean;
   useSystemContextMenu?: boolean;
   wallpaperUrl?: string;
   wallpaperBlur?: number;
