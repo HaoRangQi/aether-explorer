@@ -77,6 +77,7 @@ export interface ThemeSettings {
   contextMenuExtensions?: ContextMenuAction[];
   terminalApp?: string;
   terminalArgs?: string;
+  terminalScripts?: string[];
   customTerminalCommand?: string;
   language?: string;
   followSystemLanguage?: boolean;

@@ -172,3 +172,10 @@ html, body, #root {
 .animate-shimmer {
   animation: shimmer 1.5s ease-in-out infinite;
 }
+
+/* 性能优化：跳过离屏文件项的渲染，隔离布局计算 */
+.file-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
+  contain: layout style;
+}

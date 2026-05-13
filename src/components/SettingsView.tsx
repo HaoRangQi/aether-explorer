@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy } from 'lucide-react';
+import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -1012,27 +1012,111 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
         <h3 className="text-[18px] font-black text-on-surface flex items-center gap-3">
           <Terminal className="w-5 h-5 text-primary" /> 终端偏好
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <label className="space-y-2">
-            <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">默认终端</span>
+        <label className="space-y-2 block">
+          <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">默认终端</span>
+          <div className="flex gap-2">
             <select
               value={theme.terminalApp || 'Terminal'}
               onChange={(e) => onThemeChange({ ...theme, terminalApp: e.target.value })}
-              className="w-full bg-primary/5 border border-primary/20 rounded-2xl px-5 py-4 text-[14px] text-on-surface font-bold outline-none focus:border-primary"
+              className="flex-1 bg-primary/5 border border-primary/20 rounded-2xl px-5 py-4 text-[14px] text-on-surface font-bold outline-none focus:border-primary"
             >
               {terminalApps.map(app => <option key={app} value={app}>{app}</option>)}
             </select>
-          </label>
-          <label className="space-y-2">
-            <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">启动后执行</span>
-            <input
-              value={theme.terminalArgs || ''}
-              onChange={(e) => onThemeChange({ ...theme, terminalArgs: e.target.value })}
-              placeholder="例如：ls -la 或 pnpm dev"
-              className="w-full bg-primary/5 border border-primary/20 rounded-2xl px-5 py-4 text-[14px] text-on-surface font-mono outline-none focus:border-primary"
-            />
-          </label>
+            <button
+              onClick={() => {
+                invoke<string[]>('list_terminal_apps').then(apps => setTerminalApps(apps.length ? apps : ['Terminal', 'iTerm']));
+              }}
+              className="px-4 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[12px] font-bold text-primary transition-colors"
+              title="刷新终端列表"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const result = await open({ multiple: false, directory: false, filters: [{ name: '应用', extensions: ['app'] }] });
+                  if (result && typeof result === 'string') {
+                    const appName = result.split('/').pop()?.replace('.app', '') || result;
+                    if (!terminalApps.includes(appName)) {
+                      const newApps = [...terminalApps, appName];
+                      setTerminalApps(newApps);
+                      onThemeChange({ ...theme, terminalApp: appName });
+                    } else {
+                      onThemeChange({ ...theme, terminalApp: appName });
+                    }
+                  }
+                } catch {}
+              }}
+              className="px-4 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[12px] font-bold text-primary transition-colors"
+              title="手动选择终端应用"
+            >
+              <Upload className="w-4 h-4" />
+            </button>
+          </div>
+        </label>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">启动后执行脚本</span>
+            <button
+              onClick={() => {
+                const scripts = [...(theme.terminalScripts || []), ''];
+                onThemeChange({ ...theme, terminalScripts: scripts });
+              }}
+              className="px-3 py-1.5 bg-primary/10 hover:bg-primary/20 rounded-xl text-[11px] font-bold text-primary transition-colors flex items-center gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5" /> 添加行
+            </button>
+          </div>
+          {(theme.terminalScripts || []).length === 0 ? (
+            <p className="text-[12px] text-on-surface/30 py-3">未配置脚本。点击"添加行"开始。</p>
+          ) : (
+            (theme.terminalScripts || []).map((script, idx) => (
+              <div key={idx} className="flex gap-2 items-center">
+                <input
+                  value={script}
+                  onChange={(e) => {
+                    const scripts = [...(theme.terminalScripts || [])];
+                    scripts[idx] = e.target.value;
+                    onThemeChange({ ...theme, terminalScripts: scripts });
+                  }}
+                  placeholder={`第 ${idx + 1} 行：例如 npm run dev`}
+                  className="flex-1 bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 text-[13px] text-on-surface font-mono outline-none focus:border-primary"
+                />
+                <button
+                  onClick={async () => {
+                    try {
+                      const result = await open({ multiple: false, directory: false, filters: [{ name: '脚本', extensions: ['sh', 'bash', 'zsh', 'command', 'py', 'js', 'ts'] }] });
+                      if (result && typeof result === 'string') {
+                        const scripts = [...(theme.terminalScripts || [])];
+                        scripts[idx] = result;
+                        onThemeChange({ ...theme, terminalScripts: scripts });
+                      }
+                    } catch {}
+                  }}
+                  className="p-2.5 bg-primary/10 hover:bg-primary/20 rounded-xl text-primary transition-colors shrink-0"
+                  title="选择脚本文件"
+                >
+                  <Folder className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => {
+                    const scripts = (theme.terminalScripts || []).filter((_, i) => i !== idx);
+                    onThemeChange({ ...theme, terminalScripts: scripts.length ? scripts : undefined });
+                  }}
+                  className="p-2.5 hover:bg-red-500/10 rounded-xl text-on-surface/40 hover:text-red-500 transition-colors shrink-0"
+                  title="删除此行"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))
+          )}
+          {((theme.terminalScripts || []).length > 0) && (
+            <p className="text-[11px] text-on-surface/30">每行按顺序依次执行。可输入命令或选择脚本文件（绝对路径）。</p>
+          )}
         </div>
+
         <label className="space-y-2 block">
           <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">自定义命令（高级，可选）</span>
           <input

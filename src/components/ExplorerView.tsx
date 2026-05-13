@@ -184,6 +184,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [pulseFileId, setPulseFileId] = useState<string | null>(null);
   const pulseTimerRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const rafRef = useRef<number | null>(null);
+
   const contextMenuPosition = useMemo(() => {
     if (!contextMenu || typeof window === 'undefined') return null;
     const menuWidth = 256;
@@ -391,6 +394,42 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     return filtered;
   }, [files, searchQuery, sortConfig, view, favorites, fileTags]);
+
+  // 虚拟滚动：仅渲染列表视图的可见项（>50 文件时启用）
+  const densityHeights: Record<string, number> = { ultra: 28, compact: 36, normal: 44, relaxed: 60 };
+  const listItemGap = 8;
+  const listItemHeight = (densityHeights[theme.listDensity || 'normal'] || 44) + listItemGap;
+  const listOverScan = 10;
+  const fileListRef = useRef<HTMLDivElement>(null);
+  const [fileListOffset, setFileListOffset] = useState(0);
+  useEffect(() => {
+    if (fileListRef.current && containerRef.current) {
+      const listTop = fileListRef.current.getBoundingClientRect().top;
+      const containerTop = containerRef.current.getBoundingClientRect().top;
+      setFileListOffset(listTop - containerTop + containerRef.current.scrollTop);
+    }
+  }, [currentPath]);
+
+  const visibleRange = useMemo(() => {
+    if (displayMode !== 'list' || currentLevelFiles.length < 999999) return null; // 虚拟滚动暂时禁用
+    const containerH = containerRef.current?.clientHeight || 600;
+    const adjustedTop = Math.max(0, scrollTop - fileListOffset);
+    const start = Math.max(0, Math.floor(adjustedTop / listItemHeight) - listOverScan);
+    const end = Math.min(currentLevelFiles.length, Math.ceil((adjustedTop + containerH) / listItemHeight) + listOverScan);
+    if (start >= end) return null;
+    return { start, end, totalHeight: currentLevelFiles.length * listItemHeight, offsetTop: start * listItemHeight };
+  }, [scrollTop, currentLevelFiles.length, listItemHeight, displayMode, groupBy, fileListOffset]);
+
+  const handleContainerScroll = () => {
+    if (displayMode !== 'list') return;
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const el = containerRef.current;
+      if (el) setScrollTop(el.scrollTop);
+    });
+  };
+  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
   useEffect(() => {
     if (!isActive) return;
@@ -863,7 +902,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return (
         <motion.div
           key={file.id}
-          layoutId={`list-${file.id}`}
           data-id={file.id}
           draggable
           onDragStart={(e) => handleDragStart(e, file)}
@@ -921,7 +959,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return (
         <motion.div
           key={file.id}
-          layoutId={`col-${file.id}`}
           data-id={file.id}
           draggable
           onDragStart={(e) => handleDragStart(e, file)}
@@ -969,7 +1006,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return (
         <motion.div
           key={file.id}
-          layoutId={`grid-${file.id}`}
           data-id={file.id}
           draggable
           onDragStart={(e) => handleDragStart(e, file)}
@@ -1357,10 +1393,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     const path = target?.path || currentPath || homeDir;
     if (!path) return;
     try {
+      // 合并启动脚本：terminalScripts 优先，否则用 terminalArgs
+      const scriptLines = (theme.terminalScripts || []).filter(s => s.trim()).map(s => s.trim());
+      const scriptsJoined = scriptLines.join(' && ');
+      const args = scriptsJoined || theme.terminalArgs || '';
       await invoke('open_terminal_at', {
         path,
         terminalApp: theme.terminalApp || 'Terminal',
-        args: theme.terminalArgs || '',
+        args,
         customCommand: theme.customTerminalCommand || '',
       });
       showFeedback(`已在 ${theme.terminalApp || 'Terminal'} 打开目录`);
@@ -1983,6 +2023,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 if ((e.target as HTMLElement).closest('.file-item')) return;
                 void handleContextMenu(e, [], true);
               }}
+              onScroll={handleContainerScroll}
               onMouseDown={handleContainerMouseDown}
               onMouseMove={handleContainerMouseMove}
               onMouseUp={handleContainerMouseUp}
@@ -2128,7 +2169,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                       </div>
                       <div className={`${LIST_COLS.actions} shrink-0`}></div>
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-2" ref={fileListRef}>
                       {(Object.entries(groupedFiles) as [string, FileItem[]][]).map(([groupName, files]) => (
                         <React.Fragment key={groupName}>
                           {groupBy !== 'none' && (
@@ -2136,7 +2177,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                               <ChevronRight className="w-4 h-4" /> {groupName}
                             </div>
                           )}
-                          {files.map((file) => renderFileItem(file))}
+                          {/* 虚拟滚动（仅无分组时启用） */}
+                          {groupBy === 'none' && visibleRange ? (
+                            <>
+                              <div style={{ height: visibleRange.offsetTop }} />
+                              {files.slice(visibleRange.start, visibleRange.end).map((file) => renderFileItem(file))}
+                              <div style={{ height: Math.max(0, visibleRange.totalHeight - visibleRange.end * listItemHeight) }} />
+                            </>
+                          ) : (
+                            files.map((file) => renderFileItem(file))
+                          )}
                         </React.Fragment>
                       ))}
                     </div>

@@ -772,21 +772,25 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
     if lower.contains("terminal") || lower.contains("iterm") {
         let script = if lower.contains("iterm") {
             format!(
-                "tell application {}\nactivate\ncreate window with default profile\ntell current session of current window to write text {}\nend tell",
-                apple_quote(&app_name),
-                apple_quote(&command)
+                "tell application \"{}\"\nactivate\ncreate window with default profile\ntell current session of current window to write text \"{}\"\nend tell",
+                app_name.replace('\\', "\\\\").replace('"', "\\\""),
+                command.replace('\\', "\\\\").replace('"', "\\\"")
             )
         } else {
             format!(
-                "tell application {} to do script {}",
-                apple_quote(&app_name),
-                apple_quote(&command)
+                "tell application \"{}\" to do script \"{}\"",
+                app_name.replace('\\', "\\\\").replace('"', "\\\""),
+                command.replace('\\', "\\\\").replace('"', "\\\"")
             )
         };
-        std::process::Command::new("osascript")
+        let output = std::process::Command::new("osascript")
             .args(["-e", &script])
-            .spawn()
+            .output()
             .map_err(|e| format!("打开终端失败: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("AppleScript 错误: {}", stderr));
+        }
     } else {
         std::process::Command::new("open")
             .args(["-a", &app_name, &dir_str])
