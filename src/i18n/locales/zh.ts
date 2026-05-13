@@ -103,6 +103,7 @@ export default {
     tags: '标签',
     add: '添加',
     copy: '复制',
+    cut: '剪切',
     paste: '粘贴',
     copyTo: '复制到...',
     rename: '重命名',

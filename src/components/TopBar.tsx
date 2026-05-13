@@ -248,6 +248,12 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
         <div
           className="flex justify-start gap-2 overflow-x-auto scrollbar-hide flex-1 min-w-0"
           data-no-drag
+          onWheel={(e) => {
+            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+              e.currentTarget.scrollLeft += e.deltaY;
+              e.preventDefault();
+            }
+          }}
         >
           {tabs.map((tab) => {
             const isActive = currentView === tab.id;
@@ -296,7 +302,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
           </button>
         </div>
         <div
-          className="flex-1 self-stretch min-w-20 cursor-grab active:cursor-grabbing"
+          className="w-6 self-stretch shrink-0 cursor-grab active:cursor-grabbing"
           data-tauri-drag-region
           onMouseDown={handleDragStart}
           title="拖动窗口"

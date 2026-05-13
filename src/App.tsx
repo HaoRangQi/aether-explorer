@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTranslation } from 'react-i18next';
-import { Settings2, Sparkles } from 'lucide-react';
+import { Settings2, Sparkles, Terminal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { emitTo, listen } from '@tauri-apps/api/event';
 import { Menu, MenuItem, PredefinedMenuItem, Submenu } from '@tauri-apps/api/menu';
@@ -306,12 +306,10 @@ export default function App() {
     }
   }, [theme.language, theme.followSystemLanguage, i18n]);
 
-  // DevTools 开关（调用 Rust 命令打开，关闭需手动）
-  useEffect(() => {
-    if (theme.enableDevTools) {
-      invoke('open_devtools').catch(err => console.error('打开控制台失败:', err));
-    }
-  }, [theme.enableDevTools]);
+  // DevTools 打开
+  const handleOpenDevTools = useCallback(() => {
+    invoke('open_devtools').catch(err => console.error('打开控制台失败:', err));
+  }, []);
 
   // Listen for system theme changes when in auto mode
   useEffect(() => {
@@ -596,6 +594,16 @@ export default function App() {
                 <Settings2 className="w-3 h-3" /> {t('footer.storageMgmt', '存储管理')}
               </button>
               <div className="w-px h-3 bg-on-surface/10" />
+              {theme.enableDevTools && (
+                <button
+                  onClick={handleOpenDevTools}
+                  className="hover:text-primary transition-colors flex items-center gap-1.5 uppercase tracking-widest text-[9px] font-black opacity-60 hover:opacity-100"
+                  title="打开开发者控制台"
+                >
+                  <Terminal className="w-3 h-3 text-primary" /> 控制台
+                </button>
+              )}
+              {theme.enableDevTools && <div className="w-px h-3 bg-on-surface/10" />}
               <button className="hover:text-primary transition-colors flex items-center gap-1.5 uppercase tracking-widest text-[9px] font-black opacity-60 hover:opacity-100">
                 <Sparkles className="w-3 h-3 text-primary" /> {t('footer.cloudSync', '云端同步')}
               </button>

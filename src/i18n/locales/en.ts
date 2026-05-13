@@ -90,6 +90,7 @@ export default {
     tags: 'Tags',
     add: 'Add',
     copy: 'Copy',
+    cut: 'Cut',
     paste: 'Paste',
     copyTo: 'Copy to ...',
     rename: 'Rename',

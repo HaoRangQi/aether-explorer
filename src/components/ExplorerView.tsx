@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, LayoutGrid, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X } from 'lucide-react';
+import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, LayoutGrid, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -90,7 +90,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [isMarqueeDragging, setIsMarqueeDragging] = useState(false);
   const [typeaheadQuery, setTypeaheadQuery] = useState('');
   const typeaheadTimerRef = useRef<number | null>(null);
-  const clipboardRef = useRef<string[]>([]); // 存储复制/剪切的文件路径
+  const clipboardRef = useRef<string[]>([]);
+  const clipboardCutRef = useRef(false); // true = 剪切模式 // 存储复制/剪切的文件路径
 
   const [dirSize, setDirSize] = useState<{ bytes: number; formatted: string; file_count: number } | null>(null);
   const [dirSizeLoading, setDirSizeLoading] = useState(false);
@@ -109,7 +110,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const handleCopyToClipboard = (items = selectedFiles) => {
     if (items.length === 0) return;
     clipboardRef.current = items.map(f => f.path);
+    clipboardCutRef.current = false;
     showFeedback(`已复制 ${items.length} 个项目`);
+    setContextMenu(null);
+  };
+
+  const handleCutToClipboard = (items = selectedFiles) => {
+    if (items.length === 0) return;
+    clipboardRef.current = items.map(f => f.path);
+    clipboardCutRef.current = true;
+    showFeedback(`已剪切 ${items.length} 个项目`);
     setContextMenu(null);
   };
 
@@ -119,14 +129,23 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       showFeedback('剪贴板为空');
       return;
     }
-    try {
-      await Promise.all(paths.map(path => copyFile(path, currentPath)));
-      refreshCurrentDir();
-      showFeedback(`已粘贴 ${paths.length} 个项目`);
-    } catch (e) {
-      showFeedback(`粘贴失败：${String(e)}`);
-    }
     setContextMenu(null);
+    try {
+      if (clipboardCutRef.current) {
+        // 剪切模式：移动文件
+        await Promise.all(paths.map(path => moveFile(path, currentPath)));
+        clipboardRef.current = [];
+        clipboardCutRef.current = false;
+        refreshCurrentDir();
+        showFeedback(`已移动 ${paths.length} 个项目`);
+      } else {
+        await Promise.all(paths.map(path => copyFile(path, currentPath)));
+        refreshCurrentDir();
+        showFeedback(`已粘贴 ${paths.length} 个项目`);
+      }
+    } catch (e) {
+      showFeedback(`操作失败：${String(e)}`);
+    }
   };
 
   const handleShowInspector = (useCurrentDir = false) => {
@@ -204,7 +223,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const showFeedback = (message: string) => {
     setOperationMessage(message);
     if (feedbackTimerRef.current) window.clearTimeout(feedbackTimerRef.current);
-    feedbackTimerRef.current = window.setTimeout(() => setOperationMessage(''), 3200);
+    feedbackTimerRef.current = window.setTimeout(() => setOperationMessage(''), 300);
   };
 
   const navigateToPath = (path: string, options?: { replace?: boolean }) => {
@@ -1131,6 +1150,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     };
 
     if (isBlank || !primary) {
+      // 第1分组: 新建文件夹 + 新建文件
       items.push(await MenuItem.new({
         text: t('explorer.newFolder', '新建文件夹'),
         action: () => { void handleNewFolder(); },
@@ -1140,24 +1160,29 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         action: () => { void handleNewFile(); },
       }));
       await addSeparator();
+      // 第2分组: 刷新 + 排序
+      items.push(await MenuItem.new({
+        text: t('explorer.refresh', '刷新'),
+        action: () => { void refreshCurrentDir(true); },
+      }));
       items.push(await MenuItem.new({
         text: t('explorer.sortByName', '按名称排序'),
         action: () => { void handleSort('name'); },
       }));
-      items.push(await MenuItem.new({
-        text: t('explorer.refresh', '刷新'),
-        action: () => { void refreshCurrentDir(); },
-      }));
       await addSeparator();
-      items.push(await MenuItem.new({
-        text: t('explorer.paste', '粘贴'),
-        action: () => { void handlePasteFromClipboard(); },
-      }));
+      // 第3分组: 查看简介 + 粘贴
       items.push(await MenuItem.new({
         text: t('explorer.getInfo', '查看简介'),
         action: () => { void handleShowInspector(true); },
       }));
+      const hasClipboard = clipboardRef.current.length > 0;
+      items.push(await MenuItem.new({
+        text: t('explorer.paste', '粘贴'),
+        enabled: hasClipboard,
+        action: () => { void handlePasteFromClipboard(); },
+      }));
     } else {
+      // 第1分组: 打开 + 重命名
       items.push(await MenuItem.new({
         text: t('explorer.open', '打开'),
         action: () => { void handleOpenFile(primary); },
@@ -1166,6 +1191,22 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         text: t('explorer.rename', '重命名'),
         action: () => { void handleRenameStart(primary); },
       }));
+      await addSeparator();
+      // 第2分组: 复制 + 剪切 + 制作替身
+      items.push(await MenuItem.new({
+        text: t('explorer.copy', '复制'),
+        action: () => { void handleCopyToClipboard(getActionFiles(primary)); },
+      }));
+      items.push(await MenuItem.new({
+        text: t('explorer.cut', '剪切'),
+        action: () => { void handleCutToClipboard(getActionFiles(primary)); },
+      }));
+      items.push(await MenuItem.new({
+        text: '制作替身',
+        action: () => { void handleAlias(primary); },
+      }));
+      await addSeparator();
+      // 第3分组: 解压/压缩 + 在终端打开 + 查看简介
       if (primary.type === 'archive') {
         items.push(await MenuItem.new({
           text: '解压',
@@ -1173,31 +1214,19 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }));
       }
       items.push(await MenuItem.new({
-        text: t('explorer.copyTo', '复制到...'),
-        action: () => { void handleCopyFile(primary); },
-      }));
-      items.push(await MenuItem.new({
-        text: t('explorer.moveTo', '移动到...'),
-        action: () => { void handleMoveFile(primary); },
-      }));
-      await addSeparator();
-      items.push(await MenuItem.new({
-        text: t('explorer.copyPath', '复制路径'),
-        action: () => { void handleCopyPaths(getActionFiles(primary)); },
+        text: '压缩',
+        action: () => { void handleCompress(primary); },
       }));
       items.push(await MenuItem.new({
         text: '在终端打开',
         action: () => { void handleOpenTerminal(primary); },
       }));
-      await addSeparator();
-      items.push(await MenuItem.new({
-        text: t('explorer.copy', '复制'),
-        action: () => { void handleCopyToClipboard(getActionFiles(primary)); },
-      }));
       items.push(await MenuItem.new({
         text: t('explorer.getInfo', '查看简介'),
         action: () => { void handleShowInspector(); },
       }));
+      await addSeparator();
+      // 第4分组: Quick Look + Finder 中显示 + 复制路径
       items.push(await MenuItem.new({
         text: t('explorer.quickLook', 'Quick Look'),
         action: () => { void handleQuickLook(primary); },
@@ -1206,11 +1235,26 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         text: t('explorer.revealInFinder', '在 Finder 中显示'),
         action: () => { void handleRevealInFinder(primary); },
       }));
+      items.push(await MenuItem.new({
+        text: t('explorer.copyPath', '复制路径'),
+        action: () => { void handleCopyPaths(getActionFiles(primary)); },
+      }));
       await addSeparator();
+      // 第5分组: 删除
       items.push(await MenuItem.new({
         text: t('explorer.moveToTrash', '移至废纸篓'),
         action: () => { void handleDeleteFile(primary); },
       }));
+      // 第6分组: 扩展功能
+      if (enabledContextExtensions.length > 0) {
+        await addSeparator();
+        for (const ext of enabledContextExtensions) {
+          items.push(await MenuItem.new({
+            text: ext.label,
+            action: () => { void handleExtensionAction(ext.id, primary); },
+          }));
+        }
+      }
     }
 
     const menu = await Menu.new({ items });
@@ -1247,12 +1291,23 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setContextMenu({ x: e.clientX, y: e.clientY, fileIds: [file.id] });
   };
 
-  const refreshCurrentDir = async () => {
+  const refreshCurrentDir = async (fullRefresh = false) => {
+    if (fullRefresh) {
+      setLoading(true);
+      setSearchQuery('');
+      setSortConfig(null);
+      setGroupBy('none');
+    }
     try {
       const entries = await listDirectory(currentPath, theme.showHiddenFiles);
       setFiles(entries);
+      if (fullRefresh) {
+        setLoading(false);
+        showFeedback('已刷新');
+      }
       return entries;
     } catch {
+      if (fullRefresh) setLoading(false);
       return [] as FileItem[];
     }
   };
@@ -1808,7 +1863,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     >
                       {theme.showHiddenFiles ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
-                    <button 
+                    <button
+                      onClick={() => refreshCurrentDir(true)}
+                      className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
+                      title="刷新"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                    <button
                       onClick={() => setActiveDropdown(activeDropdown === 'more' ? null : 'more')}
                       className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'more' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
                     >
@@ -1826,7 +1888,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                         >
                           {activeDropdown === 'upload' && (
                             <div className="p-2 space-y-1">
-                              <button onClick={handleImportFiles} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('transfer.uploadFile', 'Upload File')}</button>
+                              <button onClick={handleImportFiles} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('transfer.uploadFile', 'Upload File')}</button>
                               <button onClick={async () => {
                                 const selected = await openDialog({ multiple: true, directory: true });
                                 const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
@@ -1836,7 +1898,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                                   showFeedback(`已导入 ${paths.length} 个文件夹`);
                                 }
                                 setActiveDropdown(null);
-                              }} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('transfer.uploadFolder', 'Upload Folder')}</button>
+                              }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('transfer.uploadFolder', 'Upload Folder')}</button>
                             </div>
                           )}
                           {activeDropdown === 'tag' && (
@@ -1858,7 +1920,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                                 <button 
                                   key={item.id}
                                   onClick={() => { setGroupBy(item.id as GroupBy); setActiveDropdown(null); }}
-                                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px] ${groupBy === item.id ? 'bg-primary text-on-primary' : 'text-on-surface'}`}
+                                  className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] ${groupBy === item.id ? 'bg-primary text-on-primary' : 'text-on-surface'}`}
                                 >
                                   {item.label}
                                   {groupBy === item.id && <Check className="w-3.5 h-3.5" />}
@@ -1868,18 +1930,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                           )}
                           {activeDropdown === 'more' && (
                             <div className="p-2 space-y-1">
-                              <button onClick={handleNewFolder} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.newFolder', '新建文件夹')}</button>
-                              <button onClick={handleNewFile} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.newFile', '新建文件')}</button>
-                              <button onClick={() => openCurrentInNewTab(lastSelectedFile)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.openInNewTab', '在新标签页中打开')}</button>
+                              <button onClick={handleNewFolder} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.newFolder', '新建文件夹')}</button>
+                              <button onClick={handleNewFile} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.newFile', '新建文件')}</button>
+                              <button onClick={() => openCurrentInNewTab(lastSelectedFile)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.openInNewTab', '在新标签页中打开')}</button>
                               <div className="my-1 h-px bg-primary/10" />
-                              <button onClick={() => { onThemeChange({ ...theme, showPreviewPanel: true }); setActiveDropdown(null); }} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.showInspector', '显示检查器')}</button>
-                              <button onClick={() => handleQuickLook(lastSelectedFile)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.quickLook', 'Quick Look')}</button>
-                              <button onClick={() => handleOpenTerminal(lastSelectedFile)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.openInTerminal', '在终端打开')}</button>
-                              <button onClick={() => handleCopyPaths(lastSelectedFile ? getActionFiles(lastSelectedFile) : [])} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.copyPath', '拷贝为路径名')}</button>
+                              <button onClick={() => { onThemeChange({ ...theme, showPreviewPanel: true }); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.showInspector', '显示检查器')}</button>
+                              <button onClick={() => handleQuickLook(lastSelectedFile)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.quickLook', 'Quick Look')}</button>
+                              <button onClick={() => handleOpenTerminal(lastSelectedFile)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.openInTerminal', '在终端打开')}</button>
+                              <button onClick={() => handleCopyPaths(lastSelectedFile ? getActionFiles(lastSelectedFile) : [])} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.copyPath', '拷贝为路径名')}</button>
                               <div className="my-1 h-px bg-primary/10" />
-                              <button onClick={() => { handleSort('name'); setActiveDropdown(null); }} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByName', '按名称排序')}</button>
-                              <button onClick={() => { handleSort('modified'); setActiveDropdown(null); }} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByModified', '按修改时间排序')}</button>
-                              <button onClick={() => { setGroupBy(groupBy === 'none' ? 'kind' : 'none'); setActiveDropdown(null); }} className="w-full text-left px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px]">{groupBy === 'none' ? t('explorer.useGroups', '使用群组') : t('explorer.disableGroups', '取消群组')}</button>
+                              <button onClick={() => { handleSort('name'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByName', '按名称排序')}</button>
+                              <button onClick={() => { handleSort('modified'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByModified', '按修改时间排序')}</button>
+                              <button onClick={() => { setGroupBy(groupBy === 'none' ? 'kind' : 'none'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{groupBy === 'none' ? t('explorer.useGroups', '使用群组') : t('explorer.disableGroups', '取消群组')}</button>
                             </div>
                           )}
                         </motion.div>
@@ -2333,34 +2395,45 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       {/* Context Menu Overlay */}
       {contextMenu && (
         <div
-          className={`fixed z-[100] w-64 p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-y-auto ${
+          className={`fixed z-[100] w-56 shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-hidden ${
             theme.useSystemContextMenu
               ? 'rounded-xl bg-surface/95 border border-on-surface/10 text-on-surface backdrop-blur-xl'
               : 'glass-panel bg-primary/10 border border-primary/20 rounded-2xl backdrop-blur-3xl'
           }`}
           style={contextMenuPosition || undefined}
         >
-          <div className="space-y-0.5">
+          <div className="overflow-y-auto scrollbar-hide p-1.5 max-h-[50vh] space-y-0.5">
             {contextMenu.isBlank ? (
               <>
-                <button onClick={handleNewFolder} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                {/* 第1分组: 新建文件夹 + 新建文件 */}
+                <button onClick={handleNewFolder} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Folder className="w-4 h-4" /> 新建文件夹
                 </button>
-                <button onClick={handleNewFile} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={handleNewFile} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                    <Upload className="w-4 h-4" /> 新建文件
                 </button>
                 <div className="my-1 h-px bg-primary/10" />
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary" onClick={() => handleSort('name')}>
+                {/* 第2分组: 刷新 + 排序 */}
+                <button onClick={() => { refreshCurrentDir(true); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <RefreshCw className="w-4 h-4" /> {t('explorer.refresh', '刷新')}
+                </button>
+                <button className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary" onClick={() => handleSort('name')}>
                   <List className="w-4 h-4" /> {t('explorer.sortBy', '按名称排序')}
                 </button>
-                <button onClick={() => setActiveDropdown(activeDropdown === 'more' ? null : 'more')} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
-                  <LayoutGrid className="w-4 h-4" /> {t('explorer.viewOptions', '显示选项')}
-                </button>
                 <div className="my-1 h-px bg-primary/10" />
-                <button onClick={() => handleShowInspector(true)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                {/* 第3分组: 查看简介 + 粘贴 */}
+                <button onClick={() => handleShowInspector(true)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Info className="w-4 h-4" /> {t('explorer.getInfo', '查看简介')}
                 </button>
-                <button onClick={handlePasteFromClipboard} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                <button
+                  onClick={handlePasteFromClipboard}
+                  disabled={clipboardRef.current.length === 0}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-bold transition-all ${
+                    clipboardRef.current.length === 0
+                      ? 'text-on-surface/25 cursor-not-allowed'
+                      : 'hover:bg-primary/10 text-on-surface hover:text-primary'
+                  }`}
+                >
                   <Copy className="w-4 h-4" /> {t('explorer.paste', '粘贴')}
                 </button>
               </>
@@ -2369,71 +2442,69 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 const ctxFile = files.find(f => f.id === contextMenu.fileIds[0])!;
                 return (
               <>
-                <div className="px-3 py-1.5 text-[10px] font-black text-on-surface/30 uppercase tracking-widest">{t('explorer.defaultActions', '基础操作')}</div>
-                <button onClick={() => handleOpenFile(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                {/* 第1分组: 打开 + 重命名 */}
+                <button onClick={() => handleOpenFile(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <ExternalLink className="w-4 h-4" /> {t('explorer.open', '打开')}
                 </button>
-                <button onClick={() => handleRenameStart(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => handleRenameStart(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Edit3 className="w-4 h-4" /> {t('explorer.rename', '重命名')}
                 </button>
+                <div className="my-1 h-px bg-primary/10" />
+                {/* 第2分组: 复制 + 剪切 + 制作替身 */}
+                <button onClick={() => handleCopyToClipboard(getActionFiles(ctxFile))} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Copy className="w-4 h-4" /> {t('explorer.copy', '复制')}
+                </button>
+                <button onClick={() => handleCutToClipboard(getActionFiles(ctxFile))} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Edit2 className="w-4 h-4" /> {t('explorer.cut', '剪切')}
+                </button>
+                <button onClick={() => handleAlias(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <ExternalLink className="w-4 h-4" /> 制作替身
+                </button>
+                <div className="my-1 h-px bg-primary/10" />
+                {/* 第3分组: 解压/压缩 + 在终端打开 + 查看简介 */}
                 {ctxFile.type === 'archive' && (
-                  <button onClick={() => handleDecompress(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                  <button onClick={() => handleDecompress(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                     <FolderArchive className="w-4 h-4" /> 解压
                   </button>
                 )}
-                <button onClick={() => handleCompress(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => handleCompress(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <FolderArchive className="w-4 h-4" /> 压缩
                 </button>
-                <button onClick={() => handleAlias(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
-                  <ExternalLink className="w-4 h-4" /> 制作替身
-                </button>
-                <button onClick={() => handleQuickLook(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
-                  <Eye className="w-4 h-4" /> Quick Look
-                </button>
-                <button onClick={() => handleRevealInFinder(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
-                  <Folder className="w-4 h-4" /> 在 Finder 中显示
-                </button>
-                <button onClick={() => handleCopyPaths(getActionFiles(ctxFile))} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
-                  <Copy className="w-4 h-4" /> 复制路径
-                </button>
-                <button onClick={() => handleOpenTerminal(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => handleOpenTerminal(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Terminal className="w-4 h-4" /> 在终端打开
                 </button>
-                <button onClick={() => handleShowInspector()} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => handleShowInspector()} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Info className="w-4 h-4" /> {t('explorer.getInfo', '查看简介')}
                 </button>
                 <div className="my-1 h-px bg-primary/10" />
-                <button onClick={() => handleCopyToClipboard(getActionFiles(ctxFile))} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
-                  <Copy className="w-4 h-4" /> {t('explorer.copy', '复制')}
+                {/* 第4分组: Quick Look + Finder 中显示 + 复制路径 */}
+                <button onClick={() => handleQuickLook(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Eye className="w-4 h-4" /> Quick Look
+                </button>
+                <button onClick={() => handleRevealInFinder(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Folder className="w-4 h-4" /> 在 Finder 中显示
+                </button>
+                <button onClick={() => handleCopyPaths(getActionFiles(ctxFile))} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Copy className="w-4 h-4" /> 复制路径
                 </button>
                 <div className="my-1 h-px bg-primary/10" />
-                <button onClick={() => handleCopyFile(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
-                  <Copy className="w-4 h-4" /> {t('explorer.copyTo', '复制到...')}
-                </button>
-                <button onClick={() => handleMoveFile(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary">
-                  <LayoutGrid className="w-4 h-4" /> {t('explorer.moveTo', '移动到...')}
-                </button>
-                <div className="my-1 h-px bg-primary/10" />
-                <button onClick={() => handleDeleteFile(ctxFile)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-red-500/10 text-[13px] font-bold transition-all text-red-500">
+                {/* 第5分组: 删除 */}
+                <button onClick={() => handleDeleteFile(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-red-500/10 text-[13px] font-bold transition-all text-red-500">
                   <Trash2 className="w-4 h-4" /> {t('explorer.moveToTrash', '移至废纸篓')}
                 </button>
 
-                {/* Extensions Group */}
+                {/* 第6分组: 扩展功能 */}
                 {enabledContextExtensions.length > 0 && (
                   <>
                     <div className="my-1 h-px bg-primary/10" />
-                    <div className="px-3 py-1.5 text-[10px] font-black text-primary uppercase tracking-widest flex items-center gap-2">
-                       <Puzzle className="w-3 h-3" /> {t('settings.extensions', '扩展功能')}
-                    </div>
                     {enabledContextExtensions.map((ext) => (
                       <button
                         key={ext.id}
                         onClick={() => handleExtensionAction(ext.id, ctxFile)}
-                        className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/20 text-[13px] font-bold transition-all text-on-surface"
+                        className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] font-bold transition-all text-on-surface"
                       >
                         {getExtensionIcon(ext)}
                         {ext.label}
-                        {ext.confirmExecution !== false && <span className="ml-auto text-[9px] font-black text-on-surface/30 uppercase">确认</span>}
                       </button>
                     ))}
                   </>

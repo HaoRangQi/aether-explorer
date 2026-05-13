@@ -975,7 +975,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
           <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group">
             <div className="space-y-1">
               <h4 className="text-[15px] font-bold text-on-surface">开发者控制台</h4>
-              <p className="text-[12px] text-on-surface/50">开启后自动弹出 WebView 开发者工具。正式版本中也能打开控制台。</p>
+              <p className="text-[12px] text-on-surface/50">开启后在底部状态栏右下角显示「控制台」按钮，点击即可打开 WebView 开发者工具。正式版本中也能使用。</p>
             </div>
             <button
               onClick={() => onThemeChange({ ...theme, enableDevTools: !theme.enableDevTools })}
@@ -1559,7 +1559,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                     key={cat.id}
                     onClick={() => setActiveCategory(cat.id as SettingsCategory)}
                     className={`w-full flex items-center gap-3 px-3 py-3 rounded-[18px] transition-all duration-300 relative group whitespace-nowrap
-                      ${isActive ? 'text-on-surface font-black shadow-lg shadow-primary/5' : 'text-on-surface/40 hover:bg-primary/5 hover:text-primary'}
+                      ${isActive ? 'text-on-surface font-black shadow-lg shadow-primary/5' : 'text-on-surface/40 font-bold hover:bg-primary/5 hover:text-primary'}
                     `}
                   >
                     {isActive && (
