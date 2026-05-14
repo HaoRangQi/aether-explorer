@@ -111,7 +111,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (items.length === 0) return;
     clipboardRef.current = items.map(f => f.path);
     clipboardCutRef.current = false;
-    showFeedback(`已复制 ${items.length} 个项目`);
+    showFeedback(t('messages.copied', { count: items.length }));
     setContextMenu(null);
   };
 
@@ -119,14 +119,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (items.length === 0) return;
     clipboardRef.current = items.map(f => f.path);
     clipboardCutRef.current = true;
-    showFeedback(`已剪切 ${items.length} 个项目`);
+    showFeedback(t('messages.cut', { count: items.length }));
     setContextMenu(null);
   };
 
   const handlePasteFromClipboard = async () => {
     const paths = clipboardRef.current;
     if (paths.length === 0) {
-      showFeedback('剪贴板为空');
+      showFeedback(t('messages.clipboardEmpty'));
       return;
     }
     setContextMenu(null);
@@ -137,14 +137,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         clipboardRef.current = [];
         clipboardCutRef.current = false;
         refreshCurrentDir();
-        showFeedback(`已移动 ${paths.length} 个项目`);
+        showFeedback(t('messages.moved', { count: paths.length }));
       } else {
         await Promise.all(paths.map(path => copyFile(path, currentPath)));
         refreshCurrentDir();
-        showFeedback(`已粘贴 ${paths.length} 个项目`);
+        showFeedback(t('messages.pasted', { count: paths.length }));
       }
     } catch (e) {
-      showFeedback(`操作失败：${String(e)}`);
+      showFeedback(t('messages.operationFailed', { error: String(e) }));
     }
   };
 
@@ -644,7 +644,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       });
       return next;
     });
-    showFeedback(`已${items.every(item => (fileTags[item.path] || item.tags || []).includes(tagId)) ? '移除' : '添加'}标签`);
+    const action = items.every(item => (fileTags[item.path] || item.tags || []).includes(tagId)) ? t('messages.tagRemoved') : t('messages.tagAdded');
+    showFeedback(t('messages.tagToggled', { action }));
     setActiveDropdown(null);
   };
 
@@ -769,9 +770,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     try {
       await Promise.all(paths.map(path => copyFile(path, currentPath)));
       refreshCurrentDir();
-      showFeedback(`已从 Finder 导入 ${paths.length} 个项目`);
+      showFeedback(t('messages.importedFromFinder', { count: paths.length }));
     } catch (err) {
-      showFeedback(`Finder 拖入失败：${String(err)}`);
+      showFeedback(t('messages.finderImportFailed', { error: String(err) }));
     }
   };
 
@@ -796,17 +797,17 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     const idsToMove = selectedFileIds.includes(draggedFileId) ? selectedFileIds : [draggedFileId];
     const filesToMove = files.filter(f => idsToMove.includes(f.id));
     if (filesToMove.some(f => targetFolder.path === f.path || targetFolder.path.startsWith(`${f.path}/`))) {
-      showFeedback('不能将文件夹移动到自身内部。');
+      showFeedback(t('messages.cannotMoveToSelf'));
       return;
     }
 
     Promise.all(filesToMove.map(file => moveFile(file.path, targetFolder.path)))
       .then(() => {
-        showFeedback(`已移动 ${filesToMove.length} 个项目到 ${targetFolder.name}`);
+        showFeedback(t('messages.movedToFolder', { count: filesToMove.length, folder: targetFolder.name }));
         onSelectFiles([]);
         refreshCurrentDir();
       })
-      .catch(err => showFeedback(`移动失败：${String(err)}`));
+      .catch(err => showFeedback(t('messages.moveFailed', { error: String(err) })));
   };
 
   const handleSort = (key: string) => {
@@ -1339,7 +1340,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       setFiles(entries);
       if (fullRefresh) {
         setLoading(false);
-        showFeedback('已刷新');
+        showFeedback(t('messages.refreshed'));
       }
       return entries;
     } catch {
@@ -1365,7 +1366,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const handleCopyPaths = async (items = selectedFiles) => {
     if (items.length === 0) return;
     await navigator.clipboard.writeText(items.map(f => f.path).join('\n'));
-    showFeedback(`已复制 ${items.length} 个路径`);
+    showFeedback(t('messages.pathCopied', { count: items.length }));
     setContextMenu(null);
   };
 
@@ -1374,7 +1375,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     try {
       await invoke('quick_look', { path: file.path });
     } catch (err) {
-      showFeedback(`Quick Look 打开失败：${String(err)}`);
+      showFeedback(t('messages.quickLookFailed', { error: String(err) }));
     }
   };
 
@@ -1383,7 +1384,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     try {
       await invoke('reveal_in_finder', { path: file.path });
     } catch (err) {
-      showFeedback(`Finder 定位失败：${String(err)}`);
+      showFeedback(t('messages.finderFailed', { error: String(err) }));
     }
     setContextMenu(null);
   };
@@ -1403,9 +1404,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         args,
         customCommand: theme.customTerminalCommand || '',
       });
-      showFeedback(`已在 ${theme.terminalApp || 'Terminal'} 打开目录`);
+      showFeedback(t('messages.terminalOpened', { app: theme.terminalApp || 'Terminal' }));
     } catch (err) {
-      showFeedback(`打开终端失败：${String(err)}`);
+      showFeedback(t('messages.terminalFailed', { error: String(err) }));
     }
     setContextMenu(null);
   };
@@ -1463,7 +1464,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         await Promise.all(targets.map(item => deleteToTrash(item.path)));
         refreshCurrentDir();
         onSelectFiles([]);
-        showFeedback(`已移至废纸篓：${targets.length} 个项目`);
+        showFeedback(t('messages.movedToTrash', { count: targets.length }));
       } catch (e) { showFeedback(`移至废纸篓失败：${String(e)}`); }
     }
     setContextMenu(null);

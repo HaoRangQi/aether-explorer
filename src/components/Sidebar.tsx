@@ -144,10 +144,10 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
   const ejectVolume = async (volume: VolumeInfo) => {
     try {
       await invoke('eject_volume', { path: volume.path });
-      setVolumeMessage(`已弹出 ${volume.name}`);
+      setVolumeMessage(t('messages.ejected', { name: volume.name }));
       loadVolumes();
     } catch (err) {
-      setVolumeMessage(`弹出失败：${String(err)}`);
+      setVolumeMessage(t('messages.ejectFailed', { error: String(err) }));
     }
     if (volumeMessageTimerRef.current) window.clearTimeout(volumeMessageTimerRef.current);
     volumeMessageTimerRef.current = window.setTimeout(() => setVolumeMessage(''), 2600);

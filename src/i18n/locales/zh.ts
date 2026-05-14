@@ -175,6 +175,31 @@ export default {
     executeActionTitle: '执行扩展动作',
     deleteConfirm: '确定删除「{label}」吗？',
     existsTitle: '文件已存在'
+  },
+  messages: {
+    copied: '已复制 {count} 个项目',
+    cut: '已剪切 {count} 个项目',
+    clipboardEmpty: '剪贴板为空',
+    moved: '已移动 {count} 个项目',
+    pasted: '已粘贴 {count} 个项目',
+    operationFailed: '操作失败：{error}',
+    tagToggled: '已{action}标签',
+    importedFromFinder: '已从 Finder 导入 {count} 个项目',
+    finderImportFailed: 'Finder 拖入失败：{error}',
+    cannotMoveToSelf: '不能将文件夹移动到自身内部。',
+    movedToFolder: '已移动 {count} 个项目到 {folder}',
+    moveFailed: '移动失败：{error}',
+    refreshed: '已刷新',
+    pathCopied: '已复制 {count} 个路径',
+    quickLookFailed: 'Quick Look 打开失败：{error}',
+    finderFailed: 'Finder 定位失败：{error}',
+    terminalOpened: '已在 {app} 打开目录',
+    terminalFailed: '打开终端失败：{error}',
+    movedToTrash: '已移至废纸篓：{count} 个项目',
+    ejected: '已弹出 {name}',
+    ejectFailed: '弹出失败：{error}',
+    tagAdded: '已添加',
+    tagRemoved: '已移除'
   }
 };
 
