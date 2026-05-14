@@ -1,0 +1,68 @@
+# 自动发布带签名更新的 GitHub Release。
+#
+# 触发：
+#   - 推送 v* 形式的 tag（如 git tag v0.1.1 && git push --tags）
+#   - 手动 workflow_dispatch
+#
+# 所需 secrets（Settings → Secrets and variables → Actions）：
+#   TAURI_SIGNING_PRIVATE_KEY            私钥文件内容（cat ~/.tauri/aether-updater.key 的输出）
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   私钥密码；私钥无密码则填空字符串
+#
+# tauri-action 会自动：
+#   - 构建 universal macOS bundle（dmg + app.tar.gz）
+#   - 用私钥签名 .app.tar.gz，生成 .sig
+#   - 生成 latest.json 并上传到 Release
+#   - dmg / app.tar.gz / sig / latest.json 全部挂到同一个 Release
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust (universal targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Build & sign & release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseBody: 'Aether Explorer ${{ github.ref_name }}'
+          releaseDraft: false
+          prerelease: false
+          args: --target universal-apple-darwin
+          updaterJsonPreferNsis: false

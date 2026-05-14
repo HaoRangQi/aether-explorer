@@ -375,6 +375,105 @@ fn move_file(src: String, dst_dir: String) -> Result<String, String> {
     Ok(dst_path.to_string_lossy().into())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MoveFailure {
+    src: String,
+    error: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MoveResult {
+    moved: Vec<String>,
+    failed: Vec<MoveFailure>,
+    skipped_same_dir: u32,
+}
+
+#[tauri::command]
+fn move_files(srcs: Vec<String>, dst_dir: String) -> Result<MoveResult, String> {
+    let dst = Path::new(&dst_dir);
+    if !dst.is_dir() {
+        return Err(format!("目标不是目录: {}", dst_dir));
+    }
+
+    let mut moved: Vec<String> = Vec::new();
+    let mut failed: Vec<MoveFailure> = Vec::new();
+    let mut skipped_same_dir: u32 = 0;
+
+    for src in srcs {
+        let src_path = Path::new(&src);
+
+        if !src_path.exists() {
+            failed.push(MoveFailure { src: src.clone(), error: "源不存在".into() });
+            continue;
+        }
+
+        if let Some(parent) = src_path.parent() {
+            if parent == dst {
+                skipped_same_dir += 1;
+                continue;
+            }
+        }
+
+        if dst == src_path || dst.starts_with(src_path) {
+            failed.push(MoveFailure {
+                src: src.clone(),
+                error: "目标在源目录内".into(),
+            });
+            continue;
+        }
+
+        let name = src_path.file_name().unwrap_or_default().to_string_lossy();
+        let dst_path = unique_destination(&dst.join(name.as_ref()));
+
+        match fs::rename(&src, &dst_path) {
+            Ok(_) => moved.push(dst_path.to_string_lossy().into()),
+            Err(e) => {
+                // EXDEV on macOS / Linux = 18 (cross-device link)
+                let is_cross_device = matches!(e.raw_os_error(), Some(18));
+                if is_cross_device {
+                    let copy_outcome = if src_path.is_dir() {
+                        copy_dir_recursive(src_path, &dst_path)
+                    } else {
+                        fs::copy(src_path, &dst_path)
+                            .map(|_| ())
+                            .map_err(|err| format!("跨设备复制失败: {}", err))
+                    };
+                    match copy_outcome {
+                        Ok(_) => {
+                            let rm_outcome = if src_path.is_dir() {
+                                fs::remove_dir_all(src_path)
+                            } else {
+                                fs::remove_file(src_path)
+                            };
+                            if let Err(rm_err) = rm_outcome {
+                                failed.push(MoveFailure {
+                                    src: src.clone(),
+                                    error: format!("已复制但源删除失败: {}", rm_err),
+                                });
+                            } else {
+                                moved.push(dst_path.to_string_lossy().into());
+                            }
+                        }
+                        Err(copy_err) => failed.push(MoveFailure {
+                            src: src.clone(),
+                            error: copy_err,
+                        }),
+                    }
+                } else {
+                    failed.push(MoveFailure {
+                        src: src.clone(),
+                        error: format!("{}", e),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(MoveResult { moved, failed, skipped_same_dir })
+}
+
 #[tauri::command]
 fn rename_file(path: String, new_name: String) -> Result<String, String> {
     let parent = Path::new(&path).parent().unwrap_or(Path::new("/"));
@@ -866,6 +965,7 @@ pub fn run() {
             eject_volume,
             copy_file,
             move_file,
+            move_files,
             rename_file,
             delete_to_trash,
             create_file,

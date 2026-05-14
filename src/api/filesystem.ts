@@ -51,6 +51,21 @@ export async function moveFile(src: string, dstDir: string): Promise<string> {
   return invoke('move_file', { src, dstDir });
 }
 
+export interface MoveFailure {
+  src: string;
+  error: string;
+}
+
+export interface MoveResult {
+  moved: string[];
+  failed: MoveFailure[];
+  skippedSameDir: number;
+}
+
+export async function moveFiles(srcs: string[], dstDir: string): Promise<MoveResult> {
+  return invoke<MoveResult>('move_files', { srcs, dstDir });
+}
+
 export async function renameFile(path: string, newName: string): Promise<string> {
   return invoke('rename_file', { path, newName });
 }

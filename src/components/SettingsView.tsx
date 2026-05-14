@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X } from 'lucide-react';
+import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { ThemeSettings, ContextMenuAction, LanguageOption } from '../types';
 import { ACCENT_COLORS } from '../constants';
 
@@ -60,10 +62,14 @@ const ACTION_TYPE_META = {
 } satisfies Record<NonNullable<ContextMenuAction['actionType']>, { label: string; description: string; icon: React.ComponentType<{ className?: string }> }>;
 
 type UpdateStatus = {
-  state: 'idle' | 'checking' | 'current' | 'available' | 'error';
+  state: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'installing' | 'restarting' | 'error';
   currentVersion: string;
   latestVersion: string;
   releaseUrl?: string;
+  notes?: string;
+  pubDate?: string;
+  downloaded: number;
+  contentLength: number;
   message: string;
 };
 
@@ -72,8 +78,24 @@ const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   currentVersion: '',
   latestVersion: '',
   releaseUrl: '',
+  notes: '',
+  pubDate: '',
+  downloaded: 0,
+  contentLength: 0,
   message: '尚未检查更新。',
 };
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes < 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
 
 export default function SettingsView({ theme, onThemeChange }: SettingsViewProps) {
   const { t, i18n } = useTranslation();
@@ -91,8 +113,6 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(DEFAULT_UPDATE_STATUS);
   const [showLanguageManager, setShowLanguageManager] = useState(false);
   const [cleanupStatus, setCleanupStatus] = useState<{ cleaning: boolean; message: string }>({ cleaning: false, message: '' });
-  const updateTimerRef = useRef<number | null>(null);
-  const updateRequestIdRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -299,49 +319,110 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
     deleteExtension(id);
   };
 
-  const pendingDmgRef = useRef('');
-
   const handleCheckUpdates = async () => {
-    setUpdateStatus({ state: 'checking', currentVersion: '', latestVersion: '', releaseUrl: '', message: '正在检查更新...' });
+    setUpdateStatus({
+      ...DEFAULT_UPDATE_STATUS,
+      state: 'checking',
+      message: t('settings.update.checking'),
+    });
     try {
-      const currentVersion = (await getVersion().catch(() => '')) || import.meta.env.VITE_APP_VERSION || '0.1.0';
-      const response = await fetch('https://api.github.com/repos/HaoRangQi/aether-explorer/releases/latest', {
-        headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
-      });
-      if (!response.ok) throw new Error(`GitHub API 返回 ${response.status}`);
-      const release = await response.json();
-      const latestVersion = String(release.tag_name || release.name || '').replace(/^v/, '');
-      const normalizedCurrent = currentVersion.replace(/^v/, '');
-      // 找到 universal 或 aarch64 的 DMG
-      const dmgAsset = (release.assets || []).find((a: any) =>
-        a.name && a.name.endsWith('.dmg') && (a.name.includes('universal') || a.name.includes('aarch64'))
-      );
-      if (latestVersion === normalizedCurrent) {
-        setUpdateStatus({ state: 'current', currentVersion: normalizedCurrent, latestVersion, releaseUrl: '', message: `已是最新版本：${normalizedCurrent}` });
+      const currentVersion = (await getVersion().catch(() => '')) || '0.1.0';
+      const update = await check();
+      if (!update) {
+        setUpdateStatus({
+          ...DEFAULT_UPDATE_STATUS,
+          state: 'current',
+          currentVersion,
+          latestVersion: currentVersion,
+          message: t('settings.update.alreadyLatest', { version: currentVersion }),
+        });
         return;
       }
-      pendingDmgRef.current = dmgAsset?.browser_download_url || '';
+      const latestVersion = update.version || '';
+      const releaseUrl = `https://github.com/HaoRangQi/aether-explorer/releases/tag/v${latestVersion}`;
       setUpdateStatus({
+        ...DEFAULT_UPDATE_STATUS,
         state: 'available',
-        currentVersion: normalizedCurrent,
+        currentVersion: update.currentVersion || currentVersion,
         latestVersion,
-        releaseUrl: release.html_url || '',
-        message: `发现新版本：${latestVersion}`,
+        releaseUrl,
+        notes: update.body || '',
+        pubDate: update.date || '',
+        message: t('settings.update.foundNew', { version: latestVersion }),
       });
     } catch (err) {
-      setUpdateStatus({ state: 'error', currentVersion: '', latestVersion: '', releaseUrl: '', message: `检查失败：${String(err)}` });
+      setUpdateStatus({
+        ...DEFAULT_UPDATE_STATUS,
+        state: 'error',
+        message: t('settings.update.checkFailed', { error: String(err) }),
+      });
     }
   };
 
   const handleDownloadUpdate = async () => {
-    const dmgUrl = pendingDmgRef.current;
-    if (!dmgUrl) {
-      setUpdateStatus(prev => ({ ...prev, message: '未找到下载地址' }));
-      return;
+    try {
+      const update = await check();
+      if (!update) {
+        setUpdateStatus(prev => ({
+          ...prev,
+          state: 'current',
+          message: t('settings.update.noUpdateOnDownload'),
+        }));
+        return;
+      }
+      setUpdateStatus(prev => ({
+        ...prev,
+        state: 'downloading',
+        downloaded: 0,
+        contentLength: 0,
+        message: t('settings.update.preparing'),
+      }));
+      let downloaded = 0;
+      let contentLength = 0;
+      await update.downloadAndInstall(event => {
+        switch (event.event) {
+          case 'Started':
+            contentLength = event.data.contentLength ?? 0;
+            setUpdateStatus(prev => ({
+              ...prev,
+              state: 'downloading',
+              downloaded: 0,
+              contentLength,
+              message: t('settings.update.downloading'),
+            }));
+            break;
+          case 'Progress':
+            downloaded += event.data.chunkLength ?? 0;
+            setUpdateStatus(prev => ({
+              ...prev,
+              state: 'downloading',
+              downloaded,
+              message: t('settings.update.downloading'),
+            }));
+            break;
+          case 'Finished':
+            setUpdateStatus(prev => ({
+              ...prev,
+              state: 'installing',
+              downloaded: prev.contentLength || downloaded,
+              message: t('settings.update.installing'),
+            }));
+            break;
+        }
+      });
+      setUpdateStatus(prev => ({
+        ...prev,
+        state: 'restarting',
+        message: t('settings.update.restarting'),
+      }));
+      await relaunch();
+    } catch (err) {
+      setUpdateStatus(prev => ({
+        ...prev,
+        state: 'error',
+        message: t('settings.update.installFailed', { error: String(err) }),
+      }));
     }
-    setUpdateStatus(prev => ({ ...prev, message: '正在打开下载页面...' }));
-    shellOpen(dmgUrl);
-    setUpdateStatus(prev => ({ ...prev, message: '已打开 DMG 下载链接，下载后覆盖安装即可。' }));
   };
 
   const handleCleanup = async () => {
@@ -1146,52 +1227,124 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
               <DownloadCloud className="w-6 h-6 text-primary" />
             </div>
             <div>
-              <h3 className="text-[18px] font-black text-on-surface">在线更新</h3>
-              <p className="text-[12px] text-on-surface/45 mt-1">检查 GitHub Release 上的新版本。发现更新后需手动确认下载。</p>
+              <h3 className="text-[18px] font-black text-on-surface">{t('settings.update.title')}</h3>
+              <p className="text-[12px] text-on-surface/45 mt-1">{t('settings.update.description')}</p>
             </div>
           </div>
           <button
             onClick={handleCheckUpdates}
-            disabled={updateStatus.state === 'checking'}
+            disabled={['checking', 'downloading', 'installing', 'restarting'].includes(updateStatus.state)}
             className="px-5 py-3 rounded-2xl bg-primary text-on-primary text-[12px] font-black flex items-center gap-2 shadow-xl shadow-primary/20 disabled:opacity-60 whitespace-nowrap shrink-0"
           >
             <RefreshCw className={`w-4 h-4 ${updateStatus.state === 'checking' ? 'animate-spin' : ''}`} />
-            {updateStatus.state === 'checking' ? '检查中' : '检查更新'}
+            {updateStatus.state === 'checking' ? t('settings.update.checkingButton') : t('settings.update.checkButton')}
           </button>
         </div>
+
         <div className="rounded-2xl bg-primary/5 border border-primary/10 px-5 py-4 flex items-center gap-3">
-          <BadgeCheck className="w-5 h-5 text-primary" />
+          {(['checking', 'downloading', 'installing', 'restarting'] as const).includes(updateStatus.state as any) ? (
+            <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />
+          ) : updateStatus.state === 'error' ? (
+            <X className="w-5 h-5 text-red-500 shrink-0" />
+          ) : (
+            <BadgeCheck className="w-5 h-5 text-primary shrink-0" />
+          )}
           <span className="text-[13px] font-bold text-on-surface/70">
-            {updateStatus.message}
+            {updateStatus.state === 'idle' ? t('settings.update.idleHint') : updateStatus.message}
           </span>
         </div>
+
+        <AnimatePresence mode="wait">
+          {(updateStatus.state === 'downloading' || updateStatus.state === 'installing' || updateStatus.state === 'restarting') && (
+            <motion.div
+              key="progress"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="space-y-3"
+            >
+              <div className="flex items-center justify-between text-[11px] font-black text-on-surface/55 uppercase tracking-widest">
+                <span>
+                  {updateStatus.state === 'downloading'
+                    ? t('settings.update.downloading')
+                    : updateStatus.state === 'installing'
+                    ? t('settings.update.installing')
+                    : t('settings.update.restarting')}
+                </span>
+                <span className="text-on-surface tabular-nums">
+                  {(() => {
+                    const total = updateStatus.contentLength;
+                    const done = updateStatus.downloaded;
+                    if (updateStatus.state === 'installing' || updateStatus.state === 'restarting') return '100%';
+                    if (total > 0) return `${Math.min(100, Math.round((done / total) * 100))}%`;
+                    return formatBytes(done);
+                  })()}
+                </span>
+              </div>
+              <div className="relative h-2 rounded-full bg-primary/10 overflow-hidden">
+                <motion.div
+                  className="absolute inset-y-0 left-0 bg-primary rounded-full"
+                  initial={{ width: '0%' }}
+                  animate={{
+                    width:
+                      updateStatus.state === 'installing' || updateStatus.state === 'restarting'
+                        ? '100%'
+                        : updateStatus.contentLength > 0
+                        ? `${Math.min(100, (updateStatus.downloaded / updateStatus.contentLength) * 100)}%`
+                        : '20%',
+                  }}
+                  transition={{ duration: updateStatus.state === 'downloading' && updateStatus.contentLength === 0 ? 1.2 : 0.4, ease: 'easeOut', repeat: updateStatus.state === 'downloading' && updateStatus.contentLength === 0 ? Infinity : 0, repeatType: 'reverse' }}
+                />
+              </div>
+              {updateStatus.state === 'downloading' && updateStatus.contentLength > 0 && (
+                <p className="text-[11px] text-on-surface/45 tabular-nums">
+                  {formatBytes(updateStatus.downloaded)} / {formatBytes(updateStatus.contentLength)}
+                </p>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {updateStatus.state === 'available' && (
           <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="rounded-2xl bg-primary/5 border border-primary/10 px-4 py-3">
-              <p className="text-[11px] font-black text-on-surface/35 uppercase tracking-widest">当前版本</p>
-              <p className="text-[13px] font-black text-on-surface mt-1 truncate">{updateStatus.currentVersion || '未知'}</p>
+              <p className="text-[11px] font-black text-on-surface/35 uppercase tracking-widest">{t('settings.update.currentVersion')}</p>
+              <p className="text-[13px] font-black text-on-surface mt-1 truncate">{updateStatus.currentVersion || t('settings.update.unknown')}</p>
             </div>
             <div className="rounded-2xl bg-primary/5 border border-primary/10 px-4 py-3">
-              <p className="text-[11px] font-black text-on-surface/35 uppercase tracking-widest">最新版本</p>
-              <p className="text-[13px] font-black text-on-surface mt-1 truncate">{updateStatus.latestVersion || '未知'}</p>
+              <p className="text-[11px] font-black text-on-surface/35 uppercase tracking-widest">{t('settings.update.latestVersion')}</p>
+              <p className="text-[13px] font-black text-on-surface mt-1 truncate">{updateStatus.latestVersion || t('settings.update.unknown')}</p>
             </div>
           </div>
+          {updateStatus.notes && (
+            <div className="rounded-2xl bg-primary/5 border border-primary/10 px-4 py-3 max-h-40 overflow-y-auto">
+              <p className="text-[11px] font-black text-on-surface/35 uppercase tracking-widest mb-2">{t('settings.update.releaseNotes')}</p>
+              <p className="text-[12px] text-on-surface/75 whitespace-pre-wrap leading-relaxed">{updateStatus.notes}</p>
+            </div>
+          )}
           <div className="flex gap-3">
             <button
               onClick={handleDownloadUpdate}
               className="flex-1 py-3 rounded-2xl bg-green-500 text-white text-[13px] font-black flex items-center justify-center gap-2 shadow-lg shadow-green-500/20 hover:bg-green-400 transition-colors"
             >
-              <DownloadCloud className="w-4 h-4" /> 下载
+              <DownloadCloud className="w-4 h-4" /> {t('settings.update.downloadAndInstall')}
             </button>
             <button
               onClick={() => updateStatus.releaseUrl && shellOpen(updateStatus.releaseUrl)}
               className="flex-1 py-3 rounded-2xl bg-primary text-on-primary text-[13px] font-black flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:bg-primary/80 transition-colors"
             >
-              <ExternalLink className="w-4 h-4" /> 发版主页
+              <ExternalLink className="w-4 h-4" /> {t('settings.update.viewRelease')}
             </button>
           </div>
           </>
+        )}
+
+        {updateStatus.state === 'restarting' && (
+          <div className="flex items-center justify-center gap-2 py-3 text-[12px] font-black text-primary">
+            <RotateCw className="w-4 h-4 animate-spin" />
+            {t('settings.update.restartingHint')}
+          </div>
         )}
       </section>
 

@@ -9,7 +9,7 @@ import { Menu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { listDirectory, getHomeDir, copyFile, moveFile, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, makeAlias } from '../api/filesystem';
+import { listDirectory, getHomeDir, copyFile, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, makeAlias } from '../api/filesystem';
 import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction } from '../types';
 import { QUICK_ACCESS } from '../constants';
 
@@ -73,6 +73,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [imagePreviewFailed, setImagePreviewFailed] = useState(false);
   const [pdfPreviewFailed, setPdfPreviewFailed] = useState(false);
   const [operationMessage, setOperationMessage] = useState('');
+  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
   const [fileTags, setFileTags] = useState<Record<string, string[]>>(() => {
     try {
       return JSON.parse(localStorage.getItem('aether-file-tags') || '{}');
@@ -781,33 +782,65 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleDragOver = (e: React.DragEvent, fileId: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    if (dragOverFolderId !== fileId) setDragOverFolderId(fileId);
   };
 
-  const handleDrop = (e: React.DragEvent, targetFolderId: string) => {
+  const handleDragLeave = (e: React.DragEvent, fileId: string) => {
+    // 只在真离开盒子时清，避免子元素 leave 触发误清
+    const related = e.relatedTarget as Node | null;
+    if (related && e.currentTarget.contains(related)) return;
+    if (dragOverFolderId === fileId) setDragOverFolderId(null);
+  };
+
+  const handleDragEnd = () => {
+    if (dragOverFolderId !== null) setDragOverFolderId(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetFolderId: string) => {
     e.preventDefault();
+    setDragOverFolderId(null);
+
     const draggedFileId = e.dataTransfer.getData('fileId');
-    if (draggedFileId === targetFolderId) return;
+    if (!draggedFileId || draggedFileId === targetFolderId) return;
 
     const targetFolder = files.find(f => f.id === targetFolderId && f.type === 'folder');
     if (!targetFolder) return;
 
     const idsToMove = selectedFileIds.includes(draggedFileId) ? selectedFileIds : [draggedFileId];
     const filesToMove = files.filter(f => idsToMove.includes(f.id));
+    if (filesToMove.length === 0) return;
+
     if (filesToMove.some(f => targetFolder.path === f.path || targetFolder.path.startsWith(`${f.path}/`))) {
       showFeedback(t('messages.cannotMoveToSelf'));
       return;
     }
 
-    Promise.all(filesToMove.map(file => moveFile(file.path, targetFolder.path)))
-      .then(() => {
-        showFeedback(t('messages.movedToFolder', { count: filesToMove.length, folder: targetFolder.name }));
-        onSelectFiles([]);
-        refreshCurrentDir();
-      })
-      .catch(err => showFeedback(t('messages.moveFailed', { error: String(err) })));
+    try {
+      const result = await moveFiles(filesToMove.map(f => f.path), targetFolder.path);
+      onSelectFiles([]);
+      refreshCurrentDir();
+
+      if (result.failed.length === 0 && result.skippedSameDir === 0 && result.moved.length > 0) {
+        showFeedback(t('messages.movedToFolder', { count: result.moved.length, folder: targetFolder.name }));
+      } else if (result.moved.length === 0 && result.skippedSameDir > 0 && result.failed.length === 0) {
+        showFeedback(t('messages.sameDirectory'));
+      } else if (result.failed.length > 0 && result.moved.length === 0) {
+        showFeedback(t('messages.moveFailed', { error: result.failed[0].error }));
+      } else {
+        showFeedback(
+          t('messages.partialMove', {
+            ok: result.moved.length,
+            failed: result.failed.length,
+            error: result.failed[0]?.error ?? '',
+          })
+        );
+      }
+    } catch (err) {
+      showFeedback(t('messages.moveFailed', { error: String(err) }));
+    }
   };
 
   const handleSort = (key: string) => {
@@ -886,6 +919,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const renderFileItem = (file: FileItem, isColumnItem = false) => {
     const isSelected = selectedFileIds.includes(file.id) || (isColumnItem && columnPaths.includes(file.id));
     const isPulsing = pulseFileId === file.id;
+    const isDropTarget = dragOverFolderId === file.id && file.type === 'folder';
     const formattedName = formatFileName(file.name);
     const isLongName = file.name !== formattedName;
     const tags = fileTags[file.path] || file.tags || [];
@@ -906,7 +940,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           data-id={file.id}
           draggable
           onDragStart={(e) => handleDragStart(e, file)}
-          onDragOver={file.type === 'folder' ? (e) => handleDragOver(e) : undefined}
+          onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
+          onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
+          onDragEnd={handleDragEnd}
           onDrop={file.type === 'folder' ? (e) => handleDrop(e, file.id) : undefined}
           onClick={(e) => { e.stopPropagation(); handleSelectFile(file, e); }}
           onDoubleClick={() => handleDoubleClick(file)}
@@ -917,6 +953,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           className={`file-item flex items-center transition-all duration-200 group border px-4 cursor-pointer
             ${config.py} ${config.gap}
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
+            ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
             ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)] rounded-xl z-10' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm rounded-lg'}
           `}
         >
@@ -963,7 +1000,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           data-id={file.id}
           draggable
           onDragStart={(e) => handleDragStart(e, file)}
-          onDragOver={file.type === 'folder' ? (e) => handleDragOver(e) : undefined}
+          onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
+          onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
+          onDragEnd={handleDragEnd}
           onDrop={file.type === 'folder' ? (e) => handleDrop(e, file.id) : undefined}
           title={isLongName ? file.name : undefined}
           onClick={(e) => { e.stopPropagation(); handleSelectFile(file, e); }}
@@ -973,6 +1012,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           transition={isPulsing ? { duration: 0.26 } : undefined}
           className={`file-item flex items-center gap-3 px-3 rounded-xl cursor-pointer transition-all duration-300 group border
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
+            ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
             ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)]' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm'}
           `}
           style={{ 
@@ -1010,7 +1050,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           data-id={file.id}
           draggable
           onDragStart={(e) => handleDragStart(e, file)}
-          onDragOver={file.type === 'folder' ? (e) => handleDragOver(e) : undefined}
+          onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
+          onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
+          onDragEnd={handleDragEnd}
           onDrop={file.type === 'folder' ? (e) => handleDrop(e, file.id) : undefined}
           title={isLongName ? file.name : undefined}
           onClick={(e) => { e.stopPropagation(); handleSelectFile(file, e); }}
@@ -1021,6 +1063,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           whileHover={{ y: -4 }}
           className={`file-item relative rounded-2xl p-4 flex flex-col justify-between group cursor-pointer transition-all duration-300 border
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
+            ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
             ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)]' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm'}
             ${file.type === 'image' && file.thumbnail ? 'col-span-2 row-span-2 p-0 overflow-hidden' + (!isSelected ? ' !border-none !bg-transparent' : '') : ''}
           `}
