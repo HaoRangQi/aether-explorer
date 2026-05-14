@@ -122,5 +122,34 @@ export default {
     list: 'List',
     grid: 'Grid',
     column: 'Column'
+  },
+  tooltips: {
+    close: 'Close',
+    minimize: 'Minimize',
+    maximize: 'Maximize',
+    dragWindow: 'Drag window',
+    expand: 'Expand',
+    collapse: 'Collapse',
+    refresh: 'Refresh',
+    back: 'Back',
+    forward: 'Forward',
+    moreActions: 'More actions',
+    openInTerminal: 'Open in Terminal',
+    transferManager: 'Transfer Manager',
+    tags: 'Tags',
+    import: 'Import',
+    refreshExternalDisks: 'Refresh external disks',
+    refreshTerminalList: 'Refresh terminal list',
+    selectTerminalApp: 'Select terminal app manually',
+    selectScriptFile: 'Select script file',
+    deleteThisLine: 'Delete this line',
+    nextLangPackImport: 'Next: JSON language pack import and validation',
+    createWindow: 'New window'
+  },
+  common: {
+    reset: 'Reset',
+    apply: 'Apply',
+    cancel: 'Cancel',
+    save: 'Save'
   }
 };

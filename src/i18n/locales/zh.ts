@@ -135,5 +135,28 @@ export default {
     list: '列表',
     grid: '网格',
     column: '分栏'
+  },
+  tooltips: {
+    close: '关闭',
+    minimize: '最小化',
+    maximize: '全屏',
+    dragWindow: '拖动窗口',
+    expand: '展开',
+    collapse: '收起',
+    refresh: '刷新',
+    back: '后退',
+    forward: '前进',
+    moreActions: '更多操作',
+    openInTerminal: '在终端打开',
+    transferManager: '传输管理',
+    tags: '标签',
+    import: '导入',
+    refreshExternalDisks: '刷新外置磁盘',
+    refreshTerminalList: '刷新终端列表',
+    selectTerminalApp: '手动选择终端应用',
+    selectScriptFile: '选择脚本文件',
+    deleteThisLine: '删除此行',
+    nextLangPackImport: '下一步接入 JSON 语言包导入与校验',
+    createWindow: '新建窗口'
   }
 };

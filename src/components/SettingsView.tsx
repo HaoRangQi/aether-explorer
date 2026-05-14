@@ -862,7 +862,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                 <div className="text-[11px] text-on-surface/35 leading-relaxed">
                   语言包接口已预留：`registerLanguagePack(code, translation)`。
                 </div>
-                <button className="px-5 py-3 rounded-2xl bg-primary text-on-primary text-[12px] font-black opacity-70 cursor-not-allowed" title="下一步接入 JSON 语言包导入与校验">
+                <button className="px-5 py-3 rounded-2xl bg-primary text-on-primary text-[12px] font-black opacity-70 cursor-not-allowed" title={t('tooltips.nextLangPackImport')}>
                   导入语言包
                 </button>
               </footer>
@@ -1006,7 +1006,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                 invoke<string[]>('list_terminal_apps').then(apps => setTerminalApps(apps.length ? apps : ['Terminal', 'iTerm']));
               }}
               className="px-4 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[12px] font-bold text-primary transition-colors"
-              title="刷新终端列表"
+              title={t('tooltips.refreshTerminalList')}
             >
               <RefreshCw className="w-4 h-4" />
             </button>
@@ -1027,7 +1027,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                 } catch {}
               }}
               className="px-4 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[12px] font-bold text-primary transition-colors"
-              title="手动选择终端应用"
+              title={t('tooltips.selectTerminalApp')}
             >
               <Upload className="w-4 h-4" />
             </button>
@@ -1074,7 +1074,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                     } catch {}
                   }}
                   className="p-2.5 bg-primary/10 hover:bg-primary/20 rounded-xl text-primary transition-colors shrink-0"
-                  title="选择脚本文件"
+                  title={t('tooltips.selectScriptFile')}
                 >
                   <Folder className="w-4 h-4" />
                 </button>
@@ -1084,7 +1084,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                     onThemeChange({ ...theme, terminalScripts: scripts.length ? scripts : undefined });
                   }}
                   className="p-2.5 hover:bg-red-500/10 rounded-xl text-on-surface/40 hover:text-red-500 transition-colors shrink-0"
-                  title="删除此行"
+                  title={t('tooltips.deleteThisLine')}
                 >
                   <X className="w-4 h-4" />
                 </button>

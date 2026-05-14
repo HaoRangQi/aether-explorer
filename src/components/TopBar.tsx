@@ -210,7 +210,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
         className="h-3 shrink-0 cursor-grab active:cursor-grabbing"
         data-tauri-drag-region
         onMouseDown={handleDragStart}
-        title="拖动窗口"
+        title={t('tooltips.dragWindow')}
       />
       {/* Navigation Tabs */}
       <div
@@ -295,7 +295,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
             type="button"
             onClick={onCreateWindow}
             className="shrink-0 p-1.5 rounded-full text-on-surface/45 hover:text-primary hover:bg-primary/15 transition-colors"
-            title="新建窗口"
+            title={t('tooltips.createWindow')}
             data-no-drag
           >
             <Plus className="w-4 h-4" />
@@ -305,7 +305,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
           className="w-6 self-stretch shrink-0 cursor-grab active:cursor-grabbing"
           data-tauri-drag-region
           onMouseDown={handleDragStart}
-          title="拖动窗口"
+          title={t('tooltips.dragWindow')}
         />
       </div>
     </header>

@@ -215,23 +215,23 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
         <button
           onClick={() => getCurrentWindow().close()}
           className="w-3 h-3 rounded-full bg-[#ff5f56] border border-[#e0443e] hover:brightness-90 cursor-pointer"
-          title="关闭"
+          title={t('tooltips.close')}
         />
         <button
           onClick={() => getCurrentWindow().minimize()}
           className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123] hover:brightness-90 cursor-pointer"
-          title="最小化"
+          title={t('tooltips.minimize')}
         />
         <button
           onClick={() => getCurrentWindow().toggleMaximize()}
           className="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29] hover:brightness-90 cursor-pointer"
-          title="全屏"
+          title={t('tooltips.maximize')}
         />
         <div
           className="h-5 flex-1 cursor-grab active:cursor-grabbing"
           data-tauri-drag-region
           onMouseDown={handleDragStart}
-          title="拖动窗口"
+          title={t('tooltips.dragWindow')}
         />
       </div>
 
@@ -242,7 +242,7 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
               <button
                 onClick={() => toggleSection(section.title)}
               className="w-full px-3 flex items-center justify-between text-[11px] font-black text-on-surface/45 mb-2 hover:text-primary transition-colors min-w-0"
-                title={collapsedSections[section.title] ? '展开' : '收起'}
+                title={collapsedSections[section.title] ? t('tooltips.expand') : t('tooltips.collapse')}
               >
                 <span className="truncate">{t(section.title)}</span>
                 <span className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity shrink-0">
@@ -302,7 +302,7 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
             <button
               onClick={loadVolumes}
               className="p-0.5 rounded hover:bg-primary/10 hover:text-primary transition-all opacity-0 group-hover/sidebar:opacity-100 shrink-0"
-              title="刷新外置磁盘"
+              title={t('tooltips.refreshExternalDisks')}
             >
               <RefreshCw className="w-3 h-3" />
             </button>

@@ -946,7 +946,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
              <button
                onClick={(e) => openFileActionsMenu(e, file)}
                className="p-1 -mr-1 rounded opacity-0 group-hover:opacity-100 text-on-surface hover:bg-primary/20 transition-all"
-               title="更多操作"
+               title={t('tooltips.moreActions')}
              >
                 <MoreVertical className="w-4 h-4" />
              </button>
@@ -1072,7 +1072,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <button
                   onClick={(e) => openFileActionsMenu(e, file)}
                   className="absolute top-2 right-2 p-1.5 rounded-lg text-on-surface/0 group-hover:text-on-surface/60 hover:text-on-surface hover:bg-primary/20 transition-all"
-                  title="更多操作"
+                  title={t('tooltips.moreActions')}
                 >
                   <MoreVertical className="w-4 h-4" />
                 </button>
@@ -1712,7 +1712,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   onClick={navigateBack}
                   disabled={backStack.length === 0}
                   className={`p-1.5 rounded-lg transition-colors ${backStack.length > 0 ? 'hover:bg-primary/20 text-on-surface/50 hover:text-on-surface' : 'text-on-surface/20 cursor-not-allowed'}`}
-                  title="后退"
+                  title={t('tooltips.back')}
                 >
                   <ChevronLeft className="w-5 h-5" />
                 </button>
@@ -1720,7 +1720,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   onClick={navigateForward}
                   disabled={forwardStack.length === 0}
                   className={`p-1.5 rounded-lg transition-colors ${forwardStack.length > 0 ? 'hover:bg-primary/20 text-on-surface/50 hover:text-on-surface' : 'text-on-surface/20 cursor-not-allowed'}`}
-                  title="前进"
+                  title={t('tooltips.forward')}
                 >
                   <ChevronRight className="w-5 h-5" />
                 </button>
@@ -1858,28 +1858,28 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     <button 
                       onClick={() => setActiveDropdown(activeDropdown === 'upload' ? null : 'upload')}
                       className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'upload' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
-                      title="导入"
+                      title={t('tooltips.import')}
                     >
                       <Upload className="w-4 h-4" />
                     </button>
                     <button 
                       onClick={onStartTransfer}
                       className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
-                      title="传输管理"
+                      title={t('tooltips.transferManager')}
                     >
                       <ExternalLink className="w-4 h-4" />
                     </button>
                     <button 
                       onClick={() => handleOpenTerminal(lastSelectedFile)}
                       className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
-                      title="在终端打开"
+                      title={t('tooltips.openInTerminal')}
                     >
                       <Terminal className="w-4 h-4" />
                     </button>
                     <button 
                       onClick={() => setActiveDropdown(activeDropdown === 'tag' ? null : 'tag')}
                       className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'tag' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
-                      title="标签"
+                      title={t('tooltips.tags')}
                     >
                       <Tag className="w-4 h-4" />
                     </button>
@@ -1906,7 +1906,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     <button
                       onClick={() => refreshCurrentDir(true)}
                       className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
-                      title="刷新"
+                      title={t('tooltips.refresh')}
                     >
                       <RefreshCw className="w-4 h-4" />
                     </button>
