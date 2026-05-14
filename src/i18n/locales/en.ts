@@ -153,6 +153,16 @@ export default {
     terminalScriptExample3: 'For example: git status --short or open -a Preview {path}',
     searchUrlExample: 'For example: https://example.com/search?q={name}'
   },
+  dialogs: {
+    moveToTrash: 'Move {count} items to trash?',
+    fileExists: '{name} already exists.',
+    replaceOrRename: 'OK = Replace\nCancel = Auto-rename',
+    overwriteOrRename: 'OK = Overwrite\nCancel = Auto-rename',
+    executeAction: 'Execute "{label}"?',
+    executeActionTitle: 'Execute Action',
+    deleteConfirm: 'Delete "{label}"?',
+    existsTitle: 'File Exists'
+  },
   common: {
     reset: 'Reset',
     apply: 'Apply',

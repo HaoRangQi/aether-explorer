@@ -165,6 +165,16 @@ export default {
     terminalScriptExample2: '例如：npm run dev 或 code {dir}',
     terminalScriptExample3: '例如：git status --short 或 open -a Preview {path}',
     searchUrlExample: '例如：https://example.com/search?q={name}'
+  },
+  dialogs: {
+    moveToTrash: '确定要将 {count} 个项目移至废纸篓吗？',
+    fileExists: '{name} 已存在。',
+    replaceOrRename: '确定 = 替换\n取消 = 自动重命名',
+    overwriteOrRename: '确定 = 覆盖替换\n取消 = 自动重命名',
+    executeAction: '确定要执行「{label}」吗？',
+    executeActionTitle: '执行扩展动作',
+    deleteConfirm: '确定删除「{label}」吗？',
+    existsTitle: '文件已存在'
   }
 };
 

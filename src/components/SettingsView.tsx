@@ -294,7 +294,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
   };
 
   const handleDeleteExtension = async (id: string, label: string) => {
-    const ok = await window.confirm(`确定删除「${label}」吗？`);
+    const ok = await window.confirm(t('dialogs.deleteConfirm', { label }));
     if (!ok) return;
     deleteExtension(id);
   };

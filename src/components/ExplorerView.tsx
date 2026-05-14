@@ -1457,7 +1457,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleDeleteFile = async (file: FileItem) => {
     const targets = getActionFiles(file);
-    const ok = await confirm(`确定要将 ${targets.length} 个项目移至废纸篓吗？`);
+    const ok = await confirm(t('dialogs.moveToTrash', { count: targets.length }));
     if (ok) {
       try {
         await Promise.all(targets.map(item => deleteToTrash(item.path)));
@@ -1556,7 +1556,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     let output = `${currentPath}/${defaultName}`;
     const exists = files.some(f => f.name === defaultName);
     if (exists) {
-      const action = await confirm(`"${defaultName}" 已存在。\n确定 = 替换\n取消 = 自动重命名`);
+      const msg = t('dialogs.fileExists', { name: defaultName }) + '\n' + t('dialogs.replaceOrRename');
+      const action = await confirm(msg);
       if (!action) {
         let counter = 1;
         const base = defaultName.replace(/\.zip$/, '');
@@ -1577,7 +1578,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     let outputDir = `${currentPath}/${baseName}`;
     const exists = files.some(f => f.name === baseName && f.type === 'folder');
     if (exists) {
-      const action = await confirm(`"${baseName}" 已存在。\n确定 = 覆盖替换\n取消 = 自动重命名`);
+      const msg = t('dialogs.fileExists', { name: baseName }) + '\n' + t('dialogs.overwriteOrRename');
+      const action = await confirm(msg);
       if (!action) {
         let counter = 1;
         while (files.some(f => f.name === `${baseName} (${counter})`)) counter++;
@@ -1614,7 +1616,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     try {
       if (extension.confirmExecution !== false) {
-        const ok = await confirm(`确定要执行「${extension.label}」吗？`, { title: '执行扩展动作', kind: 'warning' });
+        const ok = await confirm(t('dialogs.executeAction', { label: extension.label }), { title: t('dialogs.executeActionTitle'), kind: 'warning' });
         if (!ok) {
           setContextMenu(null);
           return;
