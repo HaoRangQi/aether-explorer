@@ -1101,7 +1101,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
           <input
             value={theme.customTerminalCommand || ''}
             onChange={(e) => onThemeChange({ ...theme, customTerminalCommand: e.target.value })}
-            placeholder="可选：始终先进入选中目录，再执行这里的命令"
+            placeholder={t('placeholders.beforeEnterDir')}
             className="w-full bg-primary/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] text-on-surface font-mono outline-none focus:border-primary"
           />
         </label>
@@ -1509,7 +1509,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                   value={newActionLabel}
                   onChange={(e) => setNewActionLabel(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && addExtension()}
-                  placeholder="例如：用 Warp 打开并运行 dev"
+                  placeholder={t('placeholders.terminalScriptExample1')}
                   className="w-full bg-white/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] font-bold outline-none focus:ring-4 focus:ring-primary/10 transition-all"
                 />
               </label>
@@ -1568,7 +1568,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                   <input
                     value={newTerminalArgs}
                     onChange={(e) => setNewTerminalArgs(e.target.value)}
-                    placeholder="例如：npm run dev 或 code {dir}"
+                    placeholder={t('placeholders.terminalScriptExample2')}
                     className="w-full bg-white/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] font-mono text-on-surface outline-none focus:ring-4 focus:ring-primary/10 transition-all"
                   />
                 </label>
@@ -1580,7 +1580,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                   <input
                     value={newCommand}
                     onChange={(e) => setNewCommand(e.target.value)}
-                    placeholder="例如：git status --short 或 open -a Preview {path}"
+                    placeholder={t('placeholders.terminalScriptExample3')}
                     className="w-full bg-white/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] font-mono text-on-surface outline-none focus:ring-4 focus:ring-primary/10 transition-all"
                   />
                 </label>
@@ -1592,7 +1592,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                   <input
                     value={newUrlTemplate}
                     onChange={(e) => setNewUrlTemplate(e.target.value)}
-                    placeholder="例如：https://example.com/search?q={name}"
+                    placeholder={t('placeholders.searchUrlExample')}
                     className="w-full bg-white/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] font-mono text-on-surface outline-none focus:ring-4 focus:ring-primary/10 transition-all"
                   />
                 </label>

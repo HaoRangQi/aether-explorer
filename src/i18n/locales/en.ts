@@ -146,6 +146,13 @@ export default {
     nextLangPackImport: 'Next: JSON language pack import and validation',
     createWindow: 'New window'
   },
+  placeholders: {
+    beforeEnterDir: 'Optional: Always enter selected directory first, then execute commands here',
+    terminalScriptExample1: 'For example: open with Warp and run dev',
+    terminalScriptExample2: 'For example: npm run dev or code {dir}',
+    terminalScriptExample3: 'For example: git status --short or open -a Preview {path}',
+    searchUrlExample: 'For example: https://example.com/search?q={name}'
+  },
   common: {
     reset: 'Reset',
     apply: 'Apply',

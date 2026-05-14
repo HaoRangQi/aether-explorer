@@ -158,5 +158,13 @@ export default {
     deleteThisLine: '删除此行',
     nextLangPackImport: '下一步接入 JSON 语言包导入与校验',
     createWindow: '新建窗口'
+  },
+  placeholders: {
+    beforeEnterDir: '可选：始终先进入选中目录，再执行这里的命令',
+    terminalScriptExample1: '例如：用 Warp 打开并运行 dev',
+    terminalScriptExample2: '例如：npm run dev 或 code {dir}',
+    terminalScriptExample3: '例如：git status --short 或 open -a Preview {path}',
+    searchUrlExample: '例如：https://example.com/search?q={name}'
   }
 };
+
