@@ -1,5 +1,22 @@
 # 待实现功能
 
+## 在线更新（Tauri Updater）
+
+**目标：** 应用内「关于 → 检查更新」可拉取 GitHub Releases 最新版本并自动下载安装。
+
+**实现步骤：**
+
+1. `Cargo.toml` 添加 `tauri-plugin-updater` 依赖
+2. 生成 Ed25519 密钥对：`npx tauri signer generate`（公钥写入配置，私钥本地保密）
+3. `tauri.conf.json` 配置 updater endpoint 和公钥
+4. `lib.rs` 注册 `.plugin(tauri_plugin_updater::Builder::default().build())`
+5. 每次发布时生成 `latest.json`（包含版本号、签名、DMG 下载链接），上传到 Release
+6. 设置页「关于 → 检查更新」调用 `updater.checkUpdate()`，显示进度和结果
+
+**关键点：** `latest.json` 需与 DMG 同级在 Release 中，格式参考 [Tauri Updater 文档](https://v2.tauri.app/plugin/updater/)。
+
+---
+
 ## 基础功能缺口
 
 - [x] 复制 / 粘贴 / 剪切（内部剪贴板）

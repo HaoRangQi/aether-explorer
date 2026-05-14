@@ -32,6 +32,8 @@
         "enable": true,
         "scope": [
           "$HOME/**",
+          "$DOWNLOAD/**",
+          "$TEMP/**",
           "/Volumes/**",
           "/Applications/**",
           "/System/Applications/**"
@@ -53,5 +55,12 @@
       "entitlements": null
     }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJCRkMxNUU5MjE2OEY4M0MKUldROCtHZ2g2Ulg4SzgxVk9pR1NhZytlRlJQUktuTG9uYlRONWJROTRYOGV3RjlMdGxnZm5VSEUK",
+      "endpoints": [
+        "https://github.com/HaoRangQi/aether-explorer/releases/latest/download/latest.json"
+      ]
+    }
+  }
 }

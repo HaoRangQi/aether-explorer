@@ -59,8 +59,6 @@ const ACTION_TYPE_META = {
   placeholder: { label: '插件占位', description: '保留菜单入口，等待后续插件或 AI 工作流接入。', icon: Sparkles },
 } satisfies Record<NonNullable<ContextMenuAction['actionType']>, { label: string; description: string; icon: React.ComponentType<{ className?: string }> }>;
 
-const RELEASE_API = 'https://api.github.com/repos/aether/explorer/releases/latest';
-
 type UpdateStatus = {
   state: 'idle' | 'checking' | 'current' | 'available' | 'error';
   currentVersion: string;
@@ -301,64 +299,49 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
     deleteExtension(id);
   };
 
-  const handleCheckUpdates = async () => {
-    const requestId = updateRequestIdRef.current + 1;
-    updateRequestIdRef.current = requestId;
-    if (updateTimerRef.current) window.clearTimeout(updateTimerRef.current);
-    setUpdateStatus(prev => ({
-      ...prev,
-      state: 'checking',
-      message: '正在检查 GitHub Release...',
-    }));
+  const pendingDmgRef = useRef('');
 
+  const handleCheckUpdates = async () => {
+    setUpdateStatus({ state: 'checking', currentVersion: '', latestVersion: '', releaseUrl: '', message: '正在检查更新...' });
     try {
-      const currentVersion = (await getVersion().catch(() => '')) || import.meta.env.VITE_APP_VERSION || '';
-      const normalizeVersion = (value: string) => value.replace(/^v/i, '').trim();
-      const splitVersion = (value: string) => normalizeVersion(value).split('.').map(part => Number.parseInt(part, 10) || 0);
-      const compareVersions = (left: string, right: string) => {
-        const a = splitVersion(left);
-        const b = splitVersion(right);
-        const length = Math.max(a.length, b.length);
-        for (let i = 0; i < length; i += 1) {
-          const diff = (a[i] || 0) - (b[i] || 0);
-          if (diff !== 0) return diff;
-        }
-        return 0;
-      };
-      const response = await fetch(RELEASE_API, {
-        headers: {
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
+      const currentVersion = (await getVersion().catch(() => '')) || import.meta.env.VITE_APP_VERSION || '0.1.0';
+      const response = await fetch('https://api.github.com/repos/HaoRangQi/aether-explorer/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
       });
-      if (!response.ok) {
-        throw new Error(`GitHub API 返回 ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`GitHub API 返回 ${response.status}`);
       const release = await response.json();
-      if (updateRequestIdRef.current !== requestId) return;
-      const latestVersion = normalizeVersion(String(release.tag_name || release.name || ''));
-      const normalizedCurrent = normalizeVersion(currentVersion);
-      const isCurrent = latestVersion ? compareVersions(normalizedCurrent, latestVersion) >= 0 : false;
+      const latestVersion = String(release.tag_name || release.name || '').replace(/^v/, '');
+      const normalizedCurrent = currentVersion.replace(/^v/, '');
+      // 找到 universal 或 aarch64 的 DMG
+      const dmgAsset = (release.assets || []).find((a: any) =>
+        a.name && a.name.endsWith('.dmg') && (a.name.includes('universal') || a.name.includes('aarch64'))
+      );
+      if (latestVersion === normalizedCurrent) {
+        setUpdateStatus({ state: 'current', currentVersion: normalizedCurrent, latestVersion, releaseUrl: '', message: `已是最新版本：${normalizedCurrent}` });
+        return;
+      }
+      pendingDmgRef.current = dmgAsset?.browser_download_url || '';
       setUpdateStatus({
-        state: isCurrent ? 'current' : 'available',
+        state: 'available',
         currentVersion: normalizedCurrent,
         latestVersion,
         releaseUrl: release.html_url || '',
-        message: isCurrent
-          ? `当前已是最新版本：${normalizedCurrent}`
-          : `发现新版本：${latestVersion}`,
+        message: `发现新版本：${latestVersion}`,
       });
     } catch (err) {
-      if (updateRequestIdRef.current !== requestId) return;
-      const currentVersion = (await getVersion().catch(() => '')) || import.meta.env.VITE_APP_VERSION || '';
-      setUpdateStatus({
-        state: 'error',
-        currentVersion,
-        latestVersion: '',
-        releaseUrl: '',
-        message: `检查失败：${String(err)}`,
-      });
+      setUpdateStatus({ state: 'error', currentVersion: '', latestVersion: '', releaseUrl: '', message: `检查失败：${String(err)}` });
     }
+  };
+
+  const handleDownloadUpdate = async () => {
+    const dmgUrl = pendingDmgRef.current;
+    if (!dmgUrl) {
+      setUpdateStatus(prev => ({ ...prev, message: '未找到下载地址' }));
+      return;
+    }
+    setUpdateStatus(prev => ({ ...prev, message: '正在打开下载页面...' }));
+    shellOpen(dmgUrl);
+    setUpdateStatus(prev => ({ ...prev, message: '已打开 DMG 下载链接，下载后覆盖安装即可。' }));
   };
 
   const handleCleanup = async () => {
@@ -410,10 +393,6 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
     { id: 'features', label: '功能设置', icon: Monitor },
     { id: 'about', label: '关于', icon: Info },
   ];
-
-  useEffect(() => () => {
-    if (updateTimerRef.current) window.clearTimeout(updateTimerRef.current);
-  }, []);
 
   const selectedLanguage = theme.language || i18n.language || 'zh';
   const languageOptions = theme.languageOptions || BUILT_IN_LANGUAGES;
@@ -1168,7 +1147,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
             </div>
             <div>
               <h3 className="text-[18px] font-black text-on-surface">在线更新</h3>
-              <p className="text-[12px] text-on-surface/45 mt-1">检查 GitHub Release 上的新版本。自动下载与安装器接入会在发布链路完成后启用。</p>
+              <p className="text-[12px] text-on-surface/45 mt-1">检查 GitHub Release 上的新版本。发现更新后需手动确认下载。</p>
             </div>
           </div>
           <button
@@ -1187,7 +1166,8 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
           </span>
         </div>
         {updateStatus.state === 'available' && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="rounded-2xl bg-primary/5 border border-primary/10 px-4 py-3">
               <p className="text-[11px] font-black text-on-surface/35 uppercase tracking-widest">当前版本</p>
               <p className="text-[13px] font-black text-on-surface mt-1 truncate">{updateStatus.currentVersion || '未知'}</p>
@@ -1196,13 +1176,22 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
               <p className="text-[11px] font-black text-on-surface/35 uppercase tracking-widest">最新版本</p>
               <p className="text-[13px] font-black text-on-surface mt-1 truncate">{updateStatus.latestVersion || '未知'}</p>
             </div>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={handleDownloadUpdate}
+              className="flex-1 py-3 rounded-2xl bg-green-500 text-white text-[13px] font-black flex items-center justify-center gap-2 shadow-lg shadow-green-500/20 hover:bg-green-400 transition-colors"
+            >
+              <DownloadCloud className="w-4 h-4" /> 下载
+            </button>
             <button
               onClick={() => updateStatus.releaseUrl && shellOpen(updateStatus.releaseUrl)}
-              className="rounded-2xl bg-primary text-on-primary px-4 py-3 text-[12px] font-black whitespace-nowrap"
+              className="flex-1 py-3 rounded-2xl bg-primary text-on-primary text-[13px] font-black flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:bg-primary/80 transition-colors"
             >
-              打开发布页
+              <ExternalLink className="w-4 h-4" /> 发版主页
             </button>
           </div>
+          </>
         )}
       </section>
 
