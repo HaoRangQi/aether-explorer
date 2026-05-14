@@ -71,7 +71,8 @@ export default {
     showHiddenFiles: 'Show Hidden Files',
     fullDiskAccess: 'Full Disk Access',
     contextMenuExt: 'Context Menu Extensions',
-    layoutControls: 'Layout Settings'
+    layoutControls: 'Layout Settings',
+    swatches: 'Color Swatches'
   },
   explorer: {
     localStorage: 'Local Storage',
@@ -99,7 +100,16 @@ export default {
     getInfo: 'Get Info',
     duplicate: 'Duplicate',
     compress: 'Compress',
-    moveToTrash: 'Move to Trash'
+    moveToTrash: 'Move to Trash',
+    loading: 'Loading...',
+    noAccess: 'No access to this directory',
+    noResults: 'No matching results',
+    emptyFolder: 'This folder is empty',
+    itemsSelectedLabel: 'items selected',
+    files: 'files',
+    clickForInfo: 'Click Get Info to calculate',
+    folder: 'Folder',
+    contextMenuDisabled: 'Context menu disabled'
   },
   transfer: {
     title: 'Transfer Manager',

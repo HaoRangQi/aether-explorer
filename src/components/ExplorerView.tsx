@@ -2038,7 +2038,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
             >
               {loading && (
-                <div className="flex-1 min-h-0 flex items-center justify-center text-on-surface/40 text-sm">加载中...</div>
+                <div className="flex-1 min-h-0 flex items-center justify-center text-on-surface/40 text-sm">{t('explorer.loading')}</div>
               )}
               {!loading && loadError && (
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6">

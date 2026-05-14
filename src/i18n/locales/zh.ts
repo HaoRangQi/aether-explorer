@@ -78,7 +78,8 @@ export default {
     gridHeight: '网格项目高度',
     gridGap: '网格项目间距',
     columnWidth: '分栏列宽度',
-    columnHeight: '分栏项目高度'
+    columnHeight: '分栏项目高度',
+    swatches: '常用色样'
   },
   common: {
     reset: '重置',
@@ -112,7 +113,16 @@ export default {
     getInfo: '查看简介',
     duplicate: '制作替身',
     compress: '压缩',
-    moveToTrash: '移至废纸篓'
+    moveToTrash: '移至废纸篓',
+    loading: '加载中...',
+    noAccess: '无权访问此目录',
+    noResults: '没有匹配结果',
+    emptyFolder: '此文件夹为空',
+    itemsSelectedLabel: '个项目已选中',
+    files: '个文件',
+    clickForInfo: '点击查看简介以统计',
+    folder: '文件夹',
+    contextMenuDisabled: '右键菜单已禁用'
   },
   transfer: {
     title: '传输管理',
@@ -202,4 +212,3 @@ export default {
     tagRemoved: '已移除'
   }
 };
-
