@@ -266,7 +266,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
                 className={`relative flex items-center justify-center shrink-0 group rounded-full transition-all cursor-grab active:cursor-grabbing
                   ${isActive ? 'text-primary bg-primary/40 shadow-[0_2px_10px_rgba(var(--primary-rgb),0.3)] border border-primary/60' : 'text-on-surface/70 hover:text-on-surface bg-primary/20 hover:bg-primary/30 border border-transparent'}
                 `}
-                style={{ minWidth: '90px' }}
+                style={{ minWidth: '90px', maxWidth: '220px' }}
               >
                 <button
                   onClick={(e) => {
@@ -282,9 +282,10 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
 
                 <button
                   onClick={() => onViewChange(tab.id as ViewMode)}
-                  className={`py-1.5 px-7 text-[12px] transition-all whitespace-nowrap w-full text-center
+                  className={`py-1.5 px-7 text-[12px] transition-all whitespace-nowrap w-full text-center overflow-hidden text-ellipsis
                     ${isActive ? 'font-bold' : 'font-medium'}
                   `}
+                  title={tab.label || t(tab.labelTranslationKey)}
                 >
                   {tab.label || t(tab.labelTranslationKey)}
                 </button>

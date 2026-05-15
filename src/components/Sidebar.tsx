@@ -24,6 +24,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import { ViewMode, ThemeSettings, VolumeInfo, TabData } from '../types';
 
+const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
+const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
+
 interface DiskInfo {
   filesystem: string;
   size: string;
@@ -67,6 +70,8 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
   };
 
   const getMenuPath = (id: string) => {
+    if (id === 'favorites-list') return FAVORITES_VIRTUAL_PATH;
+    if (id.startsWith('tag-')) return `${TAGS_VIRTUAL_PREFIX}${id}`;
     if (!homeDir) return undefined;
     const paths: Record<string, string> = {
       downloads: `${homeDir}/Downloads`,

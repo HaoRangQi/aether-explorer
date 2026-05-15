@@ -16,6 +16,7 @@
 | 02 | [文件拖拽移动 (Drag-Drop-Move)](./02-drag-drop-move.md) | ✅ | 2026-05-15 |
 | 03 | [导航栏与标签一致性 (Sidebar-Tab-Sync)](./03-sidebar-tab-sync.md) | ✅ | 2026-05-15 |
 | 04 | [应用图标系统重构 (App-Icon-System)](./04-app-icon-system.md) | ✅ | 2026-05-15 |
+| 05 | [收藏与颜色标签域 (Favorites-Tags-Domain)](./05-favorites-tags.md) | ✅ | 2026-05-15 |
 | — | [草稿池 SCRATCH](./scratch.md) | — | — |
 
 新增章节时：在本表追加一行，文件命名为 `NN-<域名小写连字符>.md`，NN 取下一个未用编号。

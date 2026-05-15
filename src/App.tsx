@@ -13,6 +13,8 @@ import ExplorerView from './components/ExplorerView';
 import { ThemeSettings, ViewMode, TabData, ContextMenuAction } from './types';
 import { ACCENT_COLORS } from './constants';
 
+const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
+
 const SettingsView = lazy(() => import('./components/SettingsView'));
 const StorageView = lazy(() => import('./components/StorageView'));
 const TransferModal = lazy(() => import('./components/TransferModal'));
@@ -63,7 +65,12 @@ function getInitialTabs(): TabData[] {
   }
 
   return [
-    { id: 'home', labelTranslationKey: 'tabs.home' },
+    {
+      id: 'favorites-list',
+      labelTranslationKey: 'sidebar.favoritesList',
+      initialPath: FAVORITES_VIRTUAL_PATH,
+      currentPath: FAVORITES_VIRTUAL_PATH,
+    },
   ];
 }
 
@@ -112,6 +119,15 @@ function loadFavoritesFromLocalStorage(): string[] {
   }
 }
 
+function loadFileTagsFromLocalStorage(): Record<string, string[]> {
+  try {
+    const saved = localStorage.getItem('aether-file-tags');
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+}
+
 function normalizeTransferredTab(tab: TabData): TabData {
   const path = tab.currentPath || tab.initialPath;
   return {
@@ -137,6 +153,7 @@ export default function App() {
 
   const [theme, setTheme] = useState<ThemeSettings>(loadThemeFromLocalStorage);
   const [favorites, setFavorites] = useState<string[]>(loadFavoritesFromLocalStorage);
+  const [fileTags, setFileTags] = useState<Record<string, string[]>>(loadFileTagsFromLocalStorage);
   const activeTab = useMemo(() => tabs.find(tab => tab.id === view), [tabs, view]);
   const activeTabPath = activeTab?.currentPath || activeTab?.initialPath;
 
@@ -262,6 +279,11 @@ export default function App() {
         if (savedFavorites && mounted) {
           setFavorites(savedFavorites);
         }
+
+        const savedFileTags = await s.get<Record<string, string[]>>('fileTags');
+        if (savedFileTags && mounted) {
+          setFileTags(savedFileTags);
+        }
       } catch {
         // Not running in Tauri — keep localStorage values
       }
@@ -292,6 +314,15 @@ export default function App() {
       s.set('favorites', favorites);
     }).catch(() => {});
   }, [favorites, storeReady]);
+
+  useEffect(() => {
+    localStorage.setItem('aether-file-tags', JSON.stringify(fileTags));
+
+    if (!storeReady) return;
+    loadSettingsStore().then(s => {
+      s.set('fileTags', fileTags);
+    }).catch(() => {});
+  }, [fileTags, storeReady]);
 
   // Apply theme to document
   useEffect(() => {
@@ -583,6 +614,8 @@ export default function App() {
                         prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]
                       );
                     }}
+                    fileTags={fileTags}
+                    onFileTagsChange={setFileTags}
                   />
                 </div>
               ))}
