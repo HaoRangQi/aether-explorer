@@ -64,13 +64,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          tauriScript: npx @tauri-apps/cli
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: ${{ env.RELEASE_TAG }}
           releaseBody: 'Aether Explorer ${{ env.RELEASE_TAG }}'
           releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
-          uploadUpdaterJson: false
+          includeUpdaterJson: false
           updaterJsonPreferNsis: false
 
       - name: Upload updater manifest
@@ -79,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          TAG="${{ github.ref_name }}"
+          TAG="${RELEASE_TAG}"
           VERSION="${TAG#v}"
           REPO="${{ github.repository }}"
           BUNDLE_DIR="src-tauri/target/release/bundle"
