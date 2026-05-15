@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -205,6 +205,11 @@ fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|e| format!("启动窗口拖拽失败: {}", e))
 }
 
+#[tauri::command]
+fn debug_log(message: String) {
+    println!("[DEBUG-dnd] {}", message);
+}
+
 fn encode_query_component(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
@@ -384,22 +389,71 @@ struct MoveFailure {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct MoveConflict {
+    src: String,
+    dst: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum MoveConflictStrategy {
+    Abort,
+    Replace,
+    KeepBoth,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct MoveResult {
     moved: Vec<String>,
     failed: Vec<MoveFailure>,
+    conflicts: Vec<MoveConflict>,
     skipped_same_dir: u32,
 }
 
 #[tauri::command]
-fn move_files(srcs: Vec<String>, dst_dir: String) -> Result<MoveResult, String> {
+fn move_files(
+    srcs: Vec<String>,
+    dst_dir: String,
+    conflict_strategy: Option<MoveConflictStrategy>,
+) -> Result<MoveResult, String> {
     let dst = Path::new(&dst_dir);
     if !dst.is_dir() {
         return Err(format!("目标不是目录: {}", dst_dir));
     }
 
+    let conflict_strategy = conflict_strategy.unwrap_or(MoveConflictStrategy::Abort);
     let mut moved: Vec<String> = Vec::new();
     let mut failed: Vec<MoveFailure> = Vec::new();
+    let mut conflicts: Vec<MoveConflict> = Vec::new();
     let mut skipped_same_dir: u32 = 0;
+
+    if matches!(conflict_strategy, MoveConflictStrategy::Abort) {
+        for src in &srcs {
+            let src_path = Path::new(src);
+            if !src_path.exists() {
+                continue;
+            }
+            if src_path.parent().is_some_and(|parent| parent == dst) {
+                continue;
+            }
+
+            let name = src_path.file_name().unwrap_or_default().to_string_lossy();
+            let dst_path = dst.join(name.as_ref());
+            if dst_path.exists() {
+                conflicts.push(MoveConflict {
+                    src: src.clone(),
+                    dst: dst_path.to_string_lossy().into(),
+                    name: name.into(),
+                });
+            }
+        }
+
+        if !conflicts.is_empty() {
+            return Ok(MoveResult { moved, failed, conflicts, skipped_same_dir });
+        }
+    }
 
     for src in srcs {
         let src_path = Path::new(&src);
@@ -425,7 +479,28 @@ fn move_files(srcs: Vec<String>, dst_dir: String) -> Result<MoveResult, String> 
         }
 
         let name = src_path.file_name().unwrap_or_default().to_string_lossy();
-        let dst_path = unique_destination(&dst.join(name.as_ref()));
+        let base_dst_path = dst.join(name.as_ref());
+        let dst_path = match conflict_strategy {
+            MoveConflictStrategy::Abort => base_dst_path,
+            MoveConflictStrategy::KeepBoth => unique_destination(&base_dst_path),
+            MoveConflictStrategy::Replace => {
+                if base_dst_path.exists() {
+                    let remove_result = if base_dst_path.is_dir() {
+                        fs::remove_dir_all(&base_dst_path)
+                    } else {
+                        fs::remove_file(&base_dst_path)
+                    };
+                    if let Err(e) = remove_result {
+                        failed.push(MoveFailure {
+                            src: src.clone(),
+                            error: format!("替换目标失败: {}", e),
+                        });
+                        continue;
+                    }
+                }
+                base_dst_path
+            }
+        };
 
         match fs::rename(&src, &dst_path) {
             Ok(_) => moved.push(dst_path.to_string_lossy().into()),
@@ -471,7 +546,7 @@ fn move_files(srcs: Vec<String>, dst_dir: String) -> Result<MoveResult, String> 
         }
     }
 
-    Ok(MoveResult { moved, failed, skipped_same_dir })
+    Ok(MoveResult { moved, failed, conflicts, skipped_same_dir })
 }
 
 #[tauri::command]
@@ -955,6 +1030,7 @@ pub fn run() {
             get_home_dir,
             open_system_settings,
             start_window_drag,
+            debug_log,
             list_fonts,
             list_terminal_apps,
             open_terminal_at,

@@ -137,6 +137,8 @@ export default function App() {
 
   const [theme, setTheme] = useState<ThemeSettings>(loadThemeFromLocalStorage);
   const [favorites, setFavorites] = useState<string[]>(loadFavoritesFromLocalStorage);
+  const activeTab = useMemo(() => tabs.find(tab => tab.id === view), [tabs, view]);
+  const activeTabPath = activeTab?.currentPath || activeTab?.initialPath;
 
   const createNewWindow = useCallback((tab?: TabData) => {
     const path = tab?.currentPath || tab?.initialPath;
@@ -451,12 +453,13 @@ export default function App() {
       return;
     }
 
-    const newTabs = tabs.filter(tab => tab.id !== id);
-    setTabs(newTabs);
-
-    if (view === id) {
-      setView(newTabs[newTabs.length - 1].id as ViewMode);
-    }
+    setTabs(prev => {
+      const nextTabs = prev.filter(tab => tab.id !== id);
+      if (view === id) {
+        setView((nextTabs[nextTabs.length - 1]?.id || prev[0].id) as ViewMode);
+      }
+      return nextTabs;
+    });
   };
 
   const handleOpenTab = (id: string, labelTranslationKey: string, options?: { label?: string; initialPath?: string }) => {
@@ -468,7 +471,7 @@ export default function App() {
       initialPath: options?.initialPath,
       currentPath: options?.initialPath,
     };
-    setTabs([...tabs, newTab]);
+    setTabs(prev => [...prev, newTab]);
     setView(uniqueId as ViewMode);
   };
 
@@ -522,7 +525,7 @@ export default function App() {
         />
 
         <div className="flex flex-1 relative z-10 overflow-hidden">
-          <Sidebar currentView={view} onViewChange={setView} onOpenTab={handleOpenTab} theme={theme} tabs={tabs} />
+          <Sidebar currentView={view} currentPath={activeTabPath} onViewChange={setView} onOpenTab={handleOpenTab} theme={theme} tabs={tabs} />
 
           <main className="flex-1 flex flex-col h-full overflow-hidden">
             <TopBar
@@ -548,35 +551,33 @@ export default function App() {
                   <StorageView />
                 </Suspense>
               </div>
-              {/* Explorer views — render all tabs, hide inactive to preserve state */}
-              {view !== 'settings' && view !== 'storage' && (
-                tabs.map(tab => (
-                  <div key={tab.id} className={`h-full ${tab.id === view ? '' : 'hidden'}`}>
-                    <ExplorerView
-                      view={tab.id}
-                      isActive={tab.id === view}
-                      currentTabLabelKey={tab.labelTranslationKey}
-                      initialPath={tab.initialPath}
-                      theme={theme}
-                      onThemeChange={setTheme}
-                      onViewChange={setView}
-                      selectedFileIds={tab.id === view ? selectedFileIds : []}
-                      onSelectFiles={tab.id === view ? setSelectedFileIds : () => {}}
-                      onSelectionCountChange={tab.id === view ? setVisibleItemCount : undefined}
-                      onTitleChange={handleTabTitleChange}
-                      onPathChange={handleTabPathChange}
-                      onOpenTab={handleOpenTab}
-                      onStartTransfer={() => setIsTransferring(true)}
-                      favorites={favorites}
-                      onToggleFavorite={(id) => {
-                        setFavorites(prev =>
-                          prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]
-                        );
-                      }}
-                    />
-                  </div>
-                ))
-              )}
+              {/* Explorer views — keep mounted so tab-local state survives settings/storage screens */}
+              {tabs.map(tab => (
+                <div key={tab.id} className={`h-full ${tab.id === view ? '' : 'hidden'}`}>
+                  <ExplorerView
+                    view={tab.id}
+                    isActive={tab.id === view}
+                    currentTabLabelKey={tab.labelTranslationKey}
+                    initialPath={tab.initialPath}
+                    theme={theme}
+                    onThemeChange={setTheme}
+                    onViewChange={setView}
+                    selectedFileIds={tab.id === view ? selectedFileIds : []}
+                    onSelectFiles={tab.id === view ? setSelectedFileIds : () => {}}
+                    onSelectionCountChange={tab.id === view ? setVisibleItemCount : undefined}
+                    onTitleChange={handleTabTitleChange}
+                    onPathChange={handleTabPathChange}
+                    onOpenTab={handleOpenTab}
+                    onStartTransfer={() => setIsTransferring(true)}
+                    favorites={favorites}
+                    onToggleFavorite={(id) => {
+                      setFavorites(prev =>
+                        prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]
+                      );
+                    }}
+                  />
+                </div>
+              ))}
             </div>
           </div>
 

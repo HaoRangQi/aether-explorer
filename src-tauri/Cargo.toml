@@ -1,6 +1,6 @@
 [package]
 name = "aether-explorer"
-version = "0.1.0"
+version = "0.1.1-draft"
 description = "A premium macOS file manager with glassmorphic UI"
 authors = ["Aether Team"]
 license = "MIT"

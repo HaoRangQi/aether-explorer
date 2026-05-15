@@ -56,14 +56,23 @@ export interface MoveFailure {
   error: string;
 }
 
+export interface MoveConflict {
+  src: string;
+  dst: string;
+  name: string;
+}
+
 export interface MoveResult {
   moved: string[];
   failed: MoveFailure[];
+  conflicts: MoveConflict[];
   skippedSameDir: number;
 }
 
-export async function moveFiles(srcs: string[], dstDir: string): Promise<MoveResult> {
-  return invoke<MoveResult>('move_files', { srcs, dstDir });
+export type MoveConflictStrategy = 'abort' | 'replace' | 'keepBoth';
+
+export async function moveFiles(srcs: string[], dstDir: string, conflictStrategy: MoveConflictStrategy = 'abort'): Promise<MoveResult> {
+  return invoke<MoveResult>('move_files', { srcs, dstDir, conflictStrategy });
 }
 
 export async function renameFile(path: string, newName: string): Promise<string> {

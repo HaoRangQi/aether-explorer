@@ -36,19 +36,22 @@ interface DiskInfo {
 
 interface SidebarProps {
   currentView: ViewMode;
+  currentPath?: string;
   onViewChange: (view: ViewMode) => void;
   onOpenTab: (id: string, labelKey: string, options?: { label?: string; initialPath?: string }) => void;
   theme: ThemeSettings;
   tabs: TabData[];
 }
 
-export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, tabs }: SidebarProps) {
+export default function Sidebar({ currentView, currentPath, onViewChange, onOpenTab, theme, tabs }: SidebarProps) {
   const { t } = useTranslation();
   const [diskInfo, setDiskInfo] = useState<DiskInfo | null>(null);
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [volumeMessage, setVolumeMessage] = useState('');
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [homeDir, setHomeDir] = useState('');
   const volumeMessageTimerRef = useRef<number | null>(null);
+  const menuClickTimerRef = useRef<number | null>(null);
 
   const loadVolumes = () => {
     invoke<VolumeInfo[]>('list_volumes')
@@ -63,6 +66,22 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
     return `${Math.max(0, Math.min(100, Math.round(Number(match[0]))))}%`;
   };
 
+  const getMenuPath = (id: string) => {
+    if (!homeDir) return undefined;
+    const paths: Record<string, string> = {
+      downloads: `${homeDir}/Downloads`,
+      documents: `${homeDir}/Documents`,
+      desktop: homeDir,
+      applications: '/Applications',
+      home: homeDir,
+      icloud: `${homeDir}/Library/Mobile Documents/com~apple~CloudDocs`,
+      macos: '/',
+      network: '/Volumes',
+      trash: `${homeDir}/.Trash`,
+    };
+    return paths[id];
+  };
+
   useEffect(() => {
     let cancelled = false;
     invoke<DiskInfo>('get_disk_info', { path: '/' })
@@ -71,6 +90,18 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
       })
       .catch(() => {
         if (!cancelled) setDiskInfo(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<string>('get_home_dir')
+      .then(path => {
+        if (!cancelled) setHomeDir(path);
+      })
+      .catch(() => {
+        if (!cancelled) setHomeDir('');
       });
     return () => { cancelled = true; };
   }, []);
@@ -103,6 +134,7 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', visibilityHandler);
       if (volumeMessageTimerRef.current) window.clearTimeout(volumeMessageTimerRef.current);
+      if (menuClickTimerRef.current) window.clearTimeout(menuClickTimerRef.current);
     };
   }, []);
 
@@ -111,8 +143,26 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
       onViewChange(id as ViewMode);
       return;
     }
-    // 查找所有同名标签页
-    const matchingTabs = tabs.filter(t => t.labelTranslationKey === labelKey);
+    if (menuClickTimerRef.current) window.clearTimeout(menuClickTimerRef.current);
+    menuClickTimerRef.current = window.setTimeout(() => {
+      menuClickTimerRef.current = null;
+      openMenuTab(id, labelKey, false);
+    }, 180);
+  };
+
+  const openMenuTab = (id: string, labelKey: string, forceNew: boolean) => {
+    const initialPath = getMenuPath(id);
+    const normalizeTabPath = (tab: TabData) => tab.currentPath || tab.initialPath;
+
+    if (forceNew) {
+      onOpenTab(id, labelKey, initialPath ? { initialPath } : undefined);
+      return;
+    }
+
+    // 仅把当前路径仍然停在该导航根目录的 tab 视为“已存在”
+    const matchingTabs = initialPath
+      ? tabs.filter(tab => normalizeTabPath(tab) === initialPath)
+      : tabs.filter(t => t.labelTranslationKey === labelKey);
     if (matchingTabs.length > 0) {
       // 当前标签页已是同类型，不做跳转
       if (matchingTabs.some(t => t.id === currentView)) return;
@@ -120,14 +170,18 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
       onViewChange(matchingTabs[0].id as ViewMode);
     } else {
       // 没有同名标签则新建
-      onOpenTab(id, labelKey);
+      onOpenTab(id, labelKey, initialPath ? { initialPath } : undefined);
     }
   };
 
   const handleMenuDoubleClick = (id: string, labelKey: string) => {
     if (id === 'settings' || id === 'storage') return;
+    if (menuClickTimerRef.current) {
+      window.clearTimeout(menuClickTimerRef.current);
+      menuClickTimerRef.current = null;
+    }
     // 双击：始终新建标签页
-    onOpenTab(id, labelKey);
+    openMenuTab(id, labelKey, true);
   };
 
   const toggleSection = (title: string) => {
@@ -253,7 +307,10 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
               <h3 className="px-3 text-[11px] font-black text-on-surface/45 mb-2 truncate">{t(section.title)}</h3>
             )}
             {(!section.collapsible || !collapsedSections[section.title]) && section.items.map((item) => {
-              const isActive = currentView === item.id || currentView.startsWith(item.id + '-');
+              const menuPath = getMenuPath(item.id);
+              const isActive = menuPath
+                ? currentPath === menuPath
+                : currentView === item.id || currentView.startsWith(item.id + '-');
               const Icon = item.icon;
               return (
                 <button
@@ -314,7 +371,7 @@ export default function Sidebar({ currentView, onViewChange, onOpenTab, theme, t
                   未检测到 USB 或外置磁盘
                 </div>
               ) : volumes.map(volume => {
-                const isActive = currentView.includes(`volume-${volume.name.replace(/\s+/g, '-').toLowerCase()}`);
+                const isActive = currentPath === volume.path;
                 return (
                   <div key={volume.path} className="group relative">
                     <button

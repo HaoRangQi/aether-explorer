@@ -8,11 +8,9 @@
 #   TAURI_SIGNING_PRIVATE_KEY            私钥文件内容（cat ~/.tauri/aether-updater.key 的输出）
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   私钥密码；私钥无密码则填空字符串
 #
-# tauri-action 会自动：
-#   - 构建 universal macOS bundle（dmg + app.tar.gz）
-#   - 用私钥签名 .app.tar.gz，生成 .sig
-#   - 生成 latest.json 并上传到 Release
-#   - dmg / app.tar.gz / sig / latest.json 全部挂到同一个 Release
+# 说明：
+#   - tauri-action 只负责构建和签名
+#   - latest.json 由 workflow 显式生成，确保包含平台 signature
 
 name: release
 
@@ -53,7 +51,7 @@ jobs:
         run: npm ci
 
       - name: Build & sign & release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -65,4 +63,49 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
+          uploadUpdaterJson: false
           updaterJsonPreferNsis: false
+
+      - name: Upload updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          REPO="${{ github.repository }}"
+          BUNDLE_DIR="src-tauri/target/release/bundle"
+
+          DMG="$(find "$BUNDLE_DIR/dmg" -type f -name '*.dmg' | head -n 1)"
+          APP_TAR="$(find "$BUNDLE_DIR/macos" -type f -name '*.app.tar.gz' | head -n 1)"
+          APP_SIG="$(find "$BUNDLE_DIR/macos" -type f -name '*.app.tar.gz.sig' | head -n 1)"
+
+          [ -n "$DMG" ] || { echo "missing dmg artifact"; exit 1; }
+          [ -n "$APP_TAR" ] || { echo "missing app.tar.gz artifact"; exit 1; }
+          [ -n "$APP_SIG" ] || { echo "missing app.tar.gz.sig artifact"; exit 1; }
+
+          APP_TAR_NAME="$(basename "$APP_TAR")"
+          APP_TAR_URL="https://github.com/$REPO/releases/download/$TAG/$APP_TAR_NAME"
+          SIG_CONTENT="$(cat "$APP_SIG")"
+          PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          LATEST_JSON="$(mktemp -t latest-json).json"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "Aether Explorer $TAG" \
+            --arg pub_date "$PUB_DATE" \
+            --arg sig "$SIG_CONTENT" \
+            --arg url "$APP_TAR_URL" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "darwin-aarch64": { signature: $sig, url: $url },
+                "darwin-x86_64":  { signature: $sig, url: $url }
+              }
+            }' > "$LATEST_JSON"
+
+          gh release upload "$TAG" -R "$REPO" \
+            "$DMG" "$APP_TAR" "$APP_SIG" "$LATEST_JSON#latest.json" --clobber

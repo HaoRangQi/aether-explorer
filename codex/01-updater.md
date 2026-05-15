@@ -1,6 +1,6 @@
 # 01 自动更新管线 (Updater)
 
-**状态**: ✅ 已落地  **首次落地**: [2026-05-14]  **最近更新**: [2026-05-14]  **域**: 客户端自动更新 / 发版流水线
+**状态**: ✅ 已落地  **首次落地**: [2026-05-14]  **最近更新**: [2026-05-15]  **域**: 客户端自动更新 / 发版流水线
 
 ← 返回 [索引](./README.md)
 
@@ -241,7 +241,7 @@ cat ~/.tauri/aether-updater.key | pbcopy
 1. **私钥放本地，不入 git，不进 cloud 同步盘**。哪怕是私有仓库 — 离职/泄露成本太高。
 2. **Tauri 2 macOS updater 要的是 `.app.tar.gz`，不是 `.dmg`**。这点 v1 → v2 升级时容易搞错，文档也不算显眼。
 3. **universal binary 的 target 写法是 `--target universal-apple-darwin`**（注意是连字符），漏写就只构出当前架构。
-4. **`tauri-action` 会自动调 `jq` 生成 `latest.json` 上传**，本地脚本要手撸。两条路径要保持 `latest.json` schema 一致，否则一边能更一边不能更。
+4. **`tauri-action` 不能再被当成 `latest.json` 真相源**。workflow 里要显式生成并上传带 `signature` 的 manifest；本地脚本和 CI 必须保持同一 schema，否则一边能更一边不能更。
 5. **i18next 占位符是 `{{name}}` 双大括号**。仓库历史代码里很多 `{name}` 单大括号写法是 bug — 不影响渲染（fallback 原样输出）但实际没替换。本次 updater 文案用了正确的双大括号；其他地方留给后续清理。
 6. **状态机必须显式 `restarting` 中间态**，不要直接 `await relaunch()`。用户需要看到"即将重启"的提示，否则会以为程序卡死。
 7. **进度条要为 `contentLength = 0` 的场景准备呼吸动画**。某些 CDN / 代理会剥 Content-Length，否则进度条永远卡 0%。

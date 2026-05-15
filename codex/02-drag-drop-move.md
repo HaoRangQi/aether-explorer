@@ -1,6 +1,6 @@
 # 02 文件拖拽移动 (Drag-Drop-Move)
 
-**状态**: ✅ **首次落地**: [2026-05-14]  **最近更新**: [2026-05-14]  **域**: 文件拖拽到文件夹即可原子批量移动，视觉反馈清晰，跨设备自动降级
+**状态**: ✅ **首次落地**: [2026-05-14]  **最近更新**: [2026-05-15]  **域**: 文件拖拽到文件夹即可原子批量移动，视觉反馈清晰，跨设备自动降级
 
 ## 02.1 一句话总结
 
@@ -171,3 +171,18 @@ interface MoveFailure {
 - **面包屑导航接 drop**：拖文件到面包屑中某个上级目录
 - **自动展开嵌套文件夹**：长按拖拽悬停某个文件夹 >1s 时自动打开，便于拖到更深的目录
 - **回收站 drop**：拖到"废纸篓"按钮时自动删除（需确认或直接删）
+
+## 02.11 2026-05-15 增量
+
+### 新增能力
+
+- **同名冲突改为用户选择**：后端 `move_files` 支持 `Abort / Replace / KeepBoth` 三策略，`Abort` 时先返回冲突清单，前端弹窗让用户选（`src-tauri/src/lib.rs:390`, `src-tauri/src/lib.rs:416`, `src/components/ExplorerView.tsx:2910`）。
+- **拖拽跟手预览恢复**：改为内部鼠标拖拽状态机 + 浮层预览，拖拽过程可看到当前目标文件夹（`src/components/ExplorerView.tsx:849`, `src/components/ExplorerView.tsx:896`, `src/components/ExplorerView.tsx:1111`）。
+- **文件名禁用蓝底选中文本**：文件项容器和名称文本统一加 `select-none`，避免拖拽上划时文件名出现系统文字选中态（`src/components/ExplorerView.tsx:1199`, `src/components/ExplorerView.tsx:1218`, `src/components/ExplorerView.tsx:1260`, `src/components/ExplorerView.tsx:1312`）。
+- **右键菜单补“复制文件名”**：原生风格和系统风格两个菜单都加了同一动作，并补 `nameCopied` 提示文案（`src/components/ExplorerView.tsx:1568`, `src/components/ExplorerView.tsx:2844`, `src/i18n/locales/zh.ts:236`, `src/i18n/locales/en.ts:223`）。
+
+### 经验补充
+
+1. 冲突处理不能内建“自动重命名”默认行为。默认必须是 `Abort`，让 UI 先拿到冲突上下文再由用户决策；否则会造成用户对结果不可预期。
+2. 浏览器原生 `dragstart` 在复杂布局下容易丢目标命中，内部鼠标拖拽状态机更稳定，但要同步做好 `dragPreview` 清理，防止卡住悬浮层。
+3. 拖拽视觉反馈要和文本选择策略联动。只做 ring 高亮不够，若不禁文本选中，用户仍会误判为“选择文本而非拖文件”。

@@ -10,6 +10,7 @@ import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listDirectory, getHomeDir, copyFile, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, makeAlias } from '../api/filesystem';
+import type { MoveConflict, MoveConflictStrategy } from '../api/filesystem';
 import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction } from '../types';
 import { QUICK_ACCESS } from '../constants';
 
@@ -29,6 +30,24 @@ const LIST_COLS = {
   type: 'w-24',
   actions: 'w-8',
 };
+
+const INTERNAL_FILE_DRAG_MIME = 'application/x-aether-file-id';
+const logDragDebug = (message: string) => {
+  invoke('debug_log', { message }).catch(() => {});
+};
+
+interface InternalDragState {
+  id: string;
+  startX: number;
+  startY: number;
+  active: boolean;
+}
+
+interface MoveConflictDialogState {
+  filesToMove: FileItem[];
+  targetFolder: FileItem;
+  conflicts: MoveConflict[];
+}
 
 interface ExplorerViewProps {
   view: ViewMode;
@@ -64,6 +83,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const [files, setFiles] = useState<FileItem[]>([]);
+  const [columnFilesCache, setColumnFilesCache] = useState<Record<string, FileItem[]>>({});
   const [loading, setLoading] = useState(false);
   const [homeDir, setHomeDir] = useState('');
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
@@ -74,6 +94,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [pdfPreviewFailed, setPdfPreviewFailed] = useState(false);
   const [operationMessage, setOperationMessage] = useState('');
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
+  const [dragPreview, setDragPreview] = useState<{
+    x: number;
+    y: number;
+    fileId: string;
+    count: number;
+    active: boolean;
+  } | null>(null);
+  const [moveConflictDialog, setMoveConflictDialog] = useState<MoveConflictDialogState | null>(null);
   const [fileTags, setFileTags] = useState<Record<string, string[]>>(() => {
     try {
       return JSON.parse(localStorage.getItem('aether-file-tags') || '{}');
@@ -93,6 +121,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const typeaheadTimerRef = useRef<number | null>(null);
   const clipboardRef = useRef<string[]>([]);
   const clipboardCutRef = useRef(false); // true = 剪切模式 // 存储复制/剪切的文件路径
+  const draggedFileIdRef = useRef<string | null>(null);
+  const internalDragRef = useRef<InternalDragState | null>(null);
 
   const [dirSize, setDirSize] = useState<{ bytes: number; formatted: string; file_count: number } | null>(null);
   const [dirSizeLoading, setDirSizeLoading] = useState(false);
@@ -348,6 +378,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     };
     const handleGlobalMouseUp = (e: MouseEvent) => {
       setSelectionBox(null);
+      setDragPreview(null);
       if (marqueeResetTimerRef.current) window.clearTimeout(marqueeResetTimerRef.current);
       marqueeResetTimerRef.current = window.setTimeout(() => setIsMarqueeDragging(false), 50);
     };
@@ -358,6 +389,60 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       window.removeEventListener('mouseup', handleGlobalMouseUp);
     };
   }, []);
+
+  useEffect(() => {
+    const handleInternalMouseMove = (event: MouseEvent) => {
+      const dragState = internalDragRef.current;
+      if (!dragState) return;
+
+      if (!dragState.active) {
+        const deltaX = Math.abs(event.clientX - dragState.startX);
+        const deltaY = Math.abs(event.clientY - dragState.startY);
+        if (deltaX < 4 && deltaY < 4) return;
+        dragState.active = true;
+        setDragPreview({
+          x: event.clientX,
+          y: event.clientY,
+          fileId: dragState.id,
+          count: selectedFileIds.includes(dragState.id) ? Math.max(1, selectedFileIds.length) : 1,
+          active: true,
+        });
+        logDragDebug(`mouseDragStart id=${dragState.id}`);
+      } else {
+        setDragPreview(prev => prev ? { ...prev, x: event.clientX, y: event.clientY } : prev);
+      }
+
+      const folderId = getFolderIdFromPoint(event.clientX, event.clientY, dragState.id);
+      if (folderId !== dragOverFolderId) {
+        logDragDebug(`mouseDragOver folderId=${folderId ?? ''}`);
+        setDragOverFolderId(folderId);
+      }
+    };
+
+    const handleInternalMouseUp = async (event: MouseEvent) => {
+      const dragState = internalDragRef.current;
+      if (!dragState) return;
+
+      internalDragRef.current = null;
+      setDragOverFolderId(null);
+      setDragPreview(null);
+
+      if (!dragState.active) return;
+
+      const folderId = getFolderIdFromPoint(event.clientX, event.clientY, dragState.id);
+      logDragDebug(`mouseDrop draggedId=${dragState.id} folderId=${folderId ?? ''}`);
+      if (folderId) {
+        await moveDraggedFiles(dragState.id, folderId);
+      }
+    };
+
+    window.addEventListener('mousemove', handleInternalMouseMove);
+    window.addEventListener('mouseup', handleInternalMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleInternalMouseMove);
+      window.removeEventListener('mouseup', handleInternalMouseUp);
+    };
+  }, [dragOverFolderId, files, columnFilesCache, selectedFileIds]);
 
   React.useEffect(() => {
     setSearchQuery('');
@@ -761,6 +846,27 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     // Selection box clearing handled by global listener
   };
 
+  const handleFileMouseDown = (e: React.MouseEvent, file: FileItem) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, textarea, select, [data-no-drag]')) return;
+
+    internalDragRef.current = {
+      id: file.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      active: false,
+    };
+    draggedFileIdRef.current = file.id;
+    setDragPreview({
+      x: e.clientX,
+      y: e.clientY,
+      fileId: file.id,
+      count: selectedFileIds.includes(file.id) ? Math.max(1, selectedFileIds.length) : 1,
+      active: false,
+    });
+  };
+
   const handleExternalDrop = async (e: React.DragEvent) => {
     const rawFiles = Array.from(e.dataTransfer.files || []);
     const paths = rawFiles
@@ -777,49 +883,92 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
-  const handleDragStart = (e: React.DragEvent, file: FileItem) => {
-    e.dataTransfer.setData('fileId', file.id);
-    e.dataTransfer.effectAllowed = 'move';
+  const getFolderIdFromDragEvent = (e: React.DragEvent) => {
+    const target = e.target as HTMLElement | null;
+    const item = target?.closest<HTMLElement>('.file-item');
+    const id = item?.dataset.id;
+    if (!id) return null;
+
+    const file = findFileById(id);
+    return file?.type === 'folder' ? id : null;
   };
 
-  const handleDragOver = (e: React.DragEvent, fileId: string) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (dragOverFolderId !== fileId) setDragOverFolderId(fileId);
+  const getFolderIdFromPoint = (clientX: number, clientY: number, draggedFileId?: string) => {
+    const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const item = element?.closest<HTMLElement>('.file-item');
+    const id = item?.dataset.id;
+    if (!id || id === draggedFileId) return null;
+
+    const file = findFileById(id);
+    return file?.type === 'folder' ? id : null;
   };
 
-  const handleDragLeave = (e: React.DragEvent, fileId: string) => {
-    // 只在真离开盒子时清，避免子元素 leave 触发误清
-    const related = e.relatedTarget as Node | null;
-    if (related && e.currentTarget.contains(related)) return;
-    if (dragOverFolderId === fileId) setDragOverFolderId(null);
-  };
+  const handleSurfaceDragOver = (e: React.DragEvent) => {
+    const folderId = getFolderIdFromDragEvent(e);
+    if (folderId) {
+      handleDragOver(e, folderId);
+      return;
+    }
 
-  const handleDragEnd = () => {
     if (dragOverFolderId !== null) setDragOverFolderId(null);
+    if (e.dataTransfer.types.includes('Files')) e.preventDefault();
   };
 
-  const handleDrop = async (e: React.DragEvent, targetFolderId: string) => {
-    e.preventDefault();
-    setDragOverFolderId(null);
+  const handleSurfaceDrop = async (e: React.DragEvent) => {
+    const folderId = getFolderIdFromDragEvent(e);
+    if (folderId) {
+      await handleDrop(e, folderId);
+      return;
+    }
 
-    const draggedFileId = e.dataTransfer.getData('fileId');
-    if (!draggedFileId || draggedFileId === targetFolderId) return;
+    await handleExternalDrop(e);
+  };
 
-    const targetFolder = files.find(f => f.id === targetFolderId && f.type === 'folder');
-    if (!targetFolder) return;
+  const moveDraggedFiles = async (draggedFileId: string, targetFolderId: string) => {
+    if (!draggedFileId || draggedFileId === targetFolderId) {
+      logDragDebug(`moveAbort reason=${!draggedFileId ? 'missing-dragged-id' : 'same-target'}`);
+      return;
+    }
+
+    const targetFolder = findFileById(targetFolderId);
+    if (targetFolder?.type !== 'folder') {
+      logDragDebug(`moveAbort reason=target-not-folder targetExists=${Boolean(targetFolder)} targetType=${targetFolder?.type ?? ''}`);
+      return;
+    }
 
     const idsToMove = selectedFileIds.includes(draggedFileId) ? selectedFileIds : [draggedFileId];
-    const filesToMove = files.filter(f => idsToMove.includes(f.id));
-    if (filesToMove.length === 0) return;
+    const filesToMove = idsToMove
+      .map(id => findFileById(id))
+      .filter((file): file is FileItem => Boolean(file));
+    logDragDebug(`moveResolve targetPath=${targetFolder.path} ids=${idsToMove.join('|')} files=${filesToMove.map(file => file.path).join('|')}`);
+    if (filesToMove.length === 0) {
+      logDragDebug('moveAbort reason=no-files-to-move');
+      return;
+    }
 
     if (filesToMove.some(f => targetFolder.path === f.path || targetFolder.path.startsWith(`${f.path}/`))) {
+      logDragDebug('moveAbort reason=move-into-self');
       showFeedback(t('messages.cannotMoveToSelf'));
       return;
     }
 
+    await executeMoveFiles(filesToMove, targetFolder, 'abort');
+  };
+
+  const executeMoveFiles = async (
+    filesToMove: FileItem[],
+    targetFolder: FileItem,
+    conflictStrategy: MoveConflictStrategy,
+  ) => {
     try {
-      const result = await moveFiles(filesToMove.map(f => f.path), targetFolder.path);
+      const result = await moveFiles(filesToMove.map(f => f.path), targetFolder.path, conflictStrategy);
+      logDragDebug(`moveResult moved=${result.moved.length} failed=${result.failed.length} conflicts=${result.conflicts.length} skipped=${result.skippedSameDir} firstError=${result.failed[0]?.error ?? ''}`);
+
+      if (result.conflicts.length > 0) {
+        setMoveConflictDialog({ filesToMove, targetFolder, conflicts: result.conflicts });
+        return;
+      }
+
       onSelectFiles([]);
       refreshCurrentDir();
 
@@ -839,8 +988,63 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         );
       }
     } catch (err) {
+      logDragDebug(`moveError error=${String(err)}`);
       showFeedback(t('messages.moveFailed', { error: String(err) }));
     }
+  };
+
+  const handleMoveConflictChoice = async (strategy: MoveConflictStrategy | 'cancel') => {
+    const dialog = moveConflictDialog;
+    setMoveConflictDialog(null);
+    if (!dialog || strategy === 'cancel') return;
+
+    await executeMoveFiles(dialog.filesToMove, dialog.targetFolder, strategy);
+  };
+
+  const handleDragStart = (e: React.DragEvent, file: FileItem) => {
+    draggedFileIdRef.current = file.id;
+    e.dataTransfer.setData(INTERNAL_FILE_DRAG_MIME, file.id);
+    e.dataTransfer.setData('text/plain', file.id);
+    e.dataTransfer.effectAllowed = 'move';
+    logDragDebug(`dragStart id=${file.id} name=${file.name} type=${file.type} selected=${selectedFileIds.join('|')}`);
+  };
+
+  const handleDragOver = (e: React.DragEvent, fileId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverFolderId !== fileId) {
+      logDragDebug(`dragOver folderId=${fileId} dataTypes=${Array.from(e.dataTransfer.types).join('|')}`);
+      setDragOverFolderId(fileId);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent, fileId: string) => {
+    // 只在真离开盒子时清，避免子元素 leave 触发误清
+    const related = e.relatedTarget as Node | null;
+    if (related && e.currentTarget.contains(related)) return;
+    logDragDebug(`dragLeave folderId=${fileId}`);
+    if (dragOverFolderId === fileId) setDragOverFolderId(null);
+  };
+
+  const handleDragEnd = () => {
+    logDragDebug(`dragEnd activeId=${draggedFileIdRef.current ?? ''}`);
+    draggedFileIdRef.current = null;
+    if (dragOverFolderId !== null) setDragOverFolderId(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetFolderId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverFolderId(null);
+
+    const draggedFileId =
+      e.dataTransfer.getData(INTERNAL_FILE_DRAG_MIME) ||
+      draggedFileIdRef.current ||
+      e.dataTransfer.getData('text/plain');
+    logDragDebug(`drop targetFolderId=${targetFolderId} draggedFileId=${draggedFileId} ref=${draggedFileIdRef.current ?? ''} dataTypes=${Array.from(e.dataTransfer.types).join('|')}`);
+    draggedFileIdRef.current = null;
+    await moveDraggedFiles(draggedFileId, targetFolderId);
   };
 
   const handleSort = (key: string) => {
@@ -904,6 +1108,47 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
+  const renderDragPreview = () => {
+    if (!dragPreview?.active) return null;
+
+    const file = findFileById(dragPreview.fileId);
+    if (!file) return null;
+
+    const targetFolder = dragOverFolderId ? findFileById(dragOverFolderId) : null;
+    const label = dragPreview.count > 1
+      ? t('explorer.items', { count: dragPreview.count, defaultValue: `${dragPreview.count} items` })
+      : file.name;
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.94 }}
+        transition={{ duration: 0.12 }}
+        className="fixed z-[130] pointer-events-none flex max-w-[320px] items-center gap-3 rounded-xl border border-primary/35 bg-surface/95 px-3 py-2 shadow-2xl shadow-black/25 backdrop-blur-xl"
+        style={{
+          left: dragPreview.x + 14,
+          top: dragPreview.y + 14,
+        }}
+      >
+        <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/15">
+          {getFileIcon(file.type)}
+          {dragPreview.count > 1 && (
+            <span className="absolute -right-2 -top-2 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-black text-on-primary shadow-lg">
+              {dragPreview.count}
+            </span>
+          )}
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-[13px] font-black text-on-surface">{label}</div>
+          <div className="truncate text-[11px] font-bold text-on-surface/55">
+            {targetFolder?.type === 'folder' ? targetFolder.name : t('explorer.folder', '文件夹')}
+          </div>
+        </div>
+      </motion.div>
+    );
+  };
+
   const formatFileName = (name: string) => {
     if (name.length <= 40) return name;
     const lastDotIndex = name.lastIndexOf('.');
@@ -938,7 +1183,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable
+          draggable={false}
+          onMouseDown={(e) => handleFileMouseDown(e, file)}
           onDragStart={(e) => handleDragStart(e, file)}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
           onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
@@ -950,7 +1196,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           onContextMenu={(e) => { void handleContextMenu(e, [file.id]); }}
           animate={isPulsing ? { scale: [1, 0.985, 1.01, 1] } : undefined}
           transition={isPulsing ? { duration: 0.26 } : undefined}
-          className={`file-item flex items-center transition-all duration-200 group border px-4 cursor-pointer
+          className={`file-item select-none flex items-center transition-all duration-200 group border px-4 cursor-pointer
             ${config.py} ${config.gap}
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
             ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
@@ -969,7 +1215,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 onBlur={handleRenameSubmit} autoFocus onClick={e => e.stopPropagation()}
                 className={`${config.text} font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none min-w-0 flex-1`} />
             ) : (
-            <span className={`${config.text} font-black text-on-surface truncate pr-4 transition-all duration-300`}>{formattedName}</span>
+            <span className={`${config.text} select-none font-black text-on-surface truncate pr-4 transition-all duration-300`}>{formattedName}</span>
             )}
             {tags.length > 0 && (
               <div className="flex gap-1 shrink-0">
@@ -998,7 +1244,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable
+          draggable={false}
+          onMouseDown={(e) => handleFileMouseDown(e, file)}
           onDragStart={(e) => handleDragStart(e, file)}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
           onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
@@ -1010,7 +1257,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           onContextMenu={(e) => { void handleContextMenu(e, [file.id]); }}
           animate={isPulsing ? { scale: [1, 0.985, 1.01, 1] } : undefined}
           transition={isPulsing ? { duration: 0.26 } : undefined}
-          className={`file-item flex items-center gap-3 px-3 rounded-xl cursor-pointer transition-all duration-300 group border
+          className={`file-item select-none flex items-center gap-3 px-3 rounded-xl cursor-pointer transition-all duration-300 group border
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
             ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
             ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)]' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm'}
@@ -1031,7 +1278,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 onBlur={handleRenameSubmit} autoFocus onClick={e => e.stopPropagation()}
                 className="text-[14px] font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none w-full" />
             ) : (
-              <h3 className="text-[14px] font-black text-on-surface truncate leading-tight group-hover:text-primary transition-colors">{formattedName}</h3>
+              <h3 className="select-none text-[14px] font-black text-on-surface truncate leading-tight group-hover:text-primary transition-colors">{formattedName}</h3>
             )}
             <p className="text-[11px] text-on-surface font-black truncate">{file.size && file.size !== '--' ? `${file.size} • ` : ''}{file.modified}</p>
             {tags.length > 0 && <div className="flex gap-1 mt-1">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full" style={{ backgroundColor: TAG_COLORS[tag] || '#8e8e93' }} />)}</div>}
@@ -1048,7 +1295,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable
+          draggable={false}
+          onMouseDown={(e) => handleFileMouseDown(e, file)}
           onDragStart={(e) => handleDragStart(e, file)}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
           onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
@@ -1061,7 +1309,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           animate={isPulsing ? { scale: [1, 0.985, 1.01, 1] } : undefined}
           transition={isPulsing ? { duration: 0.26 } : undefined}
           whileHover={{ y: -4 }}
-          className={`file-item relative rounded-2xl p-4 flex flex-col justify-between group cursor-pointer transition-all duration-300 border
+          className={`file-item select-none relative rounded-2xl p-4 flex flex-col justify-between group cursor-pointer transition-all duration-300 border
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
             ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
             ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)]' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm'}
@@ -1087,7 +1335,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 onBlur={handleRenameSubmit} autoFocus onClick={e => e.stopPropagation()}
                 className="text-[14px] font-black text-white bg-black/40 border border-primary rounded-md px-2 py-0.5 outline-none w-full" />
             ) : (
-              <h3 className="text-[14px] font-black text-white whitespace-normal break-all line-clamp-3 leading-tight drop-shadow-md">{formattedName}</h3>
+              <h3 className="select-none text-[14px] font-black text-white whitespace-normal break-all line-clamp-3 leading-tight drop-shadow-md">{formattedName}</h3>
             )}
                 <p className="text-[11px] text-white/90 font-black mt-1 drop-shadow-sm">{file.size} • {file.modified}</p>
                 {tags.length > 0 && <div className="flex gap-1 mt-2">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full border border-white/40" style={{ backgroundColor: TAG_COLORS[tag] || '#8e8e93' }} />)}</div>}
@@ -1107,7 +1355,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     onBlur={handleRenameSubmit} autoFocus onClick={e => e.stopPropagation()}
                     className="text-[13px] font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none w-full" />
                 ) : (
-                  <h3 className="text-[13px] font-black text-on-surface whitespace-normal break-all line-clamp-3 group-hover:text-primary transition-colors leading-snug">{formattedName}</h3>
+                  <h3 className="select-none text-[13px] font-black text-on-surface whitespace-normal break-all line-clamp-3 group-hover:text-primary transition-colors leading-snug">{formattedName}</h3>
                 )}
                 <p className="text-[10px] text-on-surface font-black mt-1">{file.size} • {file.modified}</p>
                 {tags.length > 0 && <div className="flex gap-1 mt-2">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full" style={{ backgroundColor: TAG_COLORS[tag] || '#8e8e93' }} />)}</div>}
@@ -1128,7 +1376,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
-  const [columnFilesCache, setColumnFilesCache] = useState<Record<string, FileItem[]>>({});
+  const findFileById = (id: string) => {
+    const currentFile = files.find(file => file.id === id);
+    if (currentFile) return currentFile;
+
+    const cachedColumns: FileItem[][] = Object.values(columnFilesCache);
+    for (const columnFiles of cachedColumns) {
+      const columnFile = columnFiles.find(file => file.id === id);
+      if (columnFile) return columnFile;
+    }
+
+    return undefined;
+  };
 
   const loadColumnFiles = (colPath: string) => {
     if (columnFilesCache[colPath]) return;
@@ -1305,6 +1564,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         text: t('explorer.getInfo', '查看简介'),
         action: () => { void handleShowInspector(); },
       }));
+      items.push(await MenuItem.new({
+        text: t('explorer.copyName', '复制文件名'),
+        action: () => { void handleCopyNames(getActionFiles(primary)); },
+      }));
       await addSeparator();
       // 第4分组: Quick Look + Finder 中显示 + 复制路径
       items.push(await MenuItem.new({
@@ -1410,6 +1673,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (items.length === 0) return;
     await navigator.clipboard.writeText(items.map(f => f.path).join('\n'));
     showFeedback(t('messages.pathCopied', { count: items.length }));
+    setContextMenu(null);
+  };
+
+  const handleCopyNames = async (items = selectedFiles) => {
+    if (items.length === 0) return;
+    await navigator.clipboard.writeText(items.map(f => f.name).join('\n'));
+    showFeedback(t('messages.nameCopied', { count: items.length }));
     setContextMenu(null);
   };
 
@@ -2074,10 +2344,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               onMouseMove={handleContainerMouseMove}
               onMouseUp={handleContainerMouseUp}
               onMouseLeave={handleContainerMouseUp}
-              onDragOver={(e) => {
-                if (e.dataTransfer.types.includes('Files')) e.preventDefault();
-              }}
-              onDrop={handleExternalDrop}
+              onDragOver={handleSurfaceDragOver}
+              onDrop={handleSurfaceDrop}
               className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
             >
               {loading && (
@@ -2572,6 +2840,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <button onClick={() => handleShowInspector()} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Info className="w-4 h-4" /> {t('explorer.getInfo', '查看简介')}
                 </button>
+                <button onClick={() => handleCopyNames(getActionFiles(ctxFile))} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Copy className="w-4 h-4" /> {t('explorer.copyName', '复制文件名')}
+                </button>
                 <div className="my-1 h-px bg-primary/10" />
                 {/* 第4分组: Quick Look + Finder 中显示 + 复制路径 */}
                 <button onClick={() => handleQuickLook(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
@@ -2633,6 +2904,75 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             {operationMessage}
           </motion.div>
         )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {moveConflictDialog && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[140] flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 18, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 18, scale: 0.96 }}
+              className="w-full max-w-md rounded-2xl border border-primary/25 bg-surface/95 p-5 shadow-2xl shadow-black/30"
+            >
+              <h3 className="text-[17px] font-black text-on-surface">
+                {t('dialogs.moveConflictTitle', '目标中已有同名项目')}
+              </h3>
+              <p className="mt-2 text-[13px] font-medium leading-relaxed text-on-surface/65">
+                {moveConflictDialog.conflicts.length === 1
+                  ? t('dialogs.moveConflictDescription', {
+                    name: moveConflictDialog.conflicts[0].name,
+                    folder: moveConflictDialog.targetFolder.name,
+                  })
+                  : t('dialogs.moveConflictDescriptionMultiple', {
+                    count: moveConflictDialog.conflicts.length,
+                    folder: moveConflictDialog.targetFolder.name,
+                  })}
+              </p>
+              <div className="mt-4 max-h-36 overflow-y-auto rounded-xl border border-primary/10 bg-primary/5 p-2">
+                {moveConflictDialog.conflicts.slice(0, 6).map(conflict => (
+                  <div key={`${conflict.src}-${conflict.dst}`} className="truncate px-2 py-1 text-[12px] font-bold text-on-surface/70">
+                    {conflict.name}
+                  </div>
+                ))}
+                {moveConflictDialog.conflicts.length > 6 && (
+                  <div className="px-2 py-1 text-[12px] font-bold text-on-surface/40">
+                    +{moveConflictDialog.conflicts.length - 6}
+                  </div>
+                )}
+              </div>
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  onClick={() => handleMoveConflictChoice('cancel')}
+                  className="rounded-xl px-4 py-2.5 text-[13px] font-black text-on-surface/65 transition-colors hover:bg-primary/10"
+                >
+                  {t('dialogs.cancel', '取消')}
+                </button>
+                <button
+                  onClick={() => handleMoveConflictChoice('keepBoth')}
+                  className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-2.5 text-[13px] font-black text-on-surface transition-colors hover:bg-primary/20"
+                >
+                  {t('dialogs.keepBoth', '保留两者')}
+                </button>
+                <button
+                  onClick={() => handleMoveConflictChoice('replace')}
+                  className="rounded-xl bg-red-500 px-4 py-2.5 text-[13px] font-black text-white shadow-lg shadow-red-500/20 transition-transform active:scale-95"
+                >
+                  {t('dialogs.replaceExisting', '替换')}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {renderDragPreview()}
       </AnimatePresence>
 
     </div>
