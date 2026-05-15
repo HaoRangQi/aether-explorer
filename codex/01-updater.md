@@ -191,6 +191,8 @@
 | Actions 构建失败 `Missing comment in secret key` | `TAURI_SIGNING_PRIVATE_KEY` secret 为空或不是完整私钥内容 | 用 `gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/aether-updater.key` 重写 secret |
 | Actions 构建失败 `Wrong password for that key` | 私钥密码 secret 不匹配 | 重写 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，或切换无密码 key 并同步 pubkey |
 | Release 有包但没有 `latest.json` | manifest 步骤找错 target bundle 目录，或上传阶段失败 | 先用 `.sig` 手动生成并上传 `latest.json`，再修 workflow；没有 manifest 不算发布完成 |
+| Release 里出现 `latest-json.xxxxx.json` 之类随机名 | 误把 `gh release upload/create` 的 `file#label` 当成“重命名资产”机制 | 上传前先把文件真正命名为 `latest.json`，label 只能做展示，不能代替文件名 |
+| `latest.json` 存在但 updater 下载 404 或 URL 不匹配 | manifest 使用了原始构建文件名，未对齐最终 release 资产名 | 先统一 release 资产命名，再基于最终上传名生成 `platforms.*.url` |
 | 本地脚本签名步骤交互式卡住 | 私钥有密码但没设置环境变量 | `export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='...'` |
 | `relaunch()` 后旧进程没退 | Tauri internal，目前未观察到 | 待复现后再补 |
 | `tauri-action` 上传半成品或找不到 npm script | action 默认行为不匹配本仓库 | workflow 直接调用 `npx @tauri-apps/cli build --target universal-apple-darwin`，再统一上传 |
@@ -255,6 +257,8 @@ cat ~/.tauri/aether-updater.key | pbcopy
 9. **不要写 `--no-verify` 跳过 git hooks 来"快速发版"**。pre-commit 检查（lint / 类型）失败说明发出来的版本可能炸 — 修问题比绕过省心。
 10. **pubkey 是项目身份证**。从 `v0.2.0` 这个正式基线开始，换 pubkey = 老客户端断连。若未来要换，必须先发迁移版本。
 11. **发布完成必须命令验收**。`gh release view` 要看到 4 个资产，`latest.json` 要能 curl 到且 version/signature/url 正确；页面看起来有包不等于 updater 可用。
+12. **manifest 必须基于“最终上传后的资产名”生成，不要基于原始 bundle 文件名生成。** 否则 release 页面看起来有包，但 updater URL 会失真。
+13. **GitHub Release 的 label 不是文件名。** `latest.json` 这种关键入口必须是真文件名，不能靠 `#label` 伪装。
 
 ## 01.10 未来扩展
 

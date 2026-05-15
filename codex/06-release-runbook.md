@@ -175,7 +175,40 @@ bash scripts/release.sh
 - 如果是 updater 数据契约问题，同步更新 `codex/01-updater.md`。
 - 如果远程 release 已经半成品，先补齐或删除半成品，再宣布状态。
 
-## 06.10 v0.2.0 已知基线
+## 06.10 v0.2.1 事故记录
+
+### 事故现象
+
+- `v0.2.1` 第一次 CI 构建成功，但 workflow 最终失败。
+- GitHub Release 已被创建，且已有 `.dmg`、`.app.tar.gz`、`.sig` 和一个看似 manifest 的 JSON。
+- 实际资产名是 `latest-json.<随机串>.json`，不是 `latest.json`。
+- 该 JSON 里的 updater URL 指向 `Aether Explorer.app.tar.gz`，而不是最终 release 资产名 `Aether.Explorer_universal.app.tar.gz`。
+
+### 根因
+
+1. `gh release upload/create` 的 `file#label` 写法只修改 asset label，不会修改真实文件名；因此 `"$LATEST_JSON#latest.json"` 仍会以上传源文件名落盘。
+2. manifest 是按原始构建产物 basename 生成 URL，而 release 对外发布使用的是归一化后的资产名；两者脱钩后，manifest 即使存在也会指向错误地址。
+3. workflow 在创建 release 后立刻做资产校验，因此第一次失败点不是构建，而是“发布后验收”。
+
+### 修复动作
+
+1. workflow 和 `scripts/release.sh` 改为先把产物复制到 staging 目录，并重命名为最终上传资产名：
+   - `Aether.Explorer_<version>_universal.dmg`
+   - `Aether.Explorer_universal.app.tar.gz`
+   - `Aether.Explorer_universal.app.tar.gz.sig`
+   - `latest.json`
+2. manifest 改为基于 staging 后的最终文件名生成 URL，不再读取原始 bundle basename。
+3. 上传前显式清理已知错误资产名，避免幂等重跑时远程残留脏资产。
+4. 资产校验和 manifest 校验都加短重试，容忍 GitHub Release API / CDN 的瞬时可见性延迟。
+5. 对已存在的 `v0.2.1` 半成品 release，手动删除错误资产并补传正确四件套，而不是重打更高版本号。
+
+### 以后怎么做
+
+- 看到“构建成功但 release 失败”时，先查远程 release 实际资产名，不要立刻重新 bump 版本号。
+- 如果失败只发生在命名或 manifest 层，且二进制本身正确，可原地修复该 tag 的 release。
+- 只有二进制本身、签名、版本号或 pubkey 出错，才应该放弃该 tag 并发更高版本。
+
+## 06.11 v0.2.0 已知基线
 
 `v0.2.0` 是第一版正式可用发布基线。发布资产已验证包含：
 
