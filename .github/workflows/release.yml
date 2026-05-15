@@ -83,7 +83,11 @@ jobs:
           TAG="${RELEASE_TAG}"
           VERSION="${TAG#v}"
           REPO="${{ github.repository }}"
-          BUNDLE_DIR="src-tauri/target/release/bundle"
+          if [ -d "src-tauri/target/universal-apple-darwin/release/bundle" ]; then
+            BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
+          else
+            BUNDLE_DIR="src-tauri/target/release/bundle"
+          fi
 
           DMG="$(find "$BUNDLE_DIR/dmg" -type f -name '*.dmg' | head -n 1)"
           APP_TAR="$(find "$BUNDLE_DIR/macos" -type f -name '*.app.tar.gz' | head -n 1)"
