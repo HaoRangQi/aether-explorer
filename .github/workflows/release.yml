@@ -1,7 +1,7 @@
 # 自动发布带签名更新的 GitHub Release。
 #
 # 触发：
-#   - 推送 v* 形式的 tag（如 git tag v0.1.1 && git push --tags）
+#   - 推送 v* 形式的 tag（如 git tag v0.2.0 && git push --tags）
 #   - 手动 workflow_dispatch
 #
 # 所需 secrets（Settings → Secrets and variables → Actions）：
@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag, for example v0.1.1'
+        description: 'Release tag, for example v0.2.0'
         required: true
         type: string
 

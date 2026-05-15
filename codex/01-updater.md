@@ -100,13 +100,13 @@
 
 ```json
 {
-  "version": "0.1.1",
+  "version": "0.2.0",
   "notes": "release notes",
   "pub_date": "2026-05-14T12:34:56Z",
   "platforms": {
     "darwin-aarch64": {
       "signature": "untrusted comment: ...\nRWQ...完整 minisign 文本...",
-      "url": "https://github.com/HaoRangQi/aether-explorer/releases/download/v0.1.1/Aether.Explorer_0.1.1_universal.app.tar.gz"
+      "url": "https://github.com/HaoRangQi/aether-explorer/releases/download/v0.2.0/Aether.Explorer_0.2.0_universal.app.tar.gz"
     },
     "darwin-x86_64": {
       "signature": "...同上...",
@@ -198,13 +198,13 @@
 
 ```bash
 # 1. bump 版本号（两处必须一致）
-#    src-tauri/tauri.conf.json   "version": "0.1.1"
-#    src-tauri/Cargo.toml        version = "0.1.1"
+#    src-tauri/tauri.conf.json   "version": "0.2.0"
+#    src-tauri/Cargo.toml        version = "0.2.0"
 
 # 2. 提交 + 打 tag
 git add -A
-git commit -m "chore: bump to v0.1.1"
-git tag v0.1.1
+git commit -m "chore: bump to v0.2.0"
+git tag v0.2.0
 git push origin main --tags
 
 # 3. Actions 自动跑（约 10-15 分钟）
