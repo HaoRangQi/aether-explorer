@@ -9,8 +9,9 @@ import { Menu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { listDirectory, getHomeDir, copyFile, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, makeAlias } from '../api/filesystem';
-import type { MoveConflict, MoveConflictStrategy } from '../api/filesystem';
+import { emit, listen } from '@tauri-apps/api/event';
+import { listDirectory, getHomeDir, copyFile, copyFiles, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, makeAlias, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload } from '../api/filesystem';
+import type { FileTransferPayload, MoveConflict, MoveConflictStrategy } from '../api/filesystem';
 import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction } from '../types';
 import { QUICK_ACCESS } from '../constants';
 
@@ -31,7 +32,9 @@ const LIST_COLS = {
   actions: 'w-8',
 };
 
-const INTERNAL_FILE_DRAG_MIME = 'application/x-aether-file-id';
+const INTERNAL_FILE_DRAG_MIME = 'application/x-aether-file-paths';
+const FILE_DRAG_START_EVENT = 'aether-file-drag-start';
+const FILE_DRAG_END_EVENT = 'aether-file-drag-end';
 const logDragDebug = (message: string) => {
   invoke('debug_log', { message }).catch(() => {});
 };
@@ -47,6 +50,9 @@ interface MoveConflictDialogState {
   filesToMove: FileItem[];
   targetFolder: FileItem;
   conflicts: MoveConflict[];
+  operation: 'move' | 'copy';
+  clearClipboardOnSuccess?: boolean;
+  clearDragPayloadOnSuccess?: boolean;
 }
 
 interface ExplorerViewProps {
@@ -111,6 +117,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   });
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const pathScrollRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const feedbackTimerRef = useRef<number | null>(null);
@@ -119,10 +126,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [isMarqueeDragging, setIsMarqueeDragging] = useState(false);
   const [typeaheadQuery, setTypeaheadQuery] = useState('');
   const typeaheadTimerRef = useRef<number | null>(null);
-  const clipboardRef = useRef<string[]>([]);
-  const clipboardCutRef = useRef(false); // true = 剪切模式 // 存储复制/剪切的文件路径
+  const [hasFileClipboard, setHasFileClipboard] = useState(false);
+  const [isAppFileDragActive, setIsAppFileDragActive] = useState(false);
+  const fileDragActivityTimerRef = useRef<number | null>(null);
+  const fileDragClearTimerRef = useRef<number | null>(null);
   const draggedFileIdRef = useRef<string | null>(null);
   const internalDragRef = useRef<InternalDragState | null>(null);
+  const [contextMenuSize, setContextMenuSize] = useState<{ key: string; width: number; height: number } | null>(null);
 
   const [dirSize, setDirSize] = useState<{ bytes: number; formatted: string; file_count: number } | null>(null);
   const [dirSizeLoading, setDirSizeLoading] = useState(false);
@@ -138,41 +148,164 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
-  const handleCopyToClipboard = (items = selectedFiles) => {
+  const getNameFromPath = (path: string) => {
+    const parts = path.split('/').filter(Boolean);
+    return parts[parts.length - 1] || path || '/';
+  };
+
+  const makeFileItemsFromPaths = (paths: string[]): FileItem[] => (
+    paths.map(path => ({
+      id: path,
+      name: getNameFromPath(path),
+      type: 'file',
+      size: '--',
+      modified: '',
+      path,
+    }))
+  );
+
+  const makeFolderItemFromPath = (path: string): FileItem => ({
+    id: path,
+    name: getNameFromPath(path),
+    type: 'folder',
+    size: '--',
+    modified: '',
+    path,
+  });
+
+  const refreshFileClipboardState = async () => {
+    try {
+      const payload = await getFileClipboard();
+      setHasFileClipboard(Boolean(payload?.paths.length));
+      return payload;
+    } catch {
+      setHasFileClipboard(false);
+      return null;
+    }
+  };
+
+  const getTransferPathsForFile = (file: FileItem) => {
+    const items = selectedFileIds.includes(file.id) && selectedFiles.length > 0 ? selectedFiles : [file];
+    return items.map(item => item.path);
+  };
+
+  const markAppFileDragActive = () => {
+    setIsAppFileDragActive(true);
+    if (fileDragActivityTimerRef.current) window.clearTimeout(fileDragActivityTimerRef.current);
+    fileDragActivityTimerRef.current = window.setTimeout(() => {
+      setIsAppFileDragActive(false);
+      fileDragActivityTimerRef.current = null;
+    }, 7000);
+  };
+
+  const clearAppFileDragActive = () => {
+    if (fileDragActivityTimerRef.current) {
+      window.clearTimeout(fileDragActivityTimerRef.current);
+      fileDragActivityTimerRef.current = null;
+    }
+    setIsAppFileDragActive(false);
+  };
+
+  const finishSharedFileDrag = (delayMs = 0) => {
+    if (fileDragClearTimerRef.current) window.clearTimeout(fileDragClearTimerRef.current);
+    const finish = () => {
+      fileDragClearTimerRef.current = null;
+      clearAppFileDragActive();
+      void clearFileDragPayload();
+      void emit(FILE_DRAG_END_EVENT);
+    };
+    if (delayMs > 0) {
+      fileDragClearTimerRef.current = window.setTimeout(finish, delayMs);
+    } else {
+      finish();
+    }
+  };
+
+  const focusCurrentWindow = async () => {
+    const currentWindow = getCurrentWindow();
+    try {
+      await currentWindow.show();
+      await currentWindow.unminimize();
+      await currentWindow.setFocus();
+      window.setTimeout(() => {
+        void currentWindow.setFocus().catch(() => {});
+      }, 0);
+    } catch {
+      // Focus is best-effort; the context menu should still open.
+    }
+  };
+
+  const writeDragPayload = (file: FileItem) => {
+    const paths = getTransferPathsForFile(file);
+    const payload: FileTransferPayload = { paths, cut: true };
+    if (fileDragClearTimerRef.current) {
+      window.clearTimeout(fileDragClearTimerRef.current);
+      fileDragClearTimerRef.current = null;
+    }
+    markAppFileDragActive();
+    void setFileDragPayload(paths, true)
+      .then(() => emit(FILE_DRAG_START_EVENT, payload))
+      .catch(() => {});
+    return paths;
+  };
+
+  const readTransferPayload = async (dataTransfer?: DataTransfer): Promise<FileTransferPayload | null> => {
+    const raw = dataTransfer?.getData(INTERNAL_FILE_DRAG_MIME);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as FileTransferPayload;
+        if (Array.isArray(parsed.paths) && parsed.paths.length > 0) return parsed;
+      } catch {
+        logDragDebug('payloadParseFailed');
+      }
+    }
+
+    try {
+      const payload = await getFileDragPayload();
+      return payload?.paths.length ? payload : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const getDragTypes = (dataTransfer: DataTransfer) => Array.from(dataTransfer.types);
+
+  const isFileTransferDrag = (dataTransfer: DataTransfer) => {
+    const types = getDragTypes(dataTransfer);
+    return types.includes('Files') || types.includes(INTERNAL_FILE_DRAG_MIME) || isAppFileDragActive;
+  };
+
+  const handleCopyToClipboard = async (items = selectedFiles) => {
     if (items.length === 0) return;
-    clipboardRef.current = items.map(f => f.path);
-    clipboardCutRef.current = false;
+    await setFileClipboard(items.map(f => f.path), false);
+    setHasFileClipboard(true);
     showFeedback(t('messages.copied', { count: items.length }));
     setContextMenu(null);
   };
 
-  const handleCutToClipboard = (items = selectedFiles) => {
+  const handleCutToClipboard = async (items = selectedFiles) => {
     if (items.length === 0) return;
-    clipboardRef.current = items.map(f => f.path);
-    clipboardCutRef.current = true;
+    await setFileClipboard(items.map(f => f.path), true);
+    setHasFileClipboard(true);
     showFeedback(t('messages.cut', { count: items.length }));
     setContextMenu(null);
   };
 
   const handlePasteFromClipboard = async () => {
-    const paths = clipboardRef.current;
+    const payload = await refreshFileClipboardState();
+    const paths = payload?.paths ?? [];
     if (paths.length === 0) {
       showFeedback(t('messages.clipboardEmpty'));
       return;
     }
     setContextMenu(null);
     try {
-      if (clipboardCutRef.current) {
-        // 剪切模式：移动文件
-        await Promise.all(paths.map(path => moveFile(path, currentPath)));
-        clipboardRef.current = [];
-        clipboardCutRef.current = false;
-        refreshCurrentDir();
-        showFeedback(t('messages.moved', { count: paths.length }));
+      if (payload?.cut) {
+        await executeMoveFiles(makeFileItemsFromPaths(paths), makeFolderItemFromPath(currentPath), 'abort', {
+          clearClipboardOnSuccess: true,
+        });
       } else {
-        await Promise.all(paths.map(path => copyFile(path, currentPath)));
-        refreshCurrentDir();
-        showFeedback(t('messages.pasted', { count: paths.length }));
+        await executeCopyFiles(makeFileItemsFromPaths(paths), makeFolderItemFromPath(currentPath), 'abort');
       }
     } catch (e) {
       showFeedback(t('messages.operationFailed', { error: String(e) }));
@@ -218,16 +351,32 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [scrollTop, setScrollTop] = useState(0);
   const rafRef = useRef<number | null>(null);
 
+  const contextMenuKey = contextMenu
+    ? `${contextMenu.isBlank ? 'blank' : 'file'}:${contextMenu.fileIds.join('|')}`
+    : '';
+
   const contextMenuPosition = useMemo(() => {
     if (!contextMenu || typeof window === 'undefined') return null;
-    const menuWidth = 256;
-    const menuMaxHeight = Math.min(420, window.innerHeight - 40);
+    const margin = 12;
+    const measuredSize = contextMenuSize?.key === contextMenuKey ? contextMenuSize : null;
+    const menuWidth = measuredSize?.width || 224;
+    const menuHeight = measuredSize?.height || (contextMenu.isBlank ? 220 : Math.min(420, window.innerHeight * 0.5));
+    const maxHeight = Math.max(180, window.innerHeight - margin * 2);
+    const overflowX = contextMenu.x + menuWidth + margin - window.innerWidth;
+    const overflowY = contextMenu.y + menuHeight + margin - window.innerHeight;
+    const left = overflowX > 0
+      ? Math.max(margin, contextMenu.x - menuWidth)
+      : Math.max(margin, contextMenu.x);
+    const top = overflowY > 0
+      ? Math.max(margin, contextMenu.y - menuHeight)
+      : Math.max(margin, contextMenu.y);
+
     return {
-      left: Math.max(12, Math.min(contextMenu.x, window.innerWidth - menuWidth - 12)),
-      top: Math.max(12, Math.min(contextMenu.y, window.innerHeight - menuMaxHeight - 12)),
-      maxHeight: menuMaxHeight,
+      left,
+      top,
+      maxHeight,
     };
-  }, [contextMenu]);
+  }, [contextMenu, contextMenuKey, contextMenuSize]);
 
   // Sidebar view → real path mapping
   // Note: sidebar "主页" uses viewId 'desktop' (lucide Home icon)
@@ -259,6 +408,49 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (feedbackTimerRef.current) window.clearTimeout(feedbackTimerRef.current);
     feedbackTimerRef.current = window.setTimeout(() => setOperationMessage(''), 300);
   };
+
+  useEffect(() => {
+    const startListener = listen<FileTransferPayload>(FILE_DRAG_START_EVENT, (event) => {
+      if (event.payload?.paths.length) markAppFileDragActive();
+    });
+    const endListener = listen(FILE_DRAG_END_EVENT, () => {
+      clearAppFileDragActive();
+    });
+
+    return () => {
+      startListener.then(unlisten => unlisten());
+      endListener.then(unlisten => unlisten());
+      if (fileDragActivityTimerRef.current) window.clearTimeout(fileDragActivityTimerRef.current);
+      if (fileDragClearTimerRef.current) window.clearTimeout(fileDragClearTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isActive) return;
+    void refreshFileClipboardState();
+    const handleFocus = () => { void refreshFileClipboardState(); };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [isActive]);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      setContextMenuSize(null);
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const rect = contextMenuRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setContextMenuSize({
+        key: contextMenuKey,
+        width: Math.ceil(rect.width),
+        height: Math.ceil(rect.height),
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [contextMenu, contextMenuKey]);
 
   const navigateToPath = (path: string, options?: { replace?: boolean }) => {
     const nextPath = path.trim();
@@ -407,6 +599,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           count: selectedFileIds.includes(dragState.id) ? Math.max(1, selectedFileIds.length) : 1,
           active: true,
         });
+        const sourceFile = findFileById(dragState.id);
+        if (sourceFile) writeDragPayload(sourceFile);
         logDragDebug(`mouseDragStart id=${dragState.id}`);
       } else {
         setDragPreview(prev => prev ? { ...prev, x: event.clientX, y: event.clientY } : prev);
@@ -427,13 +621,17 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       setDragOverFolderId(null);
       setDragPreview(null);
 
-      if (!dragState.active) return;
+      if (!dragState.active) {
+        finishSharedFileDrag();
+        return;
+      }
 
       const folderId = getFolderIdFromPoint(event.clientX, event.clientY, dragState.id);
       logDragDebug(`mouseDrop draggedId=${dragState.id} folderId=${folderId ?? ''}`);
       if (folderId) {
         await moveDraggedFiles(dragState.id, folderId);
       }
+      finishSharedFileDrag();
     };
 
     window.addEventListener('mousemove', handleInternalMouseMove);
@@ -609,10 +807,22 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         onSelectFiles(currentLevelFiles.map(f => f.id));
         return;
       }
-      // Cmd+C: 复制路径
+      // Cmd+C: 复制文件，支持跨窗口粘贴
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c' && selectedFiles.length > 0) {
         e.preventDefault();
-        handleCopyPaths();
+        void handleCopyToClipboard();
+        return;
+      }
+      // Cmd+X: 剪切文件，支持跨窗口移动
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'x' && selectedFiles.length > 0) {
+        e.preventDefault();
+        void handleCutToClipboard();
+        return;
+      }
+      // Cmd+V: 粘贴 app 内文件剪贴板，支持跨窗口
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        void handlePasteFromClipboard();
         return;
       }
       // Cmd+I: 显示简介/预览面板
@@ -867,7 +1077,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     });
   };
 
-  const handleExternalDrop = async (e: React.DragEvent) => {
+  const handleExternalDrop = async (e: React.DragEvent, targetPath = currentPath) => {
     const rawFiles = Array.from(e.dataTransfer.files || []);
     const paths = rawFiles
       .map(file => (file as File & { path?: string }).path)
@@ -875,7 +1085,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (paths.length === 0) return;
     e.preventDefault();
     try {
-      await Promise.all(paths.map(path => copyFile(path, currentPath)));
+      await Promise.all(paths.map(path => copyFile(path, targetPath)));
       refreshCurrentDir();
       showFeedback(t('messages.importedFromFinder', { count: paths.length }));
     } catch (err) {
@@ -904,6 +1114,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleSurfaceDragOver = (e: React.DragEvent) => {
+    if (!isFileTransferDrag(e.dataTransfer)) return;
+    void focusCurrentWindow();
+
     const folderId = getFolderIdFromDragEvent(e);
     if (folderId) {
       handleDragOver(e, folderId);
@@ -911,13 +1124,27 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     if (dragOverFolderId !== null) setDragOverFolderId(null);
-    if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+    const types = getDragTypes(e.dataTransfer);
+    e.preventDefault();
+    e.dataTransfer.dropEffect = types.includes('Files') ? 'copy' : 'move';
   };
 
   const handleSurfaceDrop = async (e: React.DragEvent) => {
+    if (!isFileTransferDrag(e.dataTransfer)) return;
+    void focusCurrentWindow();
+
     const folderId = getFolderIdFromDragEvent(e);
     if (folderId) {
       await handleDrop(e, folderId);
+      return;
+    }
+
+    const payload = await readTransferPayload(e.dataTransfer);
+    if (payload?.paths.length) {
+      e.preventDefault();
+      await executeMoveFiles(makeFileItemsFromPaths(payload.paths), makeFolderItemFromPath(currentPath), 'abort', {
+        clearDragPayloadOnSuccess: true,
+      });
       return;
     }
 
@@ -959,14 +1186,25 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     filesToMove: FileItem[],
     targetFolder: FileItem,
     conflictStrategy: MoveConflictStrategy,
+    options: { clearClipboardOnSuccess?: boolean; clearDragPayloadOnSuccess?: boolean } = {},
   ) => {
     try {
       const result = await moveFiles(filesToMove.map(f => f.path), targetFolder.path, conflictStrategy);
       logDragDebug(`moveResult moved=${result.moved.length} failed=${result.failed.length} conflicts=${result.conflicts.length} skipped=${result.skippedSameDir} firstError=${result.failed[0]?.error ?? ''}`);
 
       if (result.conflicts.length > 0) {
-        setMoveConflictDialog({ filesToMove, targetFolder, conflicts: result.conflicts });
+        setMoveConflictDialog({ filesToMove, targetFolder, conflicts: result.conflicts, operation: 'move', ...options });
         return;
+      }
+
+      if (result.failed.length === 0) {
+        if (options.clearClipboardOnSuccess && result.moved.length > 0) {
+          await clearFileClipboard();
+          setHasFileClipboard(false);
+        }
+        if (options.clearDragPayloadOnSuccess) {
+          finishSharedFileDrag();
+        }
       }
 
       onSelectFiles([]);
@@ -993,28 +1231,88 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
+  const executeCopyFiles = async (
+    filesToCopy: FileItem[],
+    targetFolder: FileItem,
+    conflictStrategy: MoveConflictStrategy,
+  ) => {
+    try {
+      const result = await copyFiles(filesToCopy.map(f => f.path), targetFolder.path, conflictStrategy);
+      logDragDebug(`copyResult copied=${result.copied.length} failed=${result.failed.length} conflicts=${result.conflicts.length} firstError=${result.failed[0]?.error ?? ''}`);
+
+      if (result.conflicts.length > 0) {
+        setMoveConflictDialog({ filesToMove: filesToCopy, targetFolder, conflicts: result.conflicts, operation: 'copy' });
+        return;
+      }
+
+      refreshCurrentDir();
+
+      if (result.failed.length === 0 && result.copied.length > 0) {
+        showFeedback(t('messages.pasted', { count: result.copied.length }));
+      } else if (result.failed.length > 0 && result.copied.length === 0) {
+        showFeedback(t('messages.operationFailed', { error: result.failed[0].error }));
+      } else {
+        showFeedback(
+          t('messages.partialMove', {
+            ok: result.copied.length,
+            failed: result.failed.length,
+            error: result.failed[0]?.error ?? '',
+          })
+        );
+      }
+    } catch (err) {
+      logDragDebug(`copyError error=${String(err)}`);
+      showFeedback(t('messages.operationFailed', { error: String(err) }));
+    }
+  };
+
   const handleMoveConflictChoice = async (strategy: MoveConflictStrategy | 'cancel') => {
     const dialog = moveConflictDialog;
     setMoveConflictDialog(null);
-    if (!dialog || strategy === 'cancel') return;
+    if (!dialog) return;
+    if (strategy === 'cancel') {
+      if (dialog.clearDragPayloadOnSuccess) finishSharedFileDrag();
+      return;
+    }
 
-    await executeMoveFiles(dialog.filesToMove, dialog.targetFolder, strategy);
+    if (dialog.operation === 'copy') {
+      await executeCopyFiles(dialog.filesToMove, dialog.targetFolder, strategy);
+      return;
+    }
+
+    await executeMoveFiles(dialog.filesToMove, dialog.targetFolder, strategy, {
+      clearClipboardOnSuccess: dialog.clearClipboardOnSuccess,
+      clearDragPayloadOnSuccess: dialog.clearDragPayloadOnSuccess,
+    });
   };
 
   const handleDragStart = (e: React.DragEvent, file: FileItem) => {
     draggedFileIdRef.current = file.id;
-    e.dataTransfer.setData(INTERNAL_FILE_DRAG_MIME, file.id);
-    e.dataTransfer.setData('text/plain', file.id);
+    const paths = writeDragPayload(file);
+    const payload: FileTransferPayload = { paths, cut: true };
+    const serialized = JSON.stringify(payload);
+    e.dataTransfer.setData(INTERNAL_FILE_DRAG_MIME, serialized);
     e.dataTransfer.effectAllowed = 'move';
-    logDragDebug(`dragStart id=${file.id} name=${file.name} type=${file.type} selected=${selectedFileIds.join('|')}`);
+    setDragPreview({
+      x: e.clientX,
+      y: e.clientY,
+      fileId: file.id,
+      count: paths.length,
+      active: true,
+    });
+    logDragDebug(`dragStart id=${file.id} name=${file.name} type=${file.type} paths=${paths.join('|')}`);
   };
 
   const handleDragOver = (e: React.DragEvent, fileId: string) => {
+    if (!isFileTransferDrag(e.dataTransfer)) return;
+    void focusCurrentWindow();
+
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'move';
+    const types = getDragTypes(e.dataTransfer);
+    e.dataTransfer.dropEffect = types.includes('Files') ? 'copy' : 'move';
     if (dragOverFolderId !== fileId) {
-      logDragDebug(`dragOver folderId=${fileId} dataTypes=${Array.from(e.dataTransfer.types).join('|')}`);
+      logDragDebug(`dragOver folderId=${fileId} dataTypes=${types.join('|')}`);
       setDragOverFolderId(fileId);
     }
   };
@@ -1030,21 +1328,39 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const handleDragEnd = () => {
     logDragDebug(`dragEnd activeId=${draggedFileIdRef.current ?? ''}`);
     draggedFileIdRef.current = null;
+    setDragPreview(null);
     if (dragOverFolderId !== null) setDragOverFolderId(null);
+    finishSharedFileDrag(600);
   };
 
   const handleDrop = async (e: React.DragEvent, targetFolderId: string) => {
+    if (!isFileTransferDrag(e.dataTransfer)) return;
+    void focusCurrentWindow();
+
     e.preventDefault();
     e.stopPropagation();
     setDragOverFolderId(null);
 
-    const draggedFileId =
-      e.dataTransfer.getData(INTERNAL_FILE_DRAG_MIME) ||
-      draggedFileIdRef.current ||
-      e.dataTransfer.getData('text/plain');
-    logDragDebug(`drop targetFolderId=${targetFolderId} draggedFileId=${draggedFileId} ref=${draggedFileIdRef.current ?? ''} dataTypes=${Array.from(e.dataTransfer.types).join('|')}`);
+    const payload = await readTransferPayload(e.dataTransfer);
+    const fallbackDraggedId = draggedFileIdRef.current;
+    logDragDebug(`drop targetFolderId=${targetFolderId} payloadPaths=${payload?.paths.join('|') ?? ''} ref=${fallbackDraggedId ?? ''} dataTypes=${Array.from(e.dataTransfer.types).join('|')}`);
     draggedFileIdRef.current = null;
-    await moveDraggedFiles(draggedFileId, targetFolderId);
+    const targetFolder = findFileById(targetFolderId);
+    if (!targetFolder || targetFolder.type !== 'folder') {
+      finishSharedFileDrag();
+      return;
+    }
+    if (payload?.paths.length) {
+      await executeMoveFiles(makeFileItemsFromPaths(payload.paths), targetFolder, 'abort', {
+        clearDragPayloadOnSuccess: true,
+      });
+      return;
+    }
+    if (getDragTypes(e.dataTransfer).includes('Files')) {
+      await handleExternalDrop(e, targetFolder.path);
+      return;
+    }
+    await moveDraggedFiles(fallbackDraggedId || '', targetFolderId);
   };
 
   const handleSort = (key: string) => {
@@ -1183,7 +1499,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable={false}
+          draggable
           onMouseDown={(e) => handleFileMouseDown(e, file)}
           onDragStart={(e) => handleDragStart(e, file)}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
@@ -1244,7 +1560,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable={false}
+          draggable
           onMouseDown={(e) => handleFileMouseDown(e, file)}
           onDragStart={(e) => handleDragStart(e, file)}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
@@ -1295,7 +1611,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable={false}
+          draggable
           onMouseDown={(e) => handleFileMouseDown(e, file)}
           onDragStart={(e) => handleDragStart(e, file)}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
@@ -1480,6 +1796,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   // Context menu helper — respects system menu preference
   const openSystemContextMenu = async (targetFiles: FileItem[], isBlank = false, position?: { x: number; y: number }) => {
+    await focusCurrentWindow();
     const currentWindow = getCurrentWindow();
     const primary = targetFiles[0] ?? null;
     const items: Array<Awaited<ReturnType<typeof MenuItem.new>> | Awaited<ReturnType<typeof PredefinedMenuItem.new>>> = [];
@@ -1514,10 +1831,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         text: t('explorer.getInfo', '查看简介'),
         action: () => { void handleShowInspector(true); },
       }));
-      const hasClipboard = clipboardRef.current.length > 0;
+      const clipboardPayload = await refreshFileClipboardState();
+      const canPaste = Boolean(clipboardPayload?.paths.length);
       items.push(await MenuItem.new({
         text: t('explorer.paste', '粘贴'),
-        enabled: hasClipboard,
+        enabled: canPaste,
         action: () => { void handlePasteFromClipboard(); },
       }));
     } else {
@@ -1607,6 +1925,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const handleContextMenu = async (e: React.MouseEvent, fileIds: string[], isBlank = false) => {
     e.preventDefault();
     e.stopPropagation();
+    await focusCurrentWindow();
     const newSelection = isBlank ? selectedFileIds : (selectedFileIds.includes(fileIds[0]) ? selectedFileIds : fileIds);
     if (!isBlank && !selectedFileIds.includes(fileIds[0])) onSelectFiles(newSelection);
 
@@ -1618,12 +1937,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return;
     }
 
+    if (isBlank) void refreshFileClipboardState();
     setContextMenu({ x: e.clientX, y: e.clientY, fileIds: newSelection, isBlank });
   };
 
   const openFileActionsMenu = async (e: React.MouseEvent, file: FileItem) => {
     e.preventDefault();
     e.stopPropagation();
+    await focusCurrentWindow();
 
     if (theme.useSystemContextMenu) {
       if (!selectedFileIds.includes(file.id)) onSelectFiles([file.id]);
@@ -2340,6 +2661,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 void handleContextMenu(e, [], true);
               }}
               onScroll={handleContainerScroll}
+              onMouseDownCapture={(e) => {
+                if (e.button === 2) void focusCurrentWindow();
+              }}
               onMouseDown={handleContainerMouseDown}
               onMouseMove={handleContainerMouseMove}
               onMouseUp={handleContainerMouseUp}
@@ -2759,6 +3083,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       {/* Context Menu Overlay */}
       {contextMenu && (
         <div
+          ref={contextMenuRef}
           className={`fixed z-[100] w-56 shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-hidden ${
             theme.useSystemContextMenu
               ? 'rounded-xl bg-surface/95 border border-on-surface/10 text-on-surface backdrop-blur-xl'
@@ -2791,9 +3116,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 </button>
                 <button
                   onClick={handlePasteFromClipboard}
-                  disabled={clipboardRef.current.length === 0}
+                  disabled={!hasFileClipboard}
                   className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-bold transition-all ${
-                    clipboardRef.current.length === 0
+                    !hasFileClipboard
                       ? 'text-on-surface/25 cursor-not-allowed'
                       : 'hover:bg-primary/10 text-on-surface hover:text-primary'
                   }`}

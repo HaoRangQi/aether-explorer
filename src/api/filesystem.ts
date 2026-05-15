@@ -47,8 +47,47 @@ export async function copyFile(src: string, dst: string): Promise<string> {
   return invoke('copy_file', { src, dst });
 }
 
+export interface CopyResult {
+  copied: string[];
+  failed: MoveFailure[];
+  conflicts: MoveConflict[];
+}
+
+export async function copyFiles(srcs: string[], dstDir: string, conflictStrategy: MoveConflictStrategy = 'abort'): Promise<CopyResult> {
+  return invoke<CopyResult>('copy_files', { srcs, dstDir, conflictStrategy });
+}
+
 export async function moveFile(src: string, dstDir: string): Promise<string> {
   return invoke('move_file', { src, dstDir });
+}
+
+export interface FileTransferPayload {
+  paths: string[];
+  cut: boolean;
+}
+
+export async function setFileClipboard(paths: string[], cut: boolean): Promise<void> {
+  return invoke('set_file_clipboard', { paths, cut });
+}
+
+export async function getFileClipboard(): Promise<FileTransferPayload | null> {
+  return invoke<FileTransferPayload | null>('get_file_clipboard');
+}
+
+export async function clearFileClipboard(): Promise<void> {
+  return invoke('clear_file_clipboard');
+}
+
+export async function setFileDragPayload(paths: string[], cut: boolean): Promise<void> {
+  return invoke('set_file_drag_payload', { paths, cut });
+}
+
+export async function getFileDragPayload(): Promise<FileTransferPayload | null> {
+  return invoke<FileTransferPayload | null>('get_file_drag_payload');
+}
+
+export async function clearFileDragPayload(): Promise<void> {
+  return invoke('clear_file_drag_payload');
 }
 
 export interface MoveFailure {

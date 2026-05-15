@@ -186,3 +186,33 @@ interface MoveFailure {
 1. 冲突处理不能内建“自动重命名”默认行为。默认必须是 `Abort`，让 UI 先拿到冲突上下文再由用户决策；否则会造成用户对结果不可预期。
 2. 浏览器原生 `dragstart` 在复杂布局下容易丢目标命中，内部鼠标拖拽状态机更稳定，但要同步做好 `dragPreview` 清理，防止卡住悬浮层。
 3. 拖拽视觉反馈要和文本选择策略联动。只做 ring 高亮不够，若不禁文本选中，用户仍会误判为“选择文本而非拖文件”。
+
+## 02.12 2026-05-15 跨窗口增量
+
+### 新增能力
+
+- **跨窗口文件剪贴板**：复制/剪切不再放在单个 `ExplorerView` 的 React ref 中，改为 Rust app state 里的 `FileClipboardState`，所有 Tauri WebView 共用同一份文件路径载荷（`src-tauri/src/lib.rs:55`, `src-tauri/src/lib.rs:395`, `src/api/filesystem.ts:59`, `src/components/ExplorerView.tsx:210`）。
+- **跨窗口拖拽移动**：拖拽开始时写入 `FileDragState`，同时广播 `aether-file-drag-start` 给其他窗口；目标窗口即使拿不到跨 WebView 的自定义 `dataTransfer` 类型，也会进入可 drop 状态，并在 drop 时按共享 paths 移动（`src-tauri/src/lib.rs:56`, `src-tauri/src/lib.rs:425`, `src/components/ExplorerView.tsx:206`, `src/components/ExplorerView.tsx:229`, `src/components/ExplorerView.tsx:256`, `src/components/ExplorerView.tsx:1215`）。
+- **空白区域也可接收跨窗口移动**：拖到另一个窗口的当前目录空白处，会移动到该窗口当前目录；拖到文件夹 item 上则移动进该文件夹（`src/components/ExplorerView.tsx:1006`, `src/components/ExplorerView.tsx:1013`, `src/components/ExplorerView.tsx:1179`）。
+- **剪切粘贴复用冲突选择**：跨窗口剪切粘贴走 `move_files(..., Abort)`，遇到同名冲突仍弹用户选择，不再用旧的 `move_file` 自动重命名路径（`src/components/ExplorerView.tsx:224`, `src/components/ExplorerView.tsx:234`, `src/components/ExplorerView.tsx:1056`）。
+- **复制粘贴也复用冲突选择**：新增 `copy_files(..., Abort / Replace / KeepBoth)`，复制粘贴默认先返回同名冲突并弹选择；只有用户点“保留两者”才走自动重命名（`src-tauri/src/lib.rs:488`, `src-tauri/src/lib.rs:495`, `src/api/filesystem.ts:50`, `src/components/ExplorerView.tsx:1181`, `src/components/ExplorerView.tsx:1226`）。
+- **快捷键语义回归文件管理器**：`Cmd+C` 写文件剪贴板，`Cmd+X` 写剪切状态，`Cmd+V` 从 app 级文件剪贴板粘贴；复制路径仍由右键菜单提供（`src/components/ExplorerView.tsx:691`, `src/components/ExplorerView.tsx:697`, `src/components/ExplorerView.tsx:706`）。
+
+### 经验补充
+
+1. 多窗口 Tauri 是多 WebView，不共享 React 内存。任何希望跨窗口生效的文件操作状态，都不能只放 `useRef` / component state，至少要放到 Rust app state 或系统剪贴板。
+2. 跨窗口拖拽必须传 `path`，不能传 `file.id` 后让目标窗口二次解析。目标窗口的 `files` / `columnFilesCache` 只代表它当前看得见的目录，源窗口选中的文件在目标窗口通常不存在。
+3. 复制和移动必须共享“默认询问用户”的冲突策略。单文件 `copy_file` 仍可用于 Finder 导入等非剪贴板路径，但 app 内复制粘贴必须走 `copy_files(..., Abort)`，否则会绕过用户选择直接重命名。
+
+## 02.13 2026-05-15 菜单与置顶增量
+
+### 新增能力
+
+- **多窗口右键先置顶再开菜单**：文件展示区右键链路改为先激活当前窗口，再展示菜单，降低“底下窗口弹菜单但窗口仍在下层”的竞态（`src/components/ExplorerView.tsx:224`, `src/components/ExplorerView.tsx:1798`, `src/components/ExplorerView.tsx:1925`, `src/components/ExplorerView.tsx:2664`）。
+- **全局右键兜底置顶**：在 App 顶层捕获阶段监听 `contextmenu` 并触发 `setFocus`，覆盖导航栏、侧边栏和设置页等非文件展示区（`src/App.tsx:147`）。
+- **原生设计菜单定位收敛**：自绘菜单位置从“固定宽高估算”改为“首帧估算 + 实际尺寸回填 + 视口夹取”，减少边缘场景偏离鼠标过远（`src/components/ExplorerView.tsx:358`, `src/components/ExplorerView.tsx:443`, `src/components/ExplorerView.tsx:3086`）。
+
+### 经验补充
+
+1. 右键菜单定位不能只用常量宽高。菜单项数量、分组和窗口高度都会影响真实尺寸，常量估算会在屏幕边缘产生“过度回退”。
+2. 多窗口下“菜单显示”和“窗口置顶”是两条异步链路，必须让置顶先发生或至少同帧触发，否则用户看到的是菜单先出、窗口后上来，感知就是错位。

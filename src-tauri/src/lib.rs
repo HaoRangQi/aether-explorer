@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 
@@ -43,6 +44,16 @@ struct VolumeInfo {
     is_external: bool,
     is_ejectable: bool,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FileTransferPayload {
+    paths: Vec<String>,
+    cut: bool,
+}
+
+struct FileClipboardState(Mutex<Option<FileTransferPayload>>);
+struct FileDragState(Mutex<Option<FileTransferPayload>>);
 
 fn format_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
@@ -380,6 +391,66 @@ fn move_file(src: String, dst_dir: String) -> Result<String, String> {
     Ok(dst_path.to_string_lossy().into())
 }
 
+#[tauri::command]
+fn set_file_clipboard(
+    state: tauri::State<FileClipboardState>,
+    paths: Vec<String>,
+    cut: bool,
+) -> Result<(), String> {
+    let mut clipboard = state.0.lock().map_err(|_| "文件剪贴板不可用".to_string())?;
+    *clipboard = if paths.is_empty() {
+        None
+    } else {
+        Some(FileTransferPayload { paths, cut })
+    };
+    Ok(())
+}
+
+#[tauri::command]
+fn get_file_clipboard(
+    state: tauri::State<FileClipboardState>,
+) -> Result<Option<FileTransferPayload>, String> {
+    let clipboard = state.0.lock().map_err(|_| "文件剪贴板不可用".to_string())?;
+    Ok(clipboard.clone())
+}
+
+#[tauri::command]
+fn clear_file_clipboard(state: tauri::State<FileClipboardState>) -> Result<(), String> {
+    let mut clipboard = state.0.lock().map_err(|_| "文件剪贴板不可用".to_string())?;
+    *clipboard = None;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_file_drag_payload(
+    state: tauri::State<FileDragState>,
+    paths: Vec<String>,
+    cut: bool,
+) -> Result<(), String> {
+    let mut drag_payload = state.0.lock().map_err(|_| "文件拖拽状态不可用".to_string())?;
+    *drag_payload = if paths.is_empty() {
+        None
+    } else {
+        Some(FileTransferPayload { paths, cut })
+    };
+    Ok(())
+}
+
+#[tauri::command]
+fn get_file_drag_payload(
+    state: tauri::State<FileDragState>,
+) -> Result<Option<FileTransferPayload>, String> {
+    let drag_payload = state.0.lock().map_err(|_| "文件拖拽状态不可用".to_string())?;
+    Ok(drag_payload.clone())
+}
+
+#[tauri::command]
+fn clear_file_drag_payload(state: tauri::State<FileDragState>) -> Result<(), String> {
+    let mut drag_payload = state.0.lock().map_err(|_| "文件拖拽状态不可用".to_string())?;
+    *drag_payload = None;
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MoveFailure {
@@ -410,6 +481,117 @@ struct MoveResult {
     failed: Vec<MoveFailure>,
     conflicts: Vec<MoveConflict>,
     skipped_same_dir: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CopyResult {
+    copied: Vec<String>,
+    failed: Vec<MoveFailure>,
+    conflicts: Vec<MoveConflict>,
+}
+
+#[tauri::command]
+fn copy_files(
+    srcs: Vec<String>,
+    dst_dir: String,
+    conflict_strategy: Option<MoveConflictStrategy>,
+) -> Result<CopyResult, String> {
+    let dst = Path::new(&dst_dir);
+    if !dst.is_dir() {
+        return Err(format!("目标不是目录: {}", dst_dir));
+    }
+
+    let conflict_strategy = conflict_strategy.unwrap_or(MoveConflictStrategy::Abort);
+    let mut copied: Vec<String> = Vec::new();
+    let mut failed: Vec<MoveFailure> = Vec::new();
+    let mut conflicts: Vec<MoveConflict> = Vec::new();
+
+    if matches!(conflict_strategy, MoveConflictStrategy::Abort) {
+        for src in &srcs {
+            let src_path = Path::new(src);
+            if !src_path.exists() {
+                continue;
+            }
+
+            let name = src_path.file_name().unwrap_or_default().to_string_lossy();
+            let dst_path = dst.join(name.as_ref());
+            if dst_path.exists() {
+                conflicts.push(MoveConflict {
+                    src: src.clone(),
+                    dst: dst_path.to_string_lossy().into(),
+                    name: name.into(),
+                });
+            }
+        }
+
+        if !conflicts.is_empty() {
+            return Ok(CopyResult { copied, failed, conflicts });
+        }
+    }
+
+    for src in srcs {
+        let src_path = Path::new(&src);
+
+        if !src_path.exists() {
+            failed.push(MoveFailure { src: src.clone(), error: "源不存在".into() });
+            continue;
+        }
+
+        if src_path.is_dir() && (dst == src_path || dst.starts_with(src_path)) {
+            failed.push(MoveFailure {
+                src: src.clone(),
+                error: "目标在源目录内".into(),
+            });
+            continue;
+        }
+
+        let name = src_path.file_name().unwrap_or_default().to_string_lossy();
+        let base_dst_path = dst.join(name.as_ref());
+        let dst_path = match conflict_strategy {
+            MoveConflictStrategy::Abort => base_dst_path,
+            MoveConflictStrategy::KeepBoth => unique_destination(&base_dst_path),
+            MoveConflictStrategy::Replace => {
+                if base_dst_path == src_path {
+                    failed.push(MoveFailure {
+                        src: src.clone(),
+                        error: "不能替换自身".into(),
+                    });
+                    continue;
+                }
+                if base_dst_path.exists() {
+                    let remove_result = if base_dst_path.is_dir() {
+                        fs::remove_dir_all(&base_dst_path)
+                    } else {
+                        fs::remove_file(&base_dst_path)
+                    };
+                    if let Err(e) = remove_result {
+                        failed.push(MoveFailure {
+                            src: src.clone(),
+                            error: format!("替换目标失败: {}", e),
+                        });
+                        continue;
+                    }
+                }
+                base_dst_path
+            }
+        };
+
+        let copy_outcome = if src_path.is_dir() {
+            copy_dir_recursive(src_path, &dst_path)
+        } else {
+            fs::copy(src_path, &dst_path)
+                .map(|_| ())
+                .map_err(|e| format!("复制失败: {}", e))
+        };
+
+        match copy_outcome {
+            Ok(_) => copied.push(dst_path.to_string_lossy().into()),
+            Err(e) => failed.push(MoveFailure { src: src.clone(), error: e }),
+        }
+    }
+
+    Ok(CopyResult { copied, failed, conflicts })
 }
 
 #[tauri::command]
@@ -985,6 +1167,8 @@ fn shell_quote(value: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .manage(FileClipboardState(Mutex::new(None)))
+        .manage(FileDragState(Mutex::new(None)))
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -1040,7 +1224,14 @@ pub fn run() {
             list_volumes,
             eject_volume,
             copy_file,
+            copy_files,
             move_file,
+            set_file_clipboard,
+            get_file_clipboard,
+            clear_file_clipboard,
+            set_file_drag_payload,
+            get_file_drag_payload,
+            clear_file_drag_payload,
             move_files,
             rename_file,
             delete_to_trash,

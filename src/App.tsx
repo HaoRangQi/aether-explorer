@@ -140,6 +140,14 @@ export default function App() {
   const activeTab = useMemo(() => tabs.find(tab => tab.id === view), [tabs, view]);
   const activeTabPath = activeTab?.currentPath || activeTab?.initialPath;
 
+  useEffect(() => {
+    const focusWindow = () => {
+      void getCurrentWindow().setFocus().catch(() => {});
+    };
+    document.addEventListener('contextmenu', focusWindow, true);
+    return () => document.removeEventListener('contextmenu', focusWindow, true);
+  }, []);
+
   const createNewWindow = useCallback((tab?: TabData) => {
     const path = tab?.currentPath || tab?.initialPath;
     const label = tab?.label || (path ? getPathLeaf(path) : undefined);
