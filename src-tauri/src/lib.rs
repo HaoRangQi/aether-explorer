@@ -15,8 +15,14 @@ struct FileEntry {
     is_dir: bool,
     size: String,
     modified: String,
+    created: String,
+    added: String,
+    #[serde(rename = "lastOpened")]
+    last_opened: String,
     #[serde(rename = "type")]
     file_type: String,
+    #[serde(rename = "iconPath", skip_serializing_if = "Option::is_none")]
+    icon_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -88,6 +94,9 @@ fn parse_df_line(line: &str) -> Result<(&str, &str, &str, &str, &str, String), S
 
 fn detect_mime(name: &str, is_dir: bool) -> String {
     if is_dir {
+        if name.to_lowercase().ends_with(".app") {
+            return "application".into();
+        }
         return "folder".into();
     }
 
@@ -110,6 +119,54 @@ fn detect_mime(name: &str, is_dir: bool) -> String {
     .into()
 }
 
+fn find_app_icon_path(app_path: &Path) -> Option<String> {
+    let resources_dir = app_path.join("Contents").join("Resources");
+    if !resources_dir.is_dir() {
+        return None;
+    }
+
+    let info_plist = app_path.join("Contents").join("Info.plist");
+    if info_plist.exists() {
+        if let Ok(output) = std::process::Command::new("plutil")
+            .args(["-extract", "CFBundleIconFile", "raw", "-o", "-"])
+            .arg(&info_plist)
+            .output()
+        {
+            if output.status.success() {
+                let icon_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !icon_name.is_empty() {
+                    let candidates = if Path::new(&icon_name).extension().is_some() {
+                        vec![resources_dir.join(&icon_name)]
+                    } else {
+                        vec![
+                            resources_dir.join(format!("{}.icns", icon_name)),
+                            resources_dir.join(&icon_name),
+                        ]
+                    };
+
+                    for candidate in candidates {
+                        if candidate.exists() {
+                            return Some(candidate.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fs::read_dir(resources_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("icns"))
+                .unwrap_or(false)
+        })
+        .map(|path| path.to_string_lossy().to_string())
+}
+
 fn format_modified(metadata: &fs::Metadata) -> String {
     metadata
         .modified()
@@ -119,6 +176,34 @@ fn format_modified(metadata: &fs::Metadata) -> String {
             Some(dt.format("%Y-%m-%d %H:%M").to_string())
         })
         .unwrap_or_else(|| "未知".into())
+}
+
+fn format_system_time(time: Option<SystemTime>) -> String {
+    time.map(|t| {
+        let dt: chrono::DateTime<chrono::Local> = t.into();
+        dt.format("%Y-%m-%d %H:%M").to_string()
+    })
+    .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn read_mdls_date(path: &Path, attr: &str) -> String {
+    std::process::Command::new("mdls")
+        .args(["-raw", "-name", attr])
+        .arg(path)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != "(null)" && value != "null")
+        .map(|value| value.split(" +").next().unwrap_or(&value).to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_mdls_date(_path: &Path, _attr: &str) -> String {
+    String::new()
 }
 
 #[tauri::command]
@@ -152,7 +237,14 @@ fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>,
             format_size(metadata.len())
         };
         let modified = format_modified(&metadata);
+        let created = format_system_time(metadata.created().ok());
+        // 性能保护：目录列表不做逐项 mdls 查询，避免大目录刷新长时间转圈。
+        // 详细时间字段仍可通过 get_file_info 按需获取。
+        let added = String::new();
+        let last_opened = String::new();
         let file_type = detect_mime(&name, is_dir);
+        // 性能保护：目录列表阶段不解析 app bundle 图标，防止大量 plutil 调用造成卡顿。
+        let icon_path = None;
 
         let fe = FileEntry {
             name,
@@ -160,7 +252,11 @@ fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>,
             is_dir,
             size,
             modified,
+            created,
+            added,
+            last_opened,
             file_type,
+            icon_path,
         };
 
         if is_dir {
@@ -885,9 +981,27 @@ fn get_file_info(path: String) -> Result<FileEntry, String> {
     let is_dir = metadata.is_dir();
     let size = if is_dir { "--".into() } else { format_size(metadata.len()) };
     let modified = format_modified(&metadata);
+    let created = format_system_time(metadata.created().ok());
+    let added = read_mdls_date(p, "kMDItemDateAdded");
+    let last_opened = read_mdls_date(p, "kMDItemLastUsedDate");
     let file_type = detect_mime(&name, is_dir);
+    let icon_path = if file_type == "application" {
+        find_app_icon_path(p)
+    } else {
+        None
+    };
 
-    Ok(FileEntry { name, path, is_dir, size, modified, file_type })
+    Ok(FileEntry { name, path, is_dir, size, modified, created, added, last_opened, file_type, icon_path })
+}
+
+#[tauri::command]
+fn open_with(path: String, app_name: String) -> Result<(), String> {
+    std::process::Command::new("open")
+        .args(["-a", &app_name])
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("无法使用 {} 打开: {}", app_name, e))?;
+    Ok(())
 }
 
 fn add_dir_to_zip(
@@ -1245,7 +1359,8 @@ pub fn run() {
             open_devtools,
             quick_look,
             reveal_in_finder,
-            open_path
+            open_path,
+            open_with
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

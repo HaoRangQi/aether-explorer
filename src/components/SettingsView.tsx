@@ -166,6 +166,17 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
     }
   };
 
+  const handlePickDefaultHome = async () => {
+    const selected = await open({ multiple: false, directory: true });
+    if (selected && typeof selected === 'string') {
+      onThemeChange({ ...theme, defaultHomePath: selected });
+    }
+  };
+
+  const handleResetDefaultHome = () => {
+    onThemeChange({ ...theme, defaultHomePath: 'aether://favorites' });
+  };
+
   const resetActionForm = () => {
     setEditingExtensionId(null);
     setNewActionLabel('');
@@ -1405,6 +1416,35 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
         </h3>
         
         <div className="space-y-2">
+          <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group gap-6">
+            <div className="space-y-1 min-w-0">
+              <h4 className="text-[15px] font-bold text-on-surface flex items-center gap-2">
+                <Folder className="w-4 h-4 text-primary" />
+                {t('settings.defaultHomePath', '默认主页目录')}
+              </h4>
+              <p className="text-[12px] text-on-surface/50">
+                {t('settings.defaultHomePathDesc', '应用启动时的主页，以及侧栏“主页”入口默认打开的位置。')}
+              </p>
+              <p className="text-[12px] font-mono text-on-surface/35 truncate">
+                {theme.defaultHomePath || 'aether://favorites'}
+              </p>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                onClick={handleResetDefaultHome}
+                className="px-4 py-2 rounded-2xl bg-primary/10 text-primary text-[12px] font-black hover:bg-primary/20 transition-colors"
+              >
+                {t('settings.resetDefaultHome', '恢复我的收藏')}
+              </button>
+              <button
+                onClick={handlePickDefaultHome}
+                className="px-4 py-2 rounded-2xl bg-primary text-on-primary text-[12px] font-black hover:bg-primary/90 transition-colors"
+              >
+                {t('settings.chooseDefaultHome', '选择目录')}
+              </button>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group">
             <div className="space-y-1">
               <h4 className="text-[15px] font-bold text-on-surface flex items-center gap-2">

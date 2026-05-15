@@ -75,3 +75,18 @@ Explorer Active Tab
 1. 文件管理器的“语义实体”是路径，不是标签名。用标签名驱动导航状态会在“进入子目录”后立刻偏离用户认知。
 2. 单击/双击冲突是经典时序问题，前端必须显式建模；依赖浏览器默认事件顺序会出现平台差异。
 3. 设置页这类“工具面板”不应破坏 Explorer 生命周期，否则会触发难排查的状态回退。
+
+## 03.10 增量记录（2026-05-15，默认主页可配置）
+
+- 新增 `ThemeSettings.defaultHomePath`，将“主页”从固定路径升级为可配置路径，启动默认标签和侧栏 `desktop/home` 映射统一走该字段。
+- 侧栏高亮规则增加虚拟路径优先级：当 `currentPath === aether://favorites` 时，固定高亮“我的收藏”，避免“主页”和“我的收藏”同路径时的高亮冲突。
+- 虚拟根识别从“基于 view id”改为“基于 currentPath”：`aether://favorites`、`aether://recent`、`aether://tags/*` 在任何 tab id 下都能保持一致文案与行为。
+
+**代码锚点：**
+
+- `src/types.ts:85` — `ThemeSettings.defaultHomePath`
+- `src/App.tsx:54` — `getInitialTabs(defaultHomePath)` 启动默认标签
+- `src/App.tsx:175` — 旧 `favorites-list` 标签向 `desktop` 主页标签迁移
+- `src/components/Sidebar.tsx:77` — `desktop/home` 映射到默认主页
+- `src/components/Sidebar.tsx:318` — 虚拟路径优先级激活态
+- `src/components/ExplorerView.tsx:419` — 虚拟根按 `currentPath` 判定

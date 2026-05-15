@@ -25,6 +25,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ViewMode, ThemeSettings, VolumeInfo, TabData } from '../types';
 
 const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
+const RECENT_VIRTUAL_PATH = 'aether://recent';
 const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
 
 interface DiskInfo {
@@ -71,14 +72,14 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
 
   const getMenuPath = (id: string) => {
     if (id === 'favorites-list') return FAVORITES_VIRTUAL_PATH;
+    if (id === 'recent') return RECENT_VIRTUAL_PATH;
     if (id.startsWith('tag-')) return `${TAGS_VIRTUAL_PREFIX}${id}`;
+    if (id === 'desktop' || id === 'home') return theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
     if (!homeDir) return undefined;
     const paths: Record<string, string> = {
       downloads: `${homeDir}/Downloads`,
       documents: `${homeDir}/Documents`,
-      desktop: homeDir,
       applications: '/Applications',
-      home: homeDir,
       icloud: `${homeDir}/Library/Mobile Documents/com~apple~CloudDocs`,
       macos: '/',
       network: '/Volumes',
@@ -313,9 +314,18 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
             )}
             {(!section.collapsible || !collapsedSections[section.title]) && section.items.map((item) => {
               const menuPath = getMenuPath(item.id);
-              const isActive = menuPath
-                ? currentPath === menuPath
-                : currentView === item.id || currentView.startsWith(item.id + '-');
+              const isVirtualFavorites = currentPath === FAVORITES_VIRTUAL_PATH;
+              const isVirtualRecent = currentPath === RECENT_VIRTUAL_PATH;
+              const isVirtualTag = Boolean(currentPath?.startsWith(TAGS_VIRTUAL_PREFIX));
+              const isActive = item.id === 'favorites-list'
+                ? isVirtualFavorites
+                : item.id === 'recent'
+                  ? isVirtualRecent
+                  : item.id.startsWith('tag-')
+                    ? currentPath === `${TAGS_VIRTUAL_PREFIX}${item.id}`
+                    : menuPath
+                      ? currentPath === menuPath && !isVirtualFavorites && !isVirtualRecent && !isVirtualTag
+                      : currentView === item.id || currentView.startsWith(item.id + '-');
               const Icon = item.icon;
               return (
                 <button

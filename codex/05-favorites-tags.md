@@ -100,3 +100,37 @@ localStorage + settings.json(store)
 2. 任何“批量元数据操作”（收藏、标签、评分）都要以绝对路径作为主键，避免视图切换后数据错位。
 3. 系统菜单和自绘菜单的能力面需要对齐，否则用户会认为功能“不稳定”或“有时可用有时不可用”。
 4. i18n 占位符风格要前后端统一，单花括号和双花括号混用会直接暴露到 UI 文本。
+
+## 05.10 增量记录（2026-05-15，近期体验修复）
+
+### A. 收藏页进入目录卡顿/假死
+
+- **现象**: 从“我的收藏”进入真实目录时，长时间转圈或疑似卡死；从普通目录进入同路径通常秒开。
+- **根因**:  
+  1) 目录列表阶段对每个条目同步调用 `mdls` 和 `.app` 图标解析，I/O 过重；  
+  2) 请求代次保护实现位置不当，`recentItems` 更新会误使当前目录请求过期，造成 loading 状态异常收口。
+- **修复**:  
+  1) `list_directory` 阶段不再逐项做 `mdls`/icon 解析，仅保留基础元数据；  
+  2) `loadRequestSeqRef` 改为“仅在分支实际发起请求时自增”，并在回写点校验 requestId。
+
+**代码锚点：**
+
+- `src-tauri/src/lib.rs:243` / `:244` / `:247` — 列表阶段跳过 `added` / `last_opened` / `icon_path`
+- `src/components/ExplorerView.tsx:606` / `:633` / `:659` / `:684` — 分支内请求代次控制
+- `src/components/ExplorerView.tsx:2209` — `refreshCurrentDir` 统一 requestId 保护
+
+### B. 打开方式子菜单（原生设计版）
+
+- **目标**: 右键菜单只显示“打开方式”，鼠标悬停展开子菜单；子菜单含“其它…”，允许用户从应用程序列表选择。
+- **落地**:  
+  1) 系统菜单保持 `Submenu`，新增“其它…”项；  
+  2) 自绘菜单改为悬停子菜单，不再在主菜单铺一排默认应用；  
+  3) 修复子菜单显示异常：父容器与内层滚动容器均放开裁切（`overflow-visible`），避免只露出细条。
+
+**代码锚点：**
+
+- `src/components/ExplorerView.tsx:2067` / `:2077` — 系统菜单 `openWith` + `openWithOther`
+- `src/components/ExplorerView.tsx:2279` — `handleOpenWithOther`
+- `src/components/ExplorerView.tsx:3498` — 自绘菜单悬停子菜单入口
+- `src/components/ExplorerView.tsx:3445` / `:3452` — 右键菜单容器 overflow 修复
+- `src/i18n/locales/zh.ts:147` / `src/i18n/locales/en.ts:133` — `openWithOther` 文案

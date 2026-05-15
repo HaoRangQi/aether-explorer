@@ -8,7 +8,11 @@ interface RawFileEntry {
   is_dir: boolean;
   size: string;
   modified: string;
+  created?: string;
+  added?: string;
+  lastOpened?: string;
   type: string;
+  iconPath?: string;
 }
 
 function mapEntry(item: RawFileEntry): FileItem {
@@ -18,12 +22,17 @@ function mapEntry(item: RawFileEntry): FileItem {
     type: item.type as FileItem['type'],
     size: item.size,
     modified: item.modified,
+    created: item.created,
+    added: item.added,
+    lastOpened: item.lastOpened,
     path: item.path,
   };
 
-  // Generate asset URL for image thumbnails
+  // Generate asset URL for image thumbnails and macOS app bundle icons.
   if (item.type === 'image') {
     mapped.thumbnail = convertFileSrc(item.path);
+  } else if (item.type === 'application' && item.iconPath) {
+    mapped.thumbnail = convertFileSrc(item.iconPath);
   }
 
   return mapped;

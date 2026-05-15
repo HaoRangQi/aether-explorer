@@ -1,9 +1,12 @@
 export interface FileItem {
   id: string;
   name: string;
-  type: 'file' | 'folder' | 'image' | 'video' | 'audio' | 'pdf' | 'archive' | 'code' | 'text';
+  type: 'file' | 'folder' | 'application' | 'image' | 'video' | 'audio' | 'pdf' | 'archive' | 'code' | 'text';
   size?: string;
   modified: string;
+  created?: string;
+  added?: string;
+  lastOpened?: string;
   path: string;
   thumbnail?: string;
   tags?: string[];
@@ -15,7 +18,7 @@ export type ViewMode = string; // allow dynamic tab IDs
 
 export type DisplayMode = 'list' | 'grid' | 'column';
 
-export type GroupBy = 'none' | 'kind' | 'extension' | 'size' | 'modified';
+export type GroupBy = 'none' | 'name' | 'kind' | 'application' | 'lastOpened' | 'added' | 'modified' | 'created' | 'size' | 'tags';
 
 export interface ContextMenuAction {
   id: string;
@@ -79,6 +82,7 @@ export interface ThemeSettings {
   terminalArgs?: string;
   terminalScripts?: string[];
   customTerminalCommand?: string;
+  defaultHomePath?: string;
   language?: string;
   followSystemLanguage?: boolean;
   languageOptions?: LanguageOption[];

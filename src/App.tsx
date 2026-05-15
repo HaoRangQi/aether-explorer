@@ -14,6 +14,7 @@ import { ThemeSettings, ViewMode, TabData, ContextMenuAction } from './types';
 import { ACCENT_COLORS } from './constants';
 
 const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
+const MAX_RECENT_ITEMS = 100;
 
 const SettingsView = lazy(() => import('./components/SettingsView'));
 const StorageView = lazy(() => import('./components/StorageView'));
@@ -42,14 +43,15 @@ const DEFAULT_THEME: ThemeSettings = {
     { id: 'ai-scan', label: 'AI 智能扫描', enabled: false, actionType: 'placeholder', confirmExecution: false },
   ],
   terminalApp: 'Terminal',
-  terminalArgs: ''
+  terminalArgs: '',
+  defaultHomePath: FAVORITES_VIRTUAL_PATH,
 };
 
 function getPathLeaf(path: string) {
   return path.split('/').filter(Boolean).pop() || path || '主页';
 }
 
-function getInitialTabs(): TabData[] {
+function getInitialTabs(defaultHomePath: string): TabData[] {
   const params = new URLSearchParams(window.location.search);
   const initialPath = params.get('path');
   const label = params.get('label');
@@ -66,10 +68,11 @@ function getInitialTabs(): TabData[] {
 
   return [
     {
-      id: 'favorites-list',
-      labelTranslationKey: 'sidebar.favoritesList',
-      initialPath: FAVORITES_VIRTUAL_PATH,
-      currentPath: FAVORITES_VIRTUAL_PATH,
+      id: 'desktop',
+      labelTranslationKey: 'tabs.home',
+      label: defaultHomePath.startsWith('aether://') ? undefined : getPathLeaf(defaultHomePath),
+      initialPath: defaultHomePath,
+      currentPath: defaultHomePath,
     },
   ];
 }
@@ -128,6 +131,15 @@ function loadFileTagsFromLocalStorage(): Record<string, string[]> {
   }
 }
 
+function loadRecentItemsFromLocalStorage(): string[] {
+  try {
+    const saved = localStorage.getItem('aether-recent-items');
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
 function normalizeTransferredTab(tab: TabData): TabData {
   const path = tab.currentPath || tab.initialPath;
   return {
@@ -140,7 +152,8 @@ function normalizeTransferredTab(tab: TabData): TabData {
 
 export default function App() {
   const { t, i18n } = useTranslation();
-  const initialTabs = useMemo(() => getInitialTabs(), []);
+  const [theme, setTheme] = useState<ThemeSettings>(loadThemeFromLocalStorage);
+  const initialTabs = useMemo(() => getInitialTabs(theme.defaultHomePath || FAVORITES_VIRTUAL_PATH), [theme.defaultHomePath]);
   const [tabs, setTabs] = useState<TabData[]>(initialTabs);
   const [view, setView] = useState<ViewMode>(initialTabs[0]?.id || 'home');
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
@@ -151,11 +164,37 @@ export default function App() {
     window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   );
 
-  const [theme, setTheme] = useState<ThemeSettings>(loadThemeFromLocalStorage);
   const [favorites, setFavorites] = useState<string[]>(loadFavoritesFromLocalStorage);
   const [fileTags, setFileTags] = useState<Record<string, string[]>>(loadFileTagsFromLocalStorage);
+  const [recentItems, setRecentItems] = useState<string[]>(loadRecentItemsFromLocalStorage);
   const activeTab = useMemo(() => tabs.find(tab => tab.id === view), [tabs, view]);
   const activeTabPath = activeTab?.currentPath || activeTab?.initialPath;
+
+  useEffect(() => {
+    setTabs(prev => prev.map(tab => {
+      const defaultHomePath = theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
+      if (tab.id === 'favorites-list') {
+        return {
+          ...tab,
+          id: 'desktop',
+          labelTranslationKey: 'tabs.home',
+          label: defaultHomePath.startsWith('aether://') ? undefined : getPathLeaf(defaultHomePath),
+          initialPath: defaultHomePath,
+          currentPath: defaultHomePath,
+        };
+      }
+      if (tab.id !== 'desktop') return tab;
+      return {
+        ...tab,
+        initialPath: defaultHomePath,
+        currentPath: tab.currentPath?.startsWith('aether://') || tab.currentPath === tab.initialPath
+          ? defaultHomePath
+          : tab.currentPath,
+        label: defaultHomePath.startsWith('aether://') ? undefined : getPathLeaf(defaultHomePath),
+      };
+    }));
+    setView(prev => prev === 'favorites-list' ? 'desktop' : prev);
+  }, [theme.defaultHomePath]);
 
   useEffect(() => {
     const focusWindow = () => {
@@ -284,6 +323,11 @@ export default function App() {
         if (savedFileTags && mounted) {
           setFileTags(savedFileTags);
         }
+
+        const savedRecentItems = await s.get<string[]>('recentItems');
+        if (savedRecentItems && mounted) {
+          setRecentItems(savedRecentItems);
+        }
       } catch {
         // Not running in Tauri — keep localStorage values
       }
@@ -323,6 +367,20 @@ export default function App() {
       s.set('fileTags', fileTags);
     }).catch(() => {});
   }, [fileTags, storeReady]);
+
+  useEffect(() => {
+    localStorage.setItem('aether-recent-items', JSON.stringify(recentItems));
+
+    if (!storeReady) return;
+    loadSettingsStore().then(s => {
+      s.set('recentItems', recentItems);
+    }).catch(() => {});
+  }, [recentItems, storeReady]);
+
+  const handleRecordRecent = useCallback((path: string) => {
+    if (!path || path.startsWith('aether://')) return;
+    setRecentItems(prev => [path, ...prev.filter(item => item !== path)].slice(0, MAX_RECENT_ITEMS));
+  }, []);
 
   // Apply theme to document
   useEffect(() => {
@@ -616,6 +674,9 @@ export default function App() {
                     }}
                     fileTags={fileTags}
                     onFileTagsChange={setFileTags}
+                    recentItems={recentItems}
+                    onRecordRecent={handleRecordRecent}
+                    onClearRecent={() => setRecentItems([])}
                   />
                 </div>
               ))}

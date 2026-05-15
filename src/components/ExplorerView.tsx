@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, LayoutGrid, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw } from 'lucide-react';
+import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -36,7 +36,9 @@ const INTERNAL_FILE_DRAG_MIME = 'application/x-aether-file-paths';
 const FILE_DRAG_START_EVENT = 'aether-file-drag-start';
 const FILE_DRAG_END_EVENT = 'aether-file-drag-end';
 const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
+const RECENT_VIRTUAL_PATH = 'aether://recent';
 const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
+const OPEN_WITH_APPS = ['Finder', 'Preview', 'TextEdit', 'Safari', 'Google Chrome', 'Visual Studio Code'];
 const logDragDebug = (message: string) => {
   invoke('debug_log', { message }).catch(() => {});
 };
@@ -72,13 +74,16 @@ interface ExplorerViewProps {
   onToggleFavorite: (id: string) => void;
   fileTags: Record<string, string[]>;
   onFileTagsChange: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
+  recentItems: string[];
+  onRecordRecent: (path: string) => void;
+  onClearRecent: () => void;
   onThemeChange: (theme: ThemeSettings) => void;
   onViewChange: (view: ViewMode) => void;
   onTitleChange?: (tabId: string, title: string) => void;
   onPathChange?: (tabId: string, path: string) => void;
 }
 
-export default function ExplorerView({ view, isActive = false, currentTabLabelKey, initialPath, theme, selectedFileIds, onSelectFiles, onSelectionCountChange, onStartTransfer, onOpenTab, favorites, onToggleFavorite, fileTags, onFileTagsChange, onThemeChange, onViewChange, onTitleChange, onPathChange }: ExplorerViewProps) {
+export default function ExplorerView({ view, isActive = false, currentTabLabelKey, initialPath, theme, selectedFileIds, onSelectFiles, onSelectionCountChange, onStartTransfer, onOpenTab, favorites, onToggleFavorite, fileTags, onFileTagsChange, recentItems, onRecordRecent, onClearRecent, onThemeChange, onViewChange, onTitleChange, onPathChange }: ExplorerViewProps) {
   const { t } = useTranslation();
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, fileIds: string[], isBlank?: boolean } | null>(null);
   const [displayMode, setDisplayMode] = useState<DisplayMode>('list');
@@ -94,6 +99,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [favoriteFiles, setFavoriteFiles] = useState<FileItem[]>([]);
+  const [recentFiles, setRecentFiles] = useState<FileItem[]>([]);
   const [taggedFiles, setTaggedFiles] = useState<FileItem[]>([]);
   const [columnFilesCache, setColumnFilesCache] = useState<Record<string, FileItem[]>>({});
   const [loading, setLoading] = useState(false);
@@ -115,6 +121,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     count: number;
     active: boolean;
   } | null>(null);
+  const [contextSubmenu, setContextSubmenu] = useState<string | null>(null);
   const [moveConflictDialog, setMoveConflictDialog] = useState<MoveConflictDialogState | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -132,6 +139,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const fileDragClearTimerRef = useRef<number | null>(null);
   const draggedFileIdRef = useRef<string | null>(null);
   const internalDragRef = useRef<InternalDragState | null>(null);
+  const loadRequestSeqRef = useRef(0);
   const [contextMenuSize, setContextMenuSize] = useState<{ key: string; width: number; height: number } | null>(null);
 
   const [dirSize, setDirSize] = useState<{ bytes: number; formatted: string; file_count: number } | null>(null);
@@ -405,22 +413,28 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   // Sidebar view → real path mapping
   // Note: sidebar "主页" uses viewId 'desktop' (lucide Home icon)
   const baseView = view.replace(/-\d{13}$/, '');
-  const isFavoritesRoot = baseView === 'favorites-list' && currentPath === FAVORITES_VIRTUAL_PATH;
-  const isTagRoot = baseView.startsWith('tag-') && currentPath === getTagVirtualPath(baseView);
-  const isVirtualRoot = isFavoritesRoot || isTagRoot;
+  const activeTagId = currentPath.startsWith(TAGS_VIRTUAL_PREFIX)
+    ? currentPath.slice(TAGS_VIRTUAL_PREFIX.length)
+    : '';
+  const isFavoritesRoot = currentPath === FAVORITES_VIRTUAL_PATH;
+  const isRecentRoot = currentPath === RECENT_VIRTUAL_PATH;
+  const isTagRoot = currentPath.startsWith(TAGS_VIRTUAL_PREFIX);
+  const isVirtualRoot = isFavoritesRoot || isRecentRoot || isTagRoot;
   const virtualRootLabel = isFavoritesRoot
     ? t('sidebar.favoritesList', '我的收藏')
+    : isRecentRoot
+      ? t('sidebar.recent', '最近使用')
     : isTagRoot
-      ? getTagLabel(baseView)
+      ? getTagLabel(activeTagId)
       : '';
 
   const viewPathMap: Record<string, string> = {
     downloads: `${homeDir}/Downloads`,
     documents: `${homeDir}/Documents`,
-    desktop: homeDir,             // "主页" → ~/  (sidebar labels 'desktop' as 'home/主页')
+    desktop: theme.defaultHomePath || FAVORITES_VIRTUAL_PATH,
     applications: '/Applications',
-    home: homeDir,
-    recent: homeDir,
+    home: theme.defaultHomePath || FAVORITES_VIRTUAL_PATH,
+    recent: RECENT_VIRTUAL_PATH,
     icloud: `${homeDir}/Library/Mobile Documents/com~apple~CloudDocs`,
     macos: '/',
     airdrop: '/',
@@ -506,6 +520,31 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     onSelectFiles([]);
   };
 
+  const resetTabTransientState = () => {
+    setSearchQuery('');
+    setSortConfig(null);
+    setGroupBy('none');
+    setColumnPaths([]);
+    setColumnFilesCache({});
+    setBackStack([]);
+    setForwardStack([]);
+    setActiveDropdown(null);
+    setContextMenu(null);
+    setContextSubmenu(null);
+    setSelectionBox(null);
+    setIsMarqueeDragging(false);
+    setTypeaheadQuery('');
+    setLastActivatedFileId(null);
+    setPulseFileId(null);
+    setRenamingFile(null);
+    setRenameInput('');
+    setFileListOffset(0);
+    onSelectFiles([]);
+    containerRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    scrollContainerRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    setScrollTop(0);
+  };
+
   const navigateBack = () => {
     if (backStack.length === 0 || !currentPath) return;
     const previousPath = backStack[backStack.length - 1];
@@ -553,7 +592,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   // When sidebar view changes, navigate to mapped path
   React.useEffect(() => {
-    if (!homeDir && baseView !== 'favorites-list' && !baseView.startsWith('tag-')) return;
+    if (!homeDir && baseView !== 'favorites-list' && baseView !== 'recent' && !baseView.startsWith('tag-')) return;
     const mappedPath = resolveViewPath(view);
     if (mappedPath && mappedPath !== currentPath) {
       navigateToPath(mappedPath, { replace: true });
@@ -564,17 +603,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   useEffect(() => {
     let cancelled = false;
     if (!currentPath || isVirtualRoot) return;
+    const requestId = ++loadRequestSeqRef.current;
     setLoading(true);
     setLoadError('');
     setShowPermissionDialog(false);
     listDirectory(currentPath, theme.showHiddenFiles)
       .then(f => {
-        if (cancelled) return;
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
         setFiles(f);
         setLoadError('');
       })
       .catch(err => {
-        if (cancelled) return;
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
         const msg = String(err);
         setFiles([]);
         setLoadError(msg);
@@ -584,13 +624,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestId === loadRequestSeqRef.current) setLoading(false);
       });
     return () => { cancelled = true; };
   }, [currentPath, theme.showHiddenFiles, isVirtualRoot]);
 
   useEffect(() => {
     if (!isFavoritesRoot) return;
+    const requestId = ++loadRequestSeqRef.current;
     let cancelled = false;
     setLoading(true);
     setLoadError('');
@@ -598,23 +639,49 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     resolveFavoriteItems(favorites)
       .then(items => {
-        if (cancelled) return;
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
         setFavoriteFiles(items);
       })
       .catch(err => {
-        if (cancelled) return;
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
         setFavoriteFiles([]);
         setLoadError(String(err));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestId === loadRequestSeqRef.current) setLoading(false);
       });
 
     return () => { cancelled = true; };
   }, [favorites, isFavoritesRoot]);
 
   useEffect(() => {
+    if (!isRecentRoot) return;
+    const requestId = ++loadRequestSeqRef.current;
+    let cancelled = false;
+    setLoading(true);
+    setLoadError('');
+    setShowPermissionDialog(false);
+
+    resolveFavoriteItems(recentItems)
+      .then(items => {
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
+        setRecentFiles(items);
+      })
+      .catch(err => {
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
+        setRecentFiles([]);
+        setLoadError(String(err));
+      })
+      .finally(() => {
+        if (!cancelled && requestId === loadRequestSeqRef.current) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [recentItems, isRecentRoot]);
+
+  useEffect(() => {
     if (!isTagRoot) return;
+    const requestId = ++loadRequestSeqRef.current;
     let cancelled = false;
     setLoading(true);
     setLoadError('');
@@ -622,20 +689,20 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     resolveTaggedItems(baseView, fileTags)
       .then(items => {
-        if (cancelled) return;
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
         setTaggedFiles(items);
       })
       .catch(err => {
-        if (cancelled) return;
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
         setTaggedFiles([]);
         setLoadError(String(err));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestId === loadRequestSeqRef.current) setLoading(false);
       });
 
     return () => { cancelled = true; };
-  }, [baseView, fileTags, isTagRoot]);
+  }, [activeTagId, fileTags, isTagRoot]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -723,7 +790,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setColumnPaths([]);
   }, [view]);
   
-  const displayedFiles = isFavoritesRoot ? favoriteFiles : isTagRoot ? taggedFiles : files;
+  const displayedFiles = isFavoritesRoot ? favoriteFiles : isRecentRoot ? recentFiles : isTagRoot ? taggedFiles : files;
   const selectedFiles = useMemo(() => displayedFiles.filter(f => selectedFileIds.includes(f.id)), [selectedFileIds, displayedFiles]);
   const lastSelectedFile = useMemo(() => displayedFiles.find(f => f.id === selectedFileIds[selectedFileIds.length - 1]), [selectedFileIds, displayedFiles]);
   const isAdminContextMenuEmpty = useMemo(() => !(theme.contextMenuExtensions || []).some(ext => ext.enabled), [theme.contextMenuExtensions]);
@@ -1484,13 +1551,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
-  const getFileIcon = (type: FileItem['type']) => {
+  const getFileIcon = (type: FileItem['type'], thumbnail?: string) => {
+    if (type === 'application' && thumbnail) {
+      return <img src={thumbnail} alt="" className="w-6 h-6 object-contain drop-shadow-sm" draggable={false} />;
+    }
+
     switch (type) {
       case 'image': return <ImageIcon className="w-5 h-5 text-primary" />;
       case 'video': return <Video className="w-5 h-5 text-secondary" />;
       case 'pdf': return <FileText className="w-5 h-5 text-red-400" />;
       case 'archive': return <Archive className="w-5 h-5 text-yellow-400" />;
       case 'folder': return <Folder className="w-5 h-5 text-primary fill-current opacity-80" />;
+      case 'application': return <Archive className="w-5 h-5 text-primary" />;
       default: return <FileIcon className="w-5 h-5 text-on-surface/40" />;
     }
   };
@@ -1498,6 +1570,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const getFileTypeLabel = (type: FileItem['type']) => {
     switch (type) {
       case 'folder': return t('explorer.folder', '文件夹');
+      case 'application': return t('explorer.application', '应用程序');
       case 'image': return t('explorer.image', '图片');
       case 'video': return t('explorer.video', '视频');
       case 'audio': return t('explorer.audio', '音频');
@@ -1533,7 +1606,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }}
       >
         <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/15">
-          {getFileIcon(file.type)}
+          {getFileIcon(file.type, file.thumbnail)}
           {dragPreview.count > 1 && (
             <span className="absolute -right-2 -top-2 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-black text-on-primary shadow-lg">
               {dragPreview.count}
@@ -1607,7 +1680,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           <div className={`flex items-center flex-1 min-w-0 ${config.gap}`}>
             <div className={`${config.icon} rounded-lg flex items-center justify-center shrink-0 shadow-sm border border-on-surface/5 transition-colors ${isSelected ? 'bg-primary/20' : 'bg-primary/5'}`}>
                <div className={`flex items-center justify-center transition-transform ${config.scale}`}>
-                 {getFileIcon(file.type)}
+                 {getFileIcon(file.type, file.thumbnail)}
                </div>
             </div>
             {renamingFile?.id === file.id ? (
@@ -1670,7 +1743,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           }}
         >
           <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary/5 group-hover:bg-primary/10 transition-colors shrink-0">
-            {getFileIcon(file.type)}
+            {getFileIcon(file.type, file.thumbnail)}
           </div>
           <div className="flex-1 min-w-0 flex flex-col justify-center">
             {renamingFile?.id === file.id ? (
@@ -1727,7 +1800,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
               <div className="absolute bottom-0 left-0 right-0 p-4">
                 <div className="flex items-center gap-2 mb-1">
-                  {getFileIcon(file.type)}
+                  {getFileIcon(file.type, file.thumbnail)}
                   <span className="text-[10px] font-black bg-primary text-on-primary px-1.5 py-0.5 rounded-full shadow-lg">PNG</span>
                 </div>
                 {renamingFile?.id === file.id ? (
@@ -1738,7 +1811,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             ) : (
               <h3 className="select-none text-[14px] font-black text-white whitespace-normal break-all line-clamp-3 leading-tight drop-shadow-md">{formattedName}</h3>
             )}
-                <p className="text-[11px] text-white/90 font-black mt-1 drop-shadow-sm">{file.size} • {file.modified}</p>
+                <p className="text-[11px] text-white/90 font-black mt-1 drop-shadow-sm">{formatFileMeta(file)}</p>
                 {tags.length > 0 && <div className="flex gap-1 mt-2">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full border border-white/40" style={{ backgroundColor: TAG_COLORS[tag] || '#8e8e93' }} />)}</div>}
               </div>
             </>
@@ -1746,7 +1819,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             <>
               <div className="flex justify-between items-start">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center bg-primary/5 group-hover:bg-primary/10 transition-colors shrink-0`}>
-                  {getFileIcon(file.type)}
+                  {getFileIcon(file.type, file.thumbnail)}
                 </div>
               </div>
               <div className="mt-4 flex-1">
@@ -1758,7 +1831,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 ) : (
                   <h3 className="select-none text-[13px] font-black text-on-surface whitespace-normal break-all line-clamp-3 group-hover:text-primary transition-colors leading-snug">{formattedName}</h3>
                 )}
-                <p className="text-[10px] text-on-surface font-black mt-1">{file.size} • {file.modified}</p>
+                <p className="text-[10px] text-on-surface font-black mt-1">{formatFileMeta(file)}</p>
                 {tags.length > 0 && <div className="flex gap-1 mt-2">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full" style={{ backgroundColor: TAG_COLORS[tag] || '#8e8e93' }} />)}</div>}
               </div>
               {displayMode !== 'column' && (
@@ -1804,39 +1877,93 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     return [];
   };
 
+  const groupOptions: Array<{ id: GroupBy; label: string }> = [
+    { id: 'none', label: t('explorer.groupNone', '不分组') },
+    { id: 'name', label: t('explorer.groupName', '名称') },
+    { id: 'kind', label: t('explorer.groupKind', '种类') },
+    { id: 'application', label: t('explorer.groupApplication', '应用程序') },
+    { id: 'lastOpened', label: t('explorer.groupLastOpened', '上次打开日期') },
+    { id: 'added', label: t('explorer.groupAdded', '添加日期') },
+    { id: 'modified', label: t('explorer.groupModified', '修改日期') },
+    { id: 'created', label: t('explorer.groupCreated', '创建日期') },
+    { id: 'size', label: t('explorer.groupSize', '大小') },
+    { id: 'tags', label: t('explorer.groupTags', '标签') },
+  ];
+
+  const getDateGroup = (value?: string) => {
+    if (!value) return t('explorer.groupUnknown', '未知');
+    return value.split(' ')[0] || t('explorer.groupUnknown', '未知');
+  };
+
+  const getSizeGroup = (file: FileItem) => {
+    const size = file.size || '';
+    if (!size || size === '--') return t('explorer.groupSizeUnknown', '未知大小');
+
+    const parsed = Number.parseFloat(size);
+    if (Number.isNaN(parsed)) return t('explorer.groupSizeUnknown', '未知大小');
+
+    if (size.includes('GB') || size.includes('TB')) {
+      return t('explorer.groupSizeHuge', '超大');
+    }
+    if (size.includes('MB')) {
+      if (parsed >= 100) return t('explorer.groupSizeLarge', '大');
+      if (parsed >= 10) return t('explorer.groupSizeMedium', '中');
+      return t('explorer.groupSizeSmall', '小');
+    }
+    if (size.includes('KB')) {
+      return parsed >= 1024 ? t('explorer.groupSizeMedium', '中') : t('explorer.groupSizeSmall', '小');
+    }
+
+    return t('explorer.groupSizeSmall', '小');
+  };
+
+  const getGroupKey = (file: FileItem, mode: GroupBy) => {
+    switch (mode) {
+      case 'name':
+        return file.name.charAt(0).toUpperCase() || t('explorer.groupUnknown', '未知');
+      case 'kind':
+        return getFileTypeLabel(file.type);
+      case 'application':
+        return file.type === 'application'
+          ? t('explorer.application', '应用程序')
+          : t('explorer.groupNonApplication', '非应用程序');
+      case 'lastOpened':
+        return getDateGroup(file.lastOpened);
+      case 'added':
+        return getDateGroup(file.added);
+      case 'modified':
+        return getDateGroup(file.modified);
+      case 'created':
+        return getDateGroup(file.created);
+      case 'size':
+        return getSizeGroup(file);
+      case 'tags':
+        return file.tags?.[0] ? getTagLabel(file.tags[0]) : t('explorer.groupNoTags', '无标签');
+      case 'none':
+      default:
+        return t('explorer.groupAllFiles', '全部项目');
+    }
+  };
+
+  const formatFileMeta = (file: FileItem) => {
+    const parts = [file.size && file.size !== '--' ? file.size : '', file.modified].filter(Boolean);
+    return parts.length > 0 ? parts.join(' • ') : '--';
+  };
+
   const groupedFiles = useMemo<{ [key: string]: FileItem[] }>(() => {
-    if (groupBy === 'none') return { 'All Files': currentLevelFiles };
+    if (groupBy === 'none') {
+      return { [t('explorer.groupAllFiles', '全部项目')]: currentLevelFiles };
+    }
 
     const groups: { [key: string]: FileItem[] } = {};
     currentLevelFiles.forEach(file => {
-      let key = 'Other';
-      if (groupBy === 'kind') {
-        key = file.type.charAt(0).toUpperCase() + file.type.slice(1);
-      } else if (groupBy === 'extension') {
-        const ext = file.name.split('.').pop()?.toUpperCase();
-        key = ext && ext !== file.name.toUpperCase() ? ext : 'No Extension';
-      } else if (groupBy === 'size') {
-        const sizeStr = file.size || '0';
-        if (sizeStr === '--') key = 'Unknown';
-        else {
-          const val = parseFloat(sizeStr);
-          if (sizeStr.includes('GB')) key = 'Very Large (>1GB)';
-          else if (sizeStr.includes('MB')) {
-            if (val > 100) key = 'Large (100MB - 1GB)';
-            else if (val > 10) key = 'Medium (10MB - 100MB)';
-            else key = 'Small (1MB - 10MB)';
-          } else key = 'Tiny (<1MB)';
-        }
-      } else if (groupBy === 'modified') {
-        key = file.modified.includes('Just now') ? 'Today' : file.modified.split(' ')[0];
-      }
-      
+      const key = getGroupKey(file, groupBy);
       if (!groups[key]) groups[key] = [];
       groups[key].push(file);
     });
 
     return groups;
-  }, [currentLevelFiles, groupBy]);
+  }, [currentLevelFiles, groupBy, t]);
 
   // Load text preview for text/code/md files
   useEffect(() => {
@@ -1868,6 +1995,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     return currentPath.split('/').filter(Boolean);
   }, [currentPath]);
 
+  const currentDisplayTitle = isVirtualRoot
+    ? virtualRootLabel
+    : pathSegments.length > 0
+      ? pathSegments[pathSegments.length - 1]
+      : t('tabs.downloads', 'Downloads');
+
   useEffect(() => {
     const el = pathScrollRef.current;
     if (!el) return;
@@ -1884,7 +2017,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     await focusCurrentWindow();
     const currentWindow = getCurrentWindow();
     const primary = targetFiles[0] ?? null;
-    const items: Array<Awaited<ReturnType<typeof MenuItem.new>> | Awaited<ReturnType<typeof PredefinedMenuItem.new>>> = [];
+    const items: Array<
+      | Awaited<ReturnType<typeof MenuItem.new>>
+      | Awaited<ReturnType<typeof PredefinedMenuItem.new>>
+      | Awaited<ReturnType<typeof Submenu.new>>
+    > = [];
 
     const addSeparator = async () => {
       items.push(await PredefinedMenuItem.new({ item: 'Separator' }));
@@ -1928,6 +2065,19 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       items.push(await MenuItem.new({
         text: t('explorer.open', '打开'),
         action: () => { void handleOpenFile(primary); },
+      }));
+      items.push(await Submenu.new({
+        text: t('explorer.openWith', '打开方式'),
+        items: await Promise.all([
+          ...OPEN_WITH_APPS.map(appName => MenuItem.new({
+            text: appName,
+            action: () => { void handleOpenWith(primary, appName); },
+          })),
+          MenuItem.new({
+            text: t('explorer.openWithOther', '其它…'),
+            action: () => { void handleOpenWithOther(primary); },
+          }),
+        ]),
       }));
       items.push(await MenuItem.new({
         text: t('explorer.rename', '重命名'),
@@ -2036,6 +2186,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     if (isBlank) void refreshFileClipboardState();
+    setContextSubmenu(null);
     setContextMenu({ x: e.clientX, y: e.clientY, fileIds: newSelection, isBlank });
   };
 
@@ -2050,20 +2201,31 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return;
     }
 
+    setContextSubmenu(null);
     setContextMenu({ x: e.clientX, y: e.clientY, fileIds: [file.id] });
   };
 
   const refreshCurrentDir = async (fullRefresh = false) => {
+    const requestId = ++loadRequestSeqRef.current;
     if (fullRefresh) {
       setLoading(true);
-      setSearchQuery('');
-      setSortConfig(null);
-      setGroupBy('none');
+      resetTabTransientState();
     }
     try {
       if (isFavoritesRoot) {
         const entries = await resolveFavoriteItems(favorites);
+        if (requestId !== loadRequestSeqRef.current) return [] as FileItem[];
         setFavoriteFiles(entries);
+        if (fullRefresh) {
+          setLoading(false);
+          showFeedback(t('messages.refreshed'));
+        }
+        return entries;
+      }
+      if (isRecentRoot) {
+        const entries = await resolveFavoriteItems(recentItems);
+        if (requestId !== loadRequestSeqRef.current) return [] as FileItem[];
+        setRecentFiles(entries);
         if (fullRefresh) {
           setLoading(false);
           showFeedback(t('messages.refreshed'));
@@ -2072,6 +2234,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
       if (isTagRoot) {
         const entries = await resolveTaggedItems(baseView, fileTags);
+        if (requestId !== loadRequestSeqRef.current) return [] as FileItem[];
         setTaggedFiles(entries);
         if (fullRefresh) {
           setLoading(false);
@@ -2080,6 +2243,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         return entries;
       }
       const entries = await listDirectory(currentPath, theme.showHiddenFiles);
+      if (requestId !== loadRequestSeqRef.current) return [] as FileItem[];
       setFiles(entries);
       if (fullRefresh) {
         setLoading(false);
@@ -2093,12 +2257,38 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleOpenFile = (file: FileItem) => {
+    onRecordRecent(file.path);
     if (file.type === 'folder') {
       navigateToPath(file.path);
     } else {
       invoke('open_path', { path: file.path }).catch(err => console.error('打开失败:', err));
     }
     setContextMenu(null);
+    setContextSubmenu(null);
+  };
+
+  const handleOpenWith = async (file: FileItem, appName: string) => {
+    try {
+      await invoke('open_with', { path: file.path, appName });
+      onRecordRecent(file.path);
+    } catch (err) {
+      showFeedback(t('messages.openWithFailed', { error: String(err) }));
+    }
+    setContextMenu(null);
+    setContextSubmenu(null);
+  };
+
+  const handleOpenWithOther = async (file: FileItem) => {
+    const selected = await openDialog({ multiple: false, directory: false, defaultPath: '/Applications' });
+    if (!selected || typeof selected !== 'string') return;
+    try {
+      await invoke('open_with', { path: file.path, appName: selected });
+      onRecordRecent(file.path);
+    } catch (err) {
+      showFeedback(t('messages.openWithFailed', { error: String(err) }));
+    }
+    setContextMenu(null);
+    setContextSubmenu(null);
   };
 
   const getActionFiles = (file?: FileItem) => {
@@ -2462,7 +2652,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     : [];
 
   return (
-    <div className="h-full flex overflow-hidden">
+      <div className="h-full flex overflow-hidden">
       <div className="flex-1 flex flex-col overflow-hidden" onClick={() => { 
         if (!isMarqueeDragging) {
            setContextMenu(null); 
@@ -2594,8 +2784,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={t('topbar.searchPlaceholder') || "搜索文件..."}
-                  className="w-full bg-primary/5 border border-primary/30 rounded-xl py-2 pl-10 pr-4 text-[13px] text-on-surface placeholder:text-on-surface/40 focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary focus:bg-primary/10 transition-all h-10 hover:border-primary/60 shadow-[0_2px_8px_rgba(var(--primary-rgb),0.1)]"
+                  className="w-full bg-primary/5 border border-primary/30 rounded-xl py-2 pl-10 pr-9 text-[13px] text-on-surface placeholder:text-on-surface/40 focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary focus:bg-primary/10 transition-all h-10 hover:border-primary/60 shadow-[0_2px_8px_rgba(var(--primary-rgb),0.1)]"
                 />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-on-surface/45 hover:bg-primary/15 hover:text-on-surface transition-colors"
+                    title={t('common.clear', '清空')}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -2630,14 +2830,30 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
             <section className="flex-1 flex flex-col min-h-0 relative">
               <div className="flex justify-between items-center mb-3 shrink-0">
-                <h2 className="text-[17px] font-bold text-on-surface">
-                  {isVirtualRoot ? virtualRootLabel : pathSegments.length > 0 ? pathSegments[pathSegments.length - 1] : t('tabs.downloads', 'Downloads')}
-                </h2>
+                <div className="min-w-0 flex-1 pr-4">
+                  <h2
+                    className="max-w-[22rem] truncate text-[17px] font-bold text-on-surface"
+                    title={currentDisplayTitle}
+                  >
+                    {currentDisplayTitle}
+                  </h2>
+                </div>
                   <div className="flex items-center gap-4">
-                  {view !== 'downloads' && <button className="text-[12px] text-primary font-semibold hover:underline">{t('explorer.viewAll')}</button>}
+                  {!isVirtualRoot && view !== 'downloads' && <button className="text-[12px] text-primary font-semibold hover:underline">{t('explorer.viewAll')}</button>}
+                  {isRecentRoot && recentItems.length > 0 && (
+                    <button
+                      onClick={() => {
+                        onClearRecent();
+                        showFeedback(t('messages.recentCleared', '已清空最近使用'));
+                      }}
+                      className="text-[12px] text-on-surface/55 font-semibold hover:text-primary hover:underline"
+                    >
+                      {t('explorer.clearRecent', '清空')}
+                    </button>
+                  )}
                   
                   {/* Action Capsule */}
-          <div className="flex items-center bg-primary/5 p-1 rounded-xl border border-transparent mr-2 relative" ref={dropdownRef}>
+          <div className="flex items-center bg-primary/5 p-1 rounded-xl border border-transparent mr-2 relative" ref={dropdownRef} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
                     <button 
                       onClick={() => setActiveDropdown(activeDropdown === 'upload' ? null : 'upload')}
                       className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'upload' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
@@ -2669,20 +2885,21 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     <button 
                       onClick={() => setActiveDropdown(activeDropdown === 'group' ? null : 'group')}
                       className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'group' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
+                      title={t('explorer.groupBy', '分组')}
                     >
-                      <LayoutGrid className="w-4 h-4" />
+                      <Layers3 className="w-4 h-4" />
                     </button>
                     <button 
                       onClick={() => onThemeChange({ ...theme, showPreviewPanel: !theme.showPreviewPanel })}
                       className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${theme.showPreviewPanel ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
-                      title={theme.showPreviewPanel ? "Hide inspector" : "Show inspector"}
+                      title={theme.showPreviewPanel ? t('tooltips.hideInspector', '隐藏简介') : t('tooltips.showInspector', '显示简介')}
                     >
                       {theme.showPreviewPanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
                     </button>
                     <button 
                       onClick={() => onThemeChange({ ...theme, showHiddenFiles: !theme.showHiddenFiles })}
                       className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${theme.showHiddenFiles ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
-                      title={theme.showHiddenFiles ? "Hide hidden files" : "Show hidden files"}
+                      title={theme.showHiddenFiles ? t('tooltips.hideHiddenFiles', '隐藏隐藏文件') : t('tooltips.showHiddenFiles', '显示隐藏文件')}
                     >
                       {theme.showHiddenFiles ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -2743,16 +2960,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                           )}
                           {activeDropdown === 'group' && (
                             <div className="p-2 space-y-1">
-                              {[
-                                { id: 'none', label: '不分组' },
-                                { id: 'kind', label: '种类' },
-                                { id: 'extension', label: '扩展名' },
-                                { id: 'size', label: '大小' },
-                                { id: 'modified', label: '修改日期' }
-                              ].map(item => (
+                              {groupOptions.map(item => (
                                 <button 
                                   key={item.id}
-                                  onClick={() => { setGroupBy(item.id as GroupBy); setActiveDropdown(null); }}
+                                  onClick={() => { setGroupBy(item.id); setActiveDropdown(null); }}
                                   className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] ${groupBy === item.id ? 'bg-primary text-on-primary' : 'text-on-surface'}`}
                                 >
                                   {item.label}
@@ -2774,7 +2985,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                               <div className="my-1 h-px bg-primary/10" />
                               <button onClick={() => { handleSort('name'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByName', '按名称排序')}</button>
                               <button onClick={() => { handleSort('modified'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByModified', '按修改时间排序')}</button>
-                              <button onClick={() => { setGroupBy(groupBy === 'none' ? 'kind' : 'none'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{groupBy === 'none' ? t('explorer.useGroups', '使用群组') : t('explorer.disableGroups', '取消群组')}</button>
+                              <button onClick={() => { setGroupBy(groupBy === 'none' ? 'kind' : 'none'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{groupBy === 'none' ? t('explorer.useGroups', '启用分组') : t('explorer.disableGroups', '取消分组')}</button>
                             </div>
                           )}
                         </motion.div>
@@ -2866,6 +3077,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <div className="flex-1 min-h-0 flex items-center justify-center text-on-surface/30 text-sm">
                   {isFavoritesRoot
                     ? t('explorer.emptyFavorites', '暂无收藏')
+                    : isRecentRoot
+                      ? t('explorer.emptyRecent', '暂无最近使用')
                     : isTagRoot
                       ? t('explorer.emptyTag', '暂无此颜色标签的项目')
                       : t('explorer.emptyFolder', '此文件夹为空')}
@@ -3018,29 +3231,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <div ref={scrollContainerRef} className="flex gap-0 flex-1 min-h-0 overflow-x-auto overflow-y-hidden pb-4">
                   {allColumns.map((parentId, colIndex) => {
                     const filesInCol = getColumnFiles(parentId);
-                    
-                    // Apply grouping logic to column files too
                     const groupedColumnFiles: { [key: string]: FileItem[] } = {};
                     if (groupBy === 'none') {
-                      groupedColumnFiles['All Files'] = filesInCol;
+                      groupedColumnFiles[t('explorer.groupAllFiles', '全部项目')] = filesInCol;
                     } else {
                       filesInCol.forEach(file => {
-                        let key = 'Other';
-                        if (groupBy === 'kind') key = file.type.charAt(0).toUpperCase() + file.type.slice(1);
-                        else if (groupBy === 'extension') {
-                          const ext = file.name.split('.').pop()?.toUpperCase();
-                          key = ext && ext !== file.name.toUpperCase() ? ext : 'No Extension';
-                        } else if (groupBy === 'size') {
-                          const sizeStr = file.size || '0';
-                          if (sizeStr === '--') key = 'Unknown';
-                          else {
-                            const val = parseFloat(sizeStr);
-                            if (sizeStr.includes('GB')) key = 'Very Large (>1GB)';
-                            else if (sizeStr.includes('MB')) key = val > 100 ? 'Large' : (val > 10 ? 'Medium' : 'Small');
-                            else key = 'Tiny (<1MB)';
-                          }
-                        } else if (groupBy === 'modified') key = file.modified.split(' ')[0];
-                        
+                        const key = getGroupKey(file, groupBy);
                         if (!groupedColumnFiles[key]) groupedColumnFiles[key] = [];
                         groupedColumnFiles[key].push(file);
                       });
@@ -3131,13 +3327,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   </div>
                 ) : lastSelectedFile.type === 'image' && imagePreviewFailed ? (
                   <div className="w-full h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-[12px] text-on-surface/35 font-bold leading-relaxed">
-                    {getFileIcon(lastSelectedFile.type)}
+                    {getFileIcon(lastSelectedFile.type, lastSelectedFile.thumbnail)}
                     图片预览加载失败
                   </div>
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
                     <div className="transform group-hover:scale-110 transition-transform duration-500">
-                      {getFileIcon(lastSelectedFile.type)}
+                      {getFileIcon(lastSelectedFile.type, lastSelectedFile.thumbnail)}
                     </div>
                   </div>
                 )}
@@ -3246,14 +3442,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className={`fixed z-[100] w-56 shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-hidden ${
+          className={`fixed z-[100] w-56 shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-visible ${
             theme.useSystemContextMenu
               ? 'rounded-xl bg-surface/95 border border-on-surface/10 text-on-surface backdrop-blur-xl'
               : 'glass-panel bg-primary/10 border border-primary/20 rounded-2xl backdrop-blur-3xl'
           }`}
           style={contextMenuPosition || undefined}
         >
-          <div className="overflow-y-auto scrollbar-hide p-1.5 max-h-[50vh] space-y-0.5">
+          <div className="p-1.5 space-y-0.5 rounded-inherit overflow-visible">
             {contextMenu.isBlank ? (
               <>
                 {/* 第1分组: 新建文件夹 + 新建文件 */}
@@ -3297,6 +3493,38 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <button onClick={() => handleOpenFile(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <ExternalLink className="w-4 h-4" /> {t('explorer.open', '打开')}
                 </button>
+                <div
+                  className="relative"
+                  onMouseEnter={() => setContextSubmenu('openWith')}
+                  onMouseLeave={() => setContextSubmenu(prev => prev === 'openWith' ? null : prev)}
+                >
+                  <button className="w-full flex items-center justify-between gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                    <span className="flex items-center gap-3">
+                      <ExternalLink className="w-4 h-4" /> {t('explorer.openWith', '打开方式')}
+                    </span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                  {contextSubmenu === 'openWith' && (
+                    <div className="absolute left-full top-0 z-[110] ml-1 w-52 rounded-2xl border border-primary/20 bg-primary/10 p-1.5 shadow-2xl backdrop-blur-3xl">
+                      {OPEN_WITH_APPS.map((appName) => (
+                        <button
+                          key={appName}
+                          onClick={() => handleOpenWith(ctxFile, appName)}
+                          className="w-full rounded-lg px-3 py-1.5 text-left text-[12px] font-bold text-on-surface transition-all hover:bg-primary/10 hover:text-primary"
+                        >
+                          {appName}
+                        </button>
+                      ))}
+                      <div className="my-1 h-px bg-primary/10" />
+                      <button
+                        onClick={() => handleOpenWithOther(ctxFile)}
+                        className="w-full rounded-lg px-3 py-1.5 text-left text-[12px] font-bold text-on-surface transition-all hover:bg-primary/10 hover:text-primary"
+                      >
+                        {t('explorer.openWithOther', '其它…')}
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button onClick={() => handleRenameStart(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Edit3 className="w-4 h-4" /> {t('explorer.rename', '重命名')}
                 </button>
