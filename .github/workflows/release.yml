@@ -9,8 +9,9 @@
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   私钥密码；私钥无密码则填空字符串
 #
 # 说明：
-#   - tauri-action 只负责构建和签名
+#   - workflow 直接调用 Tauri CLI 构建和签名，不使用 tauri-action 上传半成品
 #   - latest.json 由 workflow 显式生成，确保包含平台 signature
+#   - 构建产物、签名、manifest 齐全后才统一上传到 GitHub Release
 
 name: release
 
@@ -37,6 +38,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -57,24 +60,42 @@ jobs:
       - name: Install npm deps
         run: npm ci
 
-      - name: Build & sign & release
-        uses: tauri-apps/tauri-action@v0.6.2
+      - name: Validate release inputs
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          tauriScript: npx @tauri-apps/cli
-          tagName: ${{ env.RELEASE_TAG }}
-          releaseName: ${{ env.RELEASE_TAG }}
-          releaseBody: 'Aether Explorer ${{ env.RELEASE_TAG }}'
-          releaseDraft: false
-          prerelease: false
-          args: --target universal-apple-darwin
-          includeUpdaterJson: false
-          updaterJsonPreferNsis: false
+        run: |
+          set -euo pipefail
 
-      - name: Upload updater manifest
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "invalid RELEASE_TAG: ${RELEASE_TAG}";
+            exit 1;
+          }
+          [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || {
+            echo "missing TAURI_SIGNING_PRIVATE_KEY secret";
+            exit 1;
+          }
+
+          VERSION="${RELEASE_TAG#v}"
+          TAURI_VERSION="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          CARGO_VERSION="$(awk -F ' *= *' '/^version = / { gsub(/\"/, "", $2); print $2; exit }' src-tauri/Cargo.toml)"
+
+          [ "$TAURI_VERSION" = "$VERSION" ] || {
+            echo "tauri.conf.json version $TAURI_VERSION does not match $RELEASE_TAG";
+            exit 1;
+          }
+          [ "$CARGO_VERSION" = "$VERSION" ] || {
+            echo "Cargo.toml version $CARGO_VERSION does not match $RELEASE_TAG";
+            exit 1;
+          }
+
+      - name: Build signed universal bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx @tauri-apps/cli build --target universal-apple-darwin
+
+      - name: Upload release assets and manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -119,5 +140,42 @@ jobs:
               }
             }' > "$LATEST_JSON"
 
-          gh release upload "$TAG" -R "$REPO" \
-            "$DMG" "$APP_TAR" "$APP_SIG" "$LATEST_JSON#latest.json" --clobber
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" -R "$REPO" \
+              "$DMG" "$APP_TAR" "$APP_SIG" "$LATEST_JSON#latest.json" --clobber
+          else
+            gh release create "$TAG" -R "$REPO" \
+              --title "$TAG" \
+              --notes "Aether Explorer $TAG" \
+              "$DMG" "$APP_TAR" "$APP_SIG" "$LATEST_JSON#latest.json"
+          fi
+
+          echo "Validating uploaded release assets..."
+          DMG_NAME="$(basename "$DMG")"
+          APP_SIG_NAME="$(basename "$APP_SIG")"
+          gh release view "$TAG" -R "$REPO" --json assets \
+            | jq -e \
+              --arg dmg "$DMG_NAME" \
+              --arg app "$APP_TAR_NAME" \
+              --arg sig "$APP_SIG_NAME" '
+                [.assets[].name] as $names
+                | ($names | index($dmg))
+                and ($names | index($app))
+                and ($names | index($sig))
+                and ($names | index("latest.json"))
+              ' >/dev/null
+
+          echo "Validating uploaded updater manifest..."
+          curl -fsSL --retry 5 --retry-delay 2 \
+            "https://github.com/$REPO/releases/download/$TAG/latest.json" \
+            | jq -e \
+              --arg version "$VERSION" \
+              --arg url "$APP_TAR_URL" '
+                .version == $version
+                and (.platforms["darwin-aarch64"].signature | length > 0)
+                and (.platforms["darwin-x86_64"].signature | length > 0)
+                and .platforms["darwin-aarch64"].url == $url
+                and .platforms["darwin-x86_64"].url == $url
+              ' >/dev/null
+
+          echo "Release $TAG is complete."
