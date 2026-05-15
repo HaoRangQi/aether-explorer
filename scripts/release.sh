@@ -65,12 +65,20 @@ echo "  Updater : $APP_TAR"
 echo "  Sig     : $APP_SIG"
 
 # ─── 生成 latest.json ────────────────────────────────────────────
-APP_TAR_NAME="$(basename "$APP_TAR")"
+STAGING_DIR="$(mktemp -d -t release-assets)"
+DMG_NAME="Aether.Explorer_${VERSION}_universal.dmg"
+APP_TAR_NAME="Aether.Explorer_universal.app.tar.gz"
+APP_SIG_NAME="Aether.Explorer_universal.app.tar.gz.sig"
+LATEST_JSON="$STAGING_DIR/latest.json"
+
+cp "$DMG" "$STAGING_DIR/$DMG_NAME"
+cp "$APP_TAR" "$STAGING_DIR/$APP_TAR_NAME"
+cp "$APP_SIG" "$STAGING_DIR/$APP_SIG_NAME"
+
 APP_TAR_URL="https://github.com/$REPO/releases/download/$TAG/$APP_TAR_NAME"
-SIG_CONTENT="$(cat "$APP_SIG")"
+SIG_CONTENT="$(cat "$STAGING_DIR/$APP_SIG_NAME")"
 PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-LATEST_JSON="$(mktemp -t latest-json).json"
 jq -n \
   --arg version "$VERSION" \
   --arg notes "Aether Explorer $VERSION" \
@@ -89,17 +97,33 @@ jq -n \
 
 echo "📄 latest.json 已生成：$LATEST_JSON"
 
+cleanup_asset() {
+  local name="$1"
+  gh release delete-asset "$TAG" -R "$REPO" "$name" -y >/dev/null 2>&1 || true
+}
+
+cleanup_asset "Aether.Explorer.app.tar.gz"
+cleanup_asset "Aether.Explorer.app.tar.gz.sig"
+cleanup_asset "latest-json.y2Bv5nM25Z.json"
+
 # ─── 上传到 GitHub Release ───────────────────────────────────────
 if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
   echo "♻️  Release $TAG 已存在，覆盖上传 assets..."
   gh release upload "$TAG" -R "$REPO" \
-    "$DMG" "$APP_TAR" "$APP_SIG" "$LATEST_JSON#latest.json" --clobber
+    "$STAGING_DIR/$DMG_NAME" \
+    "$STAGING_DIR/$APP_TAR_NAME" \
+    "$STAGING_DIR/$APP_SIG_NAME" \
+    "$LATEST_JSON" \
+    --clobber
 else
   echo "✨ 创建新 Release $TAG..."
   gh release create "$TAG" -R "$REPO" \
     --title "$TAG" \
     --notes "Aether Explorer $VERSION" \
-    "$DMG" "$APP_TAR" "$APP_SIG" "$LATEST_JSON#latest.json"
+    "$STAGING_DIR/$DMG_NAME" \
+    "$STAGING_DIR/$APP_TAR_NAME" \
+    "$STAGING_DIR/$APP_SIG_NAME" \
+    "$LATEST_JSON"
 fi
 
 echo "📤 Release 资产已上传：$TAG"
@@ -108,32 +132,41 @@ echo "   manifest：https://github.com/$REPO/releases/latest/download/latest.jso
 
 # ─── 上传后验收 ──────────────────────────────────────────────────
 echo "🔎 验收远程 Release 资产..."
-DMG_NAME="$(basename "$DMG")"
-APP_SIG_NAME="$(basename "$APP_SIG")"
-
-gh release view "$TAG" -R "$REPO" --json assets \
-  | jq -e \
-    --arg dmg "$DMG_NAME" \
-    --arg app "$APP_TAR_NAME" \
-    --arg sig "$APP_SIG_NAME" '
-      [.assets[].name] as $names
-      | ($names | index($dmg))
-      and ($names | index($app))
-      and ($names | index($sig))
-      and ($names | index("latest.json"))
-    ' >/dev/null
+for attempt in 1 2 3 4 5; do
+  if gh release view "$TAG" -R "$REPO" --json assets \
+    | jq -e \
+      --arg dmg "$DMG_NAME" \
+      --arg app "$APP_TAR_NAME" \
+      --arg sig "$APP_SIG_NAME" '
+        [.assets[].name] as $names
+        | ($names | index($dmg))
+        and ($names | index($app))
+        and ($names | index($sig))
+        and ($names | index("latest.json"))
+      ' >/dev/null; then
+    break
+  fi
+  [ "$attempt" -lt 5 ] || { echo "❌ Release 资产校验失败"; exit 1; }
+  sleep 2
+done
 
 echo "🔎 验收 updater manifest..."
-curl -fsSL --retry 5 --retry-delay 2 \
-  "https://github.com/$REPO/releases/download/$TAG/latest.json" \
-  | jq -e \
-    --arg version "$VERSION" \
-    --arg url "$APP_TAR_URL" '
-      .version == $version
-      and (.platforms["darwin-aarch64"].signature | length > 0)
-      and (.platforms["darwin-x86_64"].signature | length > 0)
-      and .platforms["darwin-aarch64"].url == $url
-      and .platforms["darwin-x86_64"].url == $url
-    ' >/dev/null
+for attempt in 1 2 3 4 5; do
+  if curl -fsSL --retry 5 --retry-delay 2 \
+    "https://github.com/$REPO/releases/download/$TAG/latest.json" \
+    | jq -e \
+      --arg version "$VERSION" \
+      --arg url "$APP_TAR_URL" '
+        .version == $version
+        and (.platforms["darwin-aarch64"].signature | length > 0)
+        and (.platforms["darwin-x86_64"].signature | length > 0)
+        and .platforms["darwin-aarch64"].url == $url
+        and .platforms["darwin-x86_64"].url == $url
+      ' >/dev/null; then
+    break
+  fi
+  [ "$attempt" -lt 5 ] || { echo "❌ updater manifest 校验失败"; exit 1; }
+  sleep 2
+done
 
 echo "✅ 远程发布验收通过：$TAG"

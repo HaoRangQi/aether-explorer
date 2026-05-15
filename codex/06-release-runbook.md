@@ -152,6 +152,8 @@ bash scripts/release.sh
 | `latest.json.version` 还是旧版本 | tag、Tauri version、manifest 生成参数不一致 | 重新核对 `RELEASE_TAG` 和两处版本源，不要手改 manifest 凑数 |
 | updater 检查失败 `missing field signature` | `latest.json` 没有 `platforms.*.signature` | 重新生成 manifest，signature 必须来自 `.app.tar.gz.sig` 完整内容 |
 | updater 检查失败 `signature mismatch` | app 内公钥和签名私钥不配套 | 同步 `tauri.conf.json` pubkey 与 GitHub Secret 私钥，重新发更高版本 |
+| Release 里出现 `latest-json.xxxxx.json` 而不是 `latest.json` | `gh release upload/create` 的 `file#label` 只改显示标签，不改真实资产名 | 上传前先把文件写成真正的 `latest.json`，不要依赖 label 冒充文件名 |
+| `latest.json` 里的 URL 指向 `Aether Explorer.app.tar.gz` 等旧名 | manifest 用了原始构建文件 basename，而不是最终上传资产名 | 先把 release 资产归一化命名，再基于最终文件名生成 manifest |
 
 ## 06.8 流程防卡规则
 
@@ -160,6 +162,7 @@ bash scripts/release.sh
 - CI 和本地脚本都必须在上传后验收，不准只负责上传。
 - 新增或修改发布资产命名时，必须同步修改 workflow、`scripts/release.sh` 和本文件的资产清单。
 - universal 构建产物优先从 `src-tauri/target/universal-apple-darwin/release/bundle` 读取，`src-tauri/target/release/bundle` 只作为 fallback。
+- 发布时先把产物复制到 staging 目录并改成最终上传名，再生成 `latest.json`；不要直接拿临时文件名或原始构建名拼 URL。
 - `latest.json` 不手写，不临时凑字段，只从实际 `.app.tar.gz.sig` 生成。
 - 任何一次发布事故都要把根因写回本文件或 `codex/01-updater.md`，不能只靠聊天记录记忆。
 
