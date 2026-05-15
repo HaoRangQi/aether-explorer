@@ -13,6 +13,7 @@ interface RawFileEntry {
   lastOpened?: string;
   type: string;
   iconPath?: string;
+  childCount?: number;
 }
 
 function mapEntry(item: RawFileEntry): FileItem {
@@ -25,6 +26,7 @@ function mapEntry(item: RawFileEntry): FileItem {
     created: item.created,
     added: item.added,
     lastOpened: item.lastOpened,
+    childCount: item.childCount,
     path: item.path,
   };
 

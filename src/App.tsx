@@ -31,6 +31,8 @@ const DEFAULT_THEME: ThemeSettings = {
   gridWidth: 180,
   gridHeight: 180,
   gridGap: 16,
+  mediaGridWidth: 376,
+  mediaGridHeight: 376,
   columnWidth: 280,
   columnHeight: 60,
   showHiddenFiles: false,

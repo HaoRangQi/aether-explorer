@@ -23,6 +23,8 @@ struct FileEntry {
     file_type: String,
     #[serde(rename = "iconPath", skip_serializing_if = "Option::is_none")]
     icon_path: Option<String>,
+    #[serde(rename = "childCount", skip_serializing_if = "Option::is_none")]
+    child_count: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -238,13 +240,37 @@ fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>,
         };
         let modified = format_modified(&metadata);
         let created = format_system_time(metadata.created().ok());
-        // 性能保护：目录列表不做逐项 mdls 查询，避免大目录刷新长时间转圈。
+        // 性能保护：目录列表不做逐项 mdls 查询，避免大目录刷新卡顿。
         // 详细时间字段仍可通过 get_file_info 按需获取。
         let added = String::new();
         let last_opened = String::new();
         let file_type = detect_mime(&name, is_dir);
         // 性能保护：目录列表阶段不解析 app bundle 图标，防止大量 plutil 调用造成卡顿。
         let icon_path = None;
+
+        let child_count = if is_dir {
+            fs::read_dir(&path)
+                .ok()
+                .map(|children| {
+                    children
+                        .flatten()
+                        .filter(|child| {
+                            if show_hidden {
+                                true
+                            } else {
+                                child
+                                    .file_name()
+                                    .to_str()
+                                    .map(|name| !name.starts_with('.'))
+                                    .unwrap_or(true)
+                            }
+                        })
+                        .count() as u64
+                })
+                .or(Some(0))
+        } else {
+            None
+        };
 
         let fe = FileEntry {
             name,
@@ -257,6 +283,7 @@ fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>,
             last_opened,
             file_type,
             icon_path,
+            child_count,
         };
 
         if is_dir {
@@ -990,8 +1017,16 @@ fn get_file_info(path: String) -> Result<FileEntry, String> {
     } else {
         None
     };
+    let child_count = if is_dir {
+        fs::read_dir(p)
+            .ok()
+            .map(|children| children.flatten().count() as u64)
+            .or(Some(0))
+    } else {
+        None
+    };
 
-    Ok(FileEntry { name, path, is_dir, size, modified, created, added, last_opened, file_type, icon_path })
+    Ok(FileEntry { name, path, is_dir, size, modified, created, added, last_opened, file_type, icon_path, child_count })
 }
 
 #[tauri::command]

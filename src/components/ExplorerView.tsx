@@ -1765,6 +1765,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     if (displayMode === 'grid') {
+      const isMediaItem = Boolean(file.thumbnail) && (file.type === 'image' || file.type === 'video');
+      const mediaWidth = theme.mediaGridWidth || 376;
+      const mediaHeight = theme.mediaGridHeight || 376;
+      const normalWidth = theme.gridWidth || theme.gridSize || 180;
+      const normalHeight = theme.gridHeight || theme.gridSize || 180;
       return (
         <motion.div
           key={file.id}
@@ -1787,21 +1792,25 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
             ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
             ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)]' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm'}
-            ${file.type === 'image' && file.thumbnail ? 'col-span-2 row-span-2 p-0 overflow-hidden' + (!isSelected ? ' !border-none !bg-transparent' : '') : ''}
+            ${isMediaItem ? 'p-0 overflow-hidden' + (!isSelected ? ' !border-none !bg-transparent' : '') : ''}
           `}
           style={{ 
-            width: file.type === 'image' && file.thumbnail ? `${(theme.gridWidth || theme.gridSize || 180) * 2 + (theme.gridGap || 16)}px` : `${theme.gridWidth || theme.gridSize || 180}px`,
-            height: file.type === 'image' && file.thumbnail ? `${(theme.gridHeight || theme.gridSize || 180) * 2 + (theme.gridGap || 16)}px` : `${theme.gridHeight || theme.gridSize || 180}px`
+            width: isMediaItem ? `${mediaWidth}px` : `${normalWidth}px`,
+            height: isMediaItem ? `${mediaHeight}px` : `${normalHeight}px`
           }}
         >
-          {file.type === 'image' && file.thumbnail && displayMode === 'grid' ? (
+          {isMediaItem && displayMode === 'grid' ? (
             <>
-              <img src={file.thumbnail} alt={file.name} className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:scale-105 transition-transform duration-700" />
+              {file.type === 'video' ? (
+                <video src={file.thumbnail} className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:scale-105 transition-transform duration-700" muted playsInline preload="metadata" />
+              ) : (
+                <img src={file.thumbnail} alt={file.name} className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:scale-105 transition-transform duration-700" />
+              )}
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
               <div className="absolute bottom-0 left-0 right-0 p-4">
                 <div className="flex items-center gap-2 mb-1">
                   {getFileIcon(file.type, file.thumbnail)}
-                  <span className="text-[10px] font-black bg-primary text-on-primary px-1.5 py-0.5 rounded-full shadow-lg">PNG</span>
+                  <span className="text-[10px] font-black bg-primary text-on-primary px-1.5 py-0.5 rounded-full shadow-lg">{file.type === 'video' ? 'VIDEO' : 'IMAGE'}</span>
                 </div>
                 {renamingFile?.id === file.id ? (
               <input value={renameInput} onChange={e => setRenameInput(e.target.value)}
@@ -1946,6 +1955,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const formatFileMeta = (file: FileItem) => {
+    if (file.type === 'folder' && typeof file.childCount === 'number') {
+      return t('explorer.folderItemsCount', { count: file.childCount, defaultValue: `${file.childCount} 个项目` });
+    }
     const parts = [file.size && file.size !== '--' ? file.size : '', file.modified].filter(Boolean);
     return parts.length > 0 ? parts.join(' • ') : '--';
   };

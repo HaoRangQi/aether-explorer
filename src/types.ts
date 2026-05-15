@@ -11,6 +11,7 @@ export interface FileItem {
   thumbnail?: string;
   tags?: string[];
   dimensions?: string;
+  childCount?: number;
   parentId?: string; // used for folder hierarchy if needed
 }
 
@@ -68,6 +69,8 @@ export interface ThemeSettings {
   gridWidth?: number;
   gridHeight?: number;
   gridGap?: number;
+  mediaGridWidth?: number;
+  mediaGridHeight?: number;
   columnWidth?: number;
   columnHeight?: number;
   showHiddenFiles?: boolean;

@@ -76,6 +76,8 @@ export default {
     fullDiskAccess: 'Full Disk Access',
     contextMenuExt: 'Context Menu Extensions',
     layoutControls: 'Layout Settings',
+    mediaGridWidth: 'Media Item Width',
+    mediaGridHeight: 'Media Item Height',
     swatches: 'Color Swatches',
     update: {
       title: 'Online Updates',
@@ -162,6 +164,7 @@ export default {
     emptyFavorites: 'No favorites yet',
     emptyRecent: 'No recent items yet',
     emptyTag: 'No items with this color tag',
+    folderItemsCount: '{{count}} items',
     itemsSelectedLabel: 'items selected',
     files: 'files',
     clickForInfo: 'Click Get Info to calculate',

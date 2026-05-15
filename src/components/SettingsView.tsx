@@ -761,6 +761,22 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                   </div>
                   <input type="range" min="4" max="64" step="4" value={theme.gridGap || 16} onChange={(e) => onThemeChange({ ...theme, gridGap: parseInt(e.target.value) })} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
                 </div>
+
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[12px] font-bold text-on-surface/60">{t('settings.mediaGridWidth', '多媒体项目宽度')}</label>
+                    <span className="text-[13px] font-black text-primary">{theme.mediaGridWidth || 376}px</span>
+                  </div>
+                  <input type="range" min="180" max="800" value={theme.mediaGridWidth || 376} onChange={(e) => onThemeChange({ ...theme, mediaGridWidth: parseInt(e.target.value) })} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[12px] font-bold text-on-surface/60">{t('settings.mediaGridHeight', '多媒体项目高度')}</label>
+                    <span className="text-[13px] font-black text-primary">{theme.mediaGridHeight || 376}px</span>
+                  </div>
+                  <input type="range" min="180" max="800" value={theme.mediaGridHeight || 376} onChange={(e) => onThemeChange({ ...theme, mediaGridHeight: parseInt(e.target.value) })} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
+                </div>
               </div>
             </div>
 
