@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
@@ -167,6 +168,122 @@ fn find_app_icon_path(app_path: &Path) -> Option<String> {
                 .unwrap_or(false)
         })
         .map(|path| path.to_string_lossy().to_string())
+}
+
+fn app_icon_cache_dir() -> PathBuf {
+    let base = std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    base.join("Library")
+        .join("Caches")
+        .join("Aether Explorer")
+        .join("AppIcons")
+}
+
+fn app_icon_cache_path(app_path: &Path, source_icon: Option<&Path>) -> PathBuf {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    app_path.to_string_lossy().hash(&mut hasher);
+    app_path
+        .metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+        .hash(&mut hasher);
+    source_icon
+        .and_then(|path| fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+        .hash(&mut hasher);
+    app_icon_cache_dir().join(format!("{:x}.png", hasher.finish()))
+}
+
+#[cfg(target_os = "macos")]
+fn export_workspace_app_icon(app_path: &Path, output_path: &Path) -> Result<(), String> {
+    let script = r#"
+ObjC.import('AppKit');
+ObjC.import('Foundation');
+const appPath = $.NSProcessInfo.processInfo.environment.objectForKey('AETHER_ICON_APP_PATH').js;
+const outputPath = $.NSProcessInfo.processInfo.environment.objectForKey('AETHER_ICON_OUTPUT_PATH').js;
+const icon = $.NSWorkspace.sharedWorkspace.iconForFile(appPath);
+if (!icon) throw new Error('NSWorkspace returned no icon');
+const data = icon.TIFFRepresentation;
+if (!data) throw new Error('icon has no TIFFRepresentation');
+const rep = $.NSBitmapImageRep.imageRepWithData(data);
+if (!rep) throw new Error('cannot create bitmap representation');
+const png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({}));
+if (!png) throw new Error('cannot encode png');
+if (!png.writeToFileAtomically(outputPath, true)) throw new Error('cannot write png');
+"#;
+
+    let output = std::process::Command::new("osascript")
+        .args(["-l", "JavaScript", "-e", script])
+        .env("AETHER_ICON_APP_PATH", app_path)
+        .env("AETHER_ICON_OUTPUT_PATH", output_path)
+        .output()
+        .map_err(|e| format!("无法导出系统应用图标: {}", e))?;
+
+    if output.status.success() && output_path.exists() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn export_workspace_app_icon(_app_path: &Path, _output_path: &Path) -> Result<(), String> {
+    Err("unsupported platform".into())
+}
+
+fn convert_icns_to_png(icon_path: &Path, output_path: &Path) -> Result<(), String> {
+    let output = std::process::Command::new("sips")
+        .args(["-Z", "256", "-s", "format", "png"])
+        .arg(icon_path)
+        .arg("--out")
+        .arg(output_path)
+        .output()
+        .map_err(|e| format!("无法转换应用图标: {}", e))?;
+
+    if output.status.success() && output_path.exists() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn resolve_app_icon_png(app_path: &Path) -> Option<String> {
+    if !app_path.is_dir() || !app_path.to_string_lossy().to_lowercase().ends_with(".app") {
+        return None;
+    }
+
+    let source_icon = find_app_icon_path(app_path).map(PathBuf::from);
+    let cache_path = app_icon_cache_path(app_path, source_icon.as_deref());
+    if cache_path.exists() {
+        return Some(cache_path.to_string_lossy().to_string());
+    }
+
+    fs::create_dir_all(app_icon_cache_dir()).ok()?;
+
+    let exported = source_icon
+        .as_deref()
+        .ok_or_else(|| "missing source icon".to_string())
+        .and_then(|icon| convert_icns_to_png(icon, &cache_path))
+        .or_else(|_| export_workspace_app_icon(app_path, &cache_path))
+        .is_ok();
+
+    if exported && cache_path.exists() {
+        Some(cache_path.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
+fn get_app_icon(path: String) -> Result<Option<String>, String> {
+    Ok(resolve_app_icon_png(Path::new(&path)))
 }
 
 fn format_modified(metadata: &fs::Metadata) -> String {
@@ -1013,7 +1130,7 @@ fn get_file_info(path: String) -> Result<FileEntry, String> {
     let last_opened = read_mdls_date(p, "kMDItemLastUsedDate");
     let file_type = detect_mime(&name, is_dir);
     let icon_path = if file_type == "application" {
-        find_app_icon_path(p)
+        resolve_app_icon_png(p)
     } else {
         None
     };
@@ -1390,6 +1507,7 @@ pub fn run() {
             compress_files,
             decompress_file,
             get_file_info,
+            get_app_icon,
             get_dir_size,
             open_devtools,
             quick_look,

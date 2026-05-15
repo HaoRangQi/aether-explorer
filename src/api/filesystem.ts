@@ -48,6 +48,11 @@ export async function listDirectory(dirPath: string, showHidden = false): Promis
   return entries.map(mapEntry);
 }
 
+export async function getAppIcon(path: string): Promise<string | null> {
+  const iconPath = await invoke<string | null>('get_app_icon', { path });
+  return iconPath ? convertFileSrc(iconPath) : null;
+}
+
 export async function getHomeDir(): Promise<string> {
   return invoke('get_home_dir');
 }

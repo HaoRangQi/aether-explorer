@@ -10,7 +10,7 @@ import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import { listDirectory, getHomeDir, getFileInfo, copyFile, copyFiles, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, makeAlias, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload } from '../api/filesystem';
+import { listDirectory, getHomeDir, getFileInfo, getAppIcon, copyFile, copyFiles, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, makeAlias, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload } from '../api/filesystem';
 import type { FileTransferPayload, MoveConflict, MoveConflictStrategy } from '../api/filesystem';
 import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction } from '../types';
 import { QUICK_ACCESS } from '../constants';
@@ -101,6 +101,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [favoriteFiles, setFavoriteFiles] = useState<FileItem[]>([]);
   const [recentFiles, setRecentFiles] = useState<FileItem[]>([]);
   const [taggedFiles, setTaggedFiles] = useState<FileItem[]>([]);
+  const [appIconMap, setAppIconMap] = useState<Record<string, string>>({});
   const [columnFilesCache, setColumnFilesCache] = useState<Record<string, FileItem[]>>({});
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -140,6 +141,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const draggedFileIdRef = useRef<string | null>(null);
   const internalDragRef = useRef<InternalDragState | null>(null);
   const loadRequestSeqRef = useRef(0);
+  const pendingAppIconPathsRef = useRef<Set<string>>(new Set());
+  const failedAppIconPathsRef = useRef<Set<string>>(new Set());
   const [contextMenuSize, setContextMenuSize] = useState<{ key: string; width: number; height: number } | null>(null);
 
   const [dirSize, setDirSize] = useState<{ bytes: number; formatted: string; file_count: number } | null>(null);
@@ -203,6 +206,46 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       .map(([path]) => path);
     const items = await resolveFavoriteItems(paths);
     return items.map(item => ({ ...item, tags: tagMap[item.path] || item.tags }));
+  };
+
+  const hydrateAppIcons = (items: FileItem[]) => {
+    const appPaths = Array.from(new Set(
+      items
+        .filter(item => (
+          item.type === 'application'
+          && !item.thumbnail
+          && !appIconMap[item.path]
+          && !pendingAppIconPathsRef.current.has(item.path)
+          && !failedAppIconPathsRef.current.has(item.path)
+        ))
+        .map(item => item.path)
+    ));
+    if (appPaths.length === 0) return;
+
+    const queue = [...appPaths];
+    appPaths.forEach(path => pendingAppIconPathsRef.current.add(path));
+    const runNext = () => {
+      const path = queue.shift();
+      if (!path) return;
+
+      getAppIcon(path)
+        .then(iconUrl => {
+          if (!iconUrl) {
+            failedAppIconPathsRef.current.add(path);
+            return;
+          }
+          setAppIconMap(prev => prev[path] ? prev : { ...prev, [path]: iconUrl });
+        })
+        .catch(() => {
+          failedAppIconPathsRef.current.add(path);
+        })
+        .finally(() => {
+          pendingAppIconPathsRef.current.delete(path);
+          runNext();
+        });
+    };
+
+    Array.from({ length: Math.min(4, queue.length) }).forEach(runNext);
   };
 
   const refreshFileClipboardState = async () => {
@@ -411,7 +454,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   }, [contextMenu, contextMenuKey, contextMenuSize]);
 
   // Sidebar view → real path mapping
-  // Note: sidebar "主页" uses viewId 'desktop' (lucide Home icon)
   const baseView = view.replace(/-\d{13}$/, '');
   const activeTagId = currentPath.startsWith(TAGS_VIRTUAL_PREFIX)
     ? currentPath.slice(TAGS_VIRTUAL_PREFIX.length)
@@ -431,9 +473,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const viewPathMap: Record<string, string> = {
     downloads: `${homeDir}/Downloads`,
     documents: `${homeDir}/Documents`,
-    desktop: theme.defaultHomePath || FAVORITES_VIRTUAL_PATH,
+    desktop: homeDir,
     applications: '/Applications',
-    home: theme.defaultHomePath || FAVORITES_VIRTUAL_PATH,
+    home: homeDir,
     recent: RECENT_VIRTUAL_PATH,
     icloud: `${homeDir}/Library/Mobile Documents/com~apple~CloudDocs`,
     macos: '/',
@@ -791,13 +833,23 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   }, [view]);
   
   const displayedFiles = isFavoritesRoot ? favoriteFiles : isRecentRoot ? recentFiles : isTagRoot ? taggedFiles : files;
-  const selectedFiles = useMemo(() => displayedFiles.filter(f => selectedFileIds.includes(f.id)), [selectedFileIds, displayedFiles]);
-  const lastSelectedFile = useMemo(() => displayedFiles.find(f => f.id === selectedFileIds[selectedFileIds.length - 1]), [selectedFileIds, displayedFiles]);
+  const filesWithAppIcons = useMemo(() => displayedFiles.map(file => (
+    file.type === 'application' && appIconMap[file.path]
+      ? { ...file, thumbnail: appIconMap[file.path] }
+      : file
+  )), [displayedFiles, appIconMap]);
+
+  useEffect(() => {
+    hydrateAppIcons(displayedFiles);
+  }, [displayedFiles, appIconMap]);
+
+  const selectedFiles = useMemo(() => filesWithAppIcons.filter(f => selectedFileIds.includes(f.id)), [selectedFileIds, filesWithAppIcons]);
+  const lastSelectedFile = useMemo(() => filesWithAppIcons.find(f => f.id === selectedFileIds[selectedFileIds.length - 1]), [selectedFileIds, filesWithAppIcons]);
   const isAdminContextMenuEmpty = useMemo(() => !(theme.contextMenuExtensions || []).some(ext => ext.enabled), [theme.contextMenuExtensions]);
   const enabledContextExtensions = useMemo(() => (theme.contextMenuExtensions || []).filter(ext => ext.enabled), [theme.contextMenuExtensions]);
 
   const currentLevelFiles = useMemo(() => {
-    let filtered = displayedFiles.filter(file => {
+    let filtered = filesWithAppIcons.filter(file => {
       if (isVirtualRoot) {
         return file.name.toLowerCase().includes(searchQuery.toLowerCase());
       }
@@ -815,7 +867,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     return filtered;
-  }, [displayedFiles, searchQuery, sortConfig, isVirtualRoot]);
+  }, [filesWithAppIcons, searchQuery, sortConfig, isVirtualRoot]);
 
   // 虚拟滚动：仅渲染列表视图的可见项（>50 文件时启用）
   const densityHeights: Record<string, number> = { ultra: 28, compact: 36, normal: 44, relaxed: 60 };
@@ -1553,7 +1605,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const getFileIcon = (type: FileItem['type'], thumbnail?: string) => {
     if (type === 'application' && thumbnail) {
-      return <img src={thumbnail} alt="" className="w-6 h-6 object-contain drop-shadow-sm" draggable={false} />;
+      return <img src={thumbnail} alt="" className="w-full h-full object-contain drop-shadow-sm" draggable={false} />;
     }
 
     switch (type) {
@@ -1642,6 +1694,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     const formattedName = formatFileName(file.name);
     const isLongName = file.name !== formattedName;
     const tags = fileTags[file.path] || file.tags || [];
+    const isHiddenFile = file.name.startsWith('.');
+    const fileNameClass = isHiddenFile ? 'text-on-surface/45 group-hover:text-on-surface/60' : 'text-on-surface group-hover:text-primary';
+    const fileMetaClass = isHiddenFile ? 'text-on-surface/35' : 'text-on-surface';
+    const mediaNameClass = isHiddenFile ? 'text-white/55' : 'text-white';
+    const mediaMetaClass = isHiddenFile ? 'text-white/45' : 'text-white/90';
     
     if (displayMode === 'list' && !isColumnItem) {
       const density = theme.listDensity || 'normal';
@@ -1679,7 +1736,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         >
           <div className={`flex items-center flex-1 min-w-0 ${config.gap}`}>
             <div className={`${config.icon} rounded-lg flex items-center justify-center shrink-0 shadow-sm border border-on-surface/5 transition-colors ${isSelected ? 'bg-primary/20' : 'bg-primary/5'}`}>
-               <div className={`flex items-center justify-center transition-transform ${config.scale}`}>
+               <div className={`w-full h-full flex items-center justify-center transition-transform ${config.scale}`}>
                  {getFileIcon(file.type, file.thumbnail)}
                </div>
             </div>
@@ -1689,7 +1746,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 onBlur={handleRenameSubmit} autoFocus onClick={e => e.stopPropagation()}
                 className={`${config.text} font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none min-w-0 flex-1`} />
             ) : (
-            <span className={`${config.text} select-none font-black text-on-surface truncate pr-4 transition-all duration-300`}>{formattedName}</span>
+            <span className={`${config.text} select-none font-black ${fileNameClass} truncate pr-4 transition-all duration-300`}>{formattedName}</span>
             )}
             {tags.length > 0 && (
               <div className="flex gap-1 shrink-0">
@@ -1697,9 +1754,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               </div>
             )}
           </div>
-          <div className={`${LIST_COLS.modified} shrink-0 ${config.subText} text-on-surface font-black truncate pl-2 transition-all duration-300`}>{file.modified}</div>
-          <div className={`${LIST_COLS.size} shrink-0 ${config.subText} text-on-surface font-mono font-black pl-2 text-right tabular-nums transition-all duration-300`}>{file.size || '--'}</div>
-          <div className={`${LIST_COLS.type} shrink-0 ${config.subText} text-on-surface truncate font-black tracking-tight pl-2 text-right opacity-70 transition-all duration-300`}>{getFileTypeLabel(file.type)}</div>
+          <div className={`${LIST_COLS.modified} shrink-0 ${config.subText} ${fileMetaClass} font-black truncate pl-2 transition-all duration-300`}>{file.modified}</div>
+          <div className={`${LIST_COLS.size} shrink-0 ${config.subText} ${fileMetaClass} font-mono font-black pl-2 text-right tabular-nums transition-all duration-300`}>{file.size || '--'}</div>
+          <div className={`${LIST_COLS.type} shrink-0 ${config.subText} ${fileMetaClass} truncate font-black tracking-tight pl-2 text-right opacity-70 transition-all duration-300`}>{getFileTypeLabel(file.type)}</div>
           <div className={`${LIST_COLS.actions} shrink-0 flex justify-end overflow-visible`}>
              <button
                onClick={(e) => openFileActionsMenu(e, file)}
@@ -1742,7 +1799,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             marginBottom: '8px'
           }}
         >
-          <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary/5 group-hover:bg-primary/10 transition-colors shrink-0">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-primary/5 group-hover:bg-primary/10 transition-colors shrink-0 p-1">
             {getFileIcon(file.type, file.thumbnail)}
           </div>
           <div className="flex-1 min-w-0 flex flex-col justify-center">
@@ -1752,9 +1809,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 onBlur={handleRenameSubmit} autoFocus onClick={e => e.stopPropagation()}
                 className="text-[14px] font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none w-full" />
             ) : (
-              <h3 className="select-none text-[14px] font-black text-on-surface truncate leading-tight group-hover:text-primary transition-colors">{formattedName}</h3>
+              <h3 className={`select-none text-[14px] font-black ${fileNameClass} truncate leading-tight transition-colors`}>{formattedName}</h3>
             )}
-            <p className="text-[11px] text-on-surface font-black truncate">{file.size && file.size !== '--' ? `${file.size} • ` : ''}{file.modified}</p>
+            <p className={`text-[11px] ${fileMetaClass} font-black truncate`}>{file.size && file.size !== '--' ? `${file.size} • ` : ''}{file.modified}</p>
             {tags.length > 0 && <div className="flex gap-1 mt-1">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full" style={{ backgroundColor: TAG_COLORS[tag] || '#8e8e93' }} />)}</div>}
           </div>
           {file.type === 'folder' && (
@@ -1766,10 +1823,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     if (displayMode === 'grid') {
       const isMediaItem = Boolean(file.thumbnail) && (file.type === 'image' || file.type === 'video');
-      const mediaWidth = theme.mediaGridWidth || 376;
-      const mediaHeight = theme.mediaGridHeight || 376;
       const normalWidth = theme.gridWidth || theme.gridSize || 180;
       const normalHeight = theme.gridHeight || theme.gridSize || 180;
+      const mediaWidth = theme.mediaGridLinked === false ? (theme.mediaGridWidth || normalWidth) : normalWidth;
+      const mediaHeight = theme.mediaGridLinked === false ? (theme.mediaGridHeight || normalHeight) : normalHeight;
       return (
         <motion.div
           key={file.id}
@@ -1818,16 +1875,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 onBlur={handleRenameSubmit} autoFocus onClick={e => e.stopPropagation()}
                 className="text-[14px] font-black text-white bg-black/40 border border-primary rounded-md px-2 py-0.5 outline-none w-full" />
             ) : (
-              <h3 className="select-none text-[14px] font-black text-white whitespace-normal break-all line-clamp-3 leading-tight drop-shadow-md">{formattedName}</h3>
+              <h3 className={`select-none text-[14px] font-black ${mediaNameClass} whitespace-normal break-all line-clamp-3 leading-tight drop-shadow-md`}>{formattedName}</h3>
             )}
-                <p className="text-[11px] text-white/90 font-black mt-1 drop-shadow-sm">{formatFileMeta(file)}</p>
+                <p className={`text-[11px] ${mediaMetaClass} font-black mt-1 drop-shadow-sm`}>{formatFileMeta(file)}</p>
                 {tags.length > 0 && <div className="flex gap-1 mt-2">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full border border-white/40" style={{ backgroundColor: TAG_COLORS[tag] || '#8e8e93' }} />)}</div>}
               </div>
             </>
           ) : (
             <>
               <div className="flex justify-between items-start">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center bg-primary/5 group-hover:bg-primary/10 transition-colors shrink-0`}>
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center bg-primary/5 group-hover:bg-primary/10 transition-colors shrink-0 p-1`}>
                   {getFileIcon(file.type, file.thumbnail)}
                 </div>
               </div>
@@ -1838,9 +1895,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     onBlur={handleRenameSubmit} autoFocus onClick={e => e.stopPropagation()}
                     className="text-[13px] font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none w-full" />
                 ) : (
-                  <h3 className="select-none text-[13px] font-black text-on-surface whitespace-normal break-all line-clamp-3 group-hover:text-primary transition-colors leading-snug">{formattedName}</h3>
+                  <h3 className={`select-none text-[13px] font-black ${fileNameClass} whitespace-normal break-all line-clamp-3 transition-colors leading-snug`}>{formattedName}</h3>
                 )}
-                <p className="text-[10px] text-on-surface font-black mt-1">{formatFileMeta(file)}</p>
+                <p className={`text-[10px] ${fileMetaClass} font-black mt-1`}>{formatFileMeta(file)}</p>
                 {tags.length > 0 && <div className="flex gap-1 mt-2">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full" style={{ backgroundColor: TAG_COLORS[tag] || '#8e8e93' }} />)}</div>}
               </div>
               {displayMode !== 'column' && (
@@ -3120,9 +3177,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                         <div 
                           className="grid gap-6"
                           style={{ 
-                            gridTemplateColumns: `repeat(auto-fill, minmax(${theme.gridWidth || theme.gridSize || 180}px, 1fr))`,
+                            gridTemplateColumns: `repeat(auto-fill, minmax(${Math.max(theme.gridWidth || theme.gridSize || 180, theme.mediaGridLinked === false ? (theme.mediaGridWidth || theme.gridWidth || theme.gridSize || 180) : (theme.gridWidth || theme.gridSize || 180))}px, 1fr))`,
                             gap: `${theme.gridGap || 16}px`,
-                            gridAutoRows: `${theme.gridHeight || theme.gridSize || 180}px`
+                            gridAutoRows: `${Math.max(theme.gridHeight || theme.gridSize || 180, theme.mediaGridLinked === false ? (theme.mediaGridHeight || theme.gridHeight || theme.gridSize || 180) : (theme.gridHeight || theme.gridSize || 180))}px`
                           }}
                         >
                           {files.map((file) => renderFileItem(file))}

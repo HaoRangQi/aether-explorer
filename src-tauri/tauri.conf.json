@@ -5,7 +5,7 @@
   "identifier": "com.aether.explorer",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:3000",
+    "devUrl": "http://localhost:41873",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },

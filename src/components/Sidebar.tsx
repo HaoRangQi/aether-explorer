@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { MouseEvent } from 'react';
+import type { MouseEvent, PointerEvent } from 'react';
 import { motion } from 'motion/react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -74,8 +74,8 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
     if (id === 'favorites-list') return FAVORITES_VIRTUAL_PATH;
     if (id === 'recent') return RECENT_VIRTUAL_PATH;
     if (id.startsWith('tag-')) return `${TAGS_VIRTUAL_PREFIX}${id}`;
-    if (id === 'desktop' || id === 'home') return theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
     if (!homeDir) return undefined;
+    if (id === 'desktop' || id === 'home') return homeDir;
     const paths: Record<string, string> = {
       downloads: `${homeDir}/Downloads`,
       documents: `${homeDir}/Documents`,
@@ -213,6 +213,11 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
     volumeMessageTimerRef.current = window.setTimeout(() => setVolumeMessage(''), 2600);
   };
 
+  const stopVolumeEjectEvent = (event: MouseEvent<HTMLButtonElement> | PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   const handleDragStart = (e: MouseEvent) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
@@ -236,7 +241,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
       items: [
         { id: 'favorites-list', label: 'sidebar.favoritesList', icon: () => <Circle className="w-3.5 h-3.5 fill-primary text-primary" /> },
         { id: 'applications', label: 'sidebar.applications', icon: Terminal },
-        { id: 'desktop', label: 'tabs.home', icon: Home },
+        { id: 'desktop', label: 'sidebar.homeDirectory', icon: Home },
         { id: 'documents', label: 'sidebar.documents', icon: FileText, RightElement: () => <Cloud className="w-3 h-3 text-on-surface/30" /> },
         { id: 'downloads', label: 'sidebar.downloads', icon: Download },
         { id: 'recent', label: 'sidebar.recent', icon: Clock },
@@ -410,12 +415,17 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
                     </button>
                     {volume.is_ejectable && (
                       <button
+                        type="button"
+                        onMouseDown={stopVolumeEjectEvent}
+                        onPointerDown={stopVolumeEjectEvent}
+                        onDoubleClick={stopVolumeEjectEvent}
                         onClick={(e) => {
-                          e.stopPropagation();
-                          ejectVolume(volume);
+                          stopVolumeEjectEvent(e);
+                          void ejectVolume(volume);
                         }}
-                        className="absolute right-1 top-1.5 p-1.5 rounded-lg bg-primary/10 text-on-surface/35 opacity-0 group-hover:opacity-100 hover:text-primary hover:bg-primary/20 transition-all"
+                        className="absolute right-1 top-1.5 z-20 p-1.5 rounded-lg bg-primary/10 text-on-surface/35 opacity-0 group-hover:opacity-100 hover:text-primary hover:bg-primary/20 transition-all"
                         title={`弹出 ${volume.name}`}
+                        aria-label={`弹出 ${volume.name}`}
                       >
                         <Upload className="w-3.5 h-3.5" />
                       </button>

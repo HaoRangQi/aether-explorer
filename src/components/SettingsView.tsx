@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw } from 'lucide-react';
+import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -111,8 +111,22 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
   const [newWorkingDirectory, setNewWorkingDirectory] = useState<'selection' | 'current'>('selection');
   const [editingExtensionId, setEditingExtensionId] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(DEFAULT_UPDATE_STATUS);
+  const [appVersion, setAppVersion] = useState(import.meta.env.VITE_APP_VERSION || '');
   const [showLanguageManager, setShowLanguageManager] = useState(false);
+  const [showMediaGridControls, setShowMediaGridControls] = useState(false);
   const [cleanupStatus, setCleanupStatus] = useState<{ cleaning: boolean; message: string }>({ cleaning: false, message: '' });
+
+  useEffect(() => {
+    let cancelled = false;
+    getVersion()
+      .then(version => {
+        if (!cancelled) setAppVersion(version || import.meta.env.VITE_APP_VERSION || '');
+      })
+      .catch(() => {
+        if (!cancelled) setAppVersion(import.meta.env.VITE_APP_VERSION || '');
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -743,7 +757,10 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                     <label className="text-[12px] font-bold text-on-surface/60">{t('settings.gridWidth', '项目宽度')}</label>
                     <span className="text-[13px] font-black text-primary">{theme.gridWidth || 180}px</span>
                   </div>
-                  <input type="range" min="100" max="400" value={theme.gridWidth || 180} onChange={(e) => onThemeChange({ ...theme, gridWidth: parseInt(e.target.value) })} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
+                  <input type="range" min="100" max="400" value={theme.gridWidth || 180} onChange={(e) => {
+                    const gridWidth = parseInt(e.target.value);
+                    onThemeChange({ ...theme, gridWidth, mediaGridWidth: theme.mediaGridLinked === false ? theme.mediaGridWidth : gridWidth });
+                  }} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
                 </div>
 
                 <div className="space-y-4">
@@ -751,7 +768,10 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                     <label className="text-[12px] font-bold text-on-surface/60">{t('settings.gridHeight', '项目高度')}</label>
                     <span className="text-[13px] font-black text-primary">{theme.gridHeight || 180}px</span>
                   </div>
-                  <input type="range" min="100" max="400" value={theme.gridHeight || 180} onChange={(e) => onThemeChange({ ...theme, gridHeight: parseInt(e.target.value) })} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
+                  <input type="range" min="100" max="400" value={theme.gridHeight || 180} onChange={(e) => {
+                    const gridHeight = parseInt(e.target.value);
+                    onThemeChange({ ...theme, gridHeight, mediaGridHeight: theme.mediaGridLinked === false ? theme.mediaGridHeight : gridHeight });
+                  }} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
                 </div>
 
                 <div className="space-y-4 sm:col-span-2">
@@ -762,20 +782,82 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                   <input type="range" min="4" max="64" step="4" value={theme.gridGap || 16} onChange={(e) => onThemeChange({ ...theme, gridGap: parseInt(e.target.value) })} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
                 </div>
 
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[12px] font-bold text-on-surface/60">{t('settings.mediaGridWidth', '多媒体项目宽度')}</label>
-                    <span className="text-[13px] font-black text-primary">{theme.mediaGridWidth || 376}px</span>
+                <div className="space-y-4 sm:col-span-2 rounded-2xl border border-primary/10 bg-primary/5 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[12px] font-black text-on-surface">{t('settings.mediaGridItems', '多媒体项目')}</p>
+                      <p className="text-[11px] text-on-surface/50 mt-1">
+                        {theme.mediaGridLinked === false ? t('settings.mediaGridCustomDesc', '使用独立宽高') : t('settings.mediaGridLinkedDesc', '默认跟随普通网格大小')}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const shouldLink = theme.mediaGridLinked === false;
+                          onThemeChange({
+                            ...theme,
+                            mediaGridLinked: shouldLink,
+                            mediaGridWidth: shouldLink ? (theme.gridWidth || 180) : (theme.mediaGridWidth || theme.gridWidth || 180),
+                            mediaGridHeight: shouldLink ? (theme.gridHeight || 180) : (theme.mediaGridHeight || theme.gridHeight || 180),
+                          });
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-colors ${theme.mediaGridLinked === false ? 'bg-transparent border-primary/15 text-on-surface/50' : 'bg-primary text-on-primary border-primary'}`}
+                      >
+                        {t('settings.mediaGridSync', '同步调整')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowMediaGridControls(prev => !prev)}
+                        className="px-3 py-1.5 rounded-xl text-[11px] font-black text-primary bg-primary/10 hover:bg-primary/15 transition-colors inline-flex items-center gap-1.5"
+                      >
+                        {t('settings.more', '更多')} {showMediaGridControls ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </div>
-                  <input type="range" min="180" max="800" value={theme.mediaGridWidth || 376} onChange={(e) => onThemeChange({ ...theme, mediaGridWidth: parseInt(e.target.value) })} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
-                </div>
 
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[12px] font-bold text-on-surface/60">{t('settings.mediaGridHeight', '多媒体项目高度')}</label>
-                    <span className="text-[13px] font-black text-primary">{theme.mediaGridHeight || 376}px</span>
-                  </div>
-                  <input type="range" min="180" max="800" value={theme.mediaGridHeight || 376} onChange={(e) => onThemeChange({ ...theme, mediaGridHeight: parseInt(e.target.value) })} className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary" />
+                  <AnimatePresence initial={false}>
+                    {showMediaGridControls && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 pt-5">
+                          <div className="space-y-4">
+                            <div className="flex justify-between items-center">
+                              <label className="text-[12px] font-bold text-on-surface/60">{t('settings.mediaGridWidth', '多媒体项目宽度')}</label>
+                              <span className="text-[13px] font-black text-primary">{theme.mediaGridLinked === false ? (theme.mediaGridWidth || theme.gridWidth || 180) : (theme.gridWidth || 180)}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="100"
+                              max="800"
+                              value={theme.mediaGridLinked === false ? (theme.mediaGridWidth || theme.gridWidth || 180) : (theme.gridWidth || 180)}
+                              onChange={(e) => onThemeChange({ ...theme, mediaGridLinked: false, mediaGridWidth: parseInt(e.target.value) })}
+                              className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary"
+                            />
+                          </div>
+
+                          <div className="space-y-4">
+                            <div className="flex justify-between items-center">
+                              <label className="text-[12px] font-bold text-on-surface/60">{t('settings.mediaGridHeight', '多媒体项目高度')}</label>
+                              <span className="text-[13px] font-black text-primary">{theme.mediaGridLinked === false ? (theme.mediaGridHeight || theme.gridHeight || 180) : (theme.gridHeight || 180)}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="100"
+                              max="800"
+                              value={theme.mediaGridLinked === false ? (theme.mediaGridHeight || theme.gridHeight || 180) : (theme.gridHeight || 180)}
+                              onChange={(e) => onThemeChange({ ...theme, mediaGridLinked: false, mediaGridHeight: parseInt(e.target.value) })}
+                              className="w-full appearance-none h-1.5 bg-primary/10 rounded-full accent-primary"
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               </div>
             </div>
@@ -1230,7 +1312,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
               <p className="text-[13px] text-on-surface/45 mt-1">macOS 文件管理器 · Tauri v2 / React / Rust</p>
             </div>
           </div>
-          <span className="px-4 py-2 rounded-full bg-primary/10 text-primary text-[11px] font-black uppercase tracking-widest">v0.1.0 Alpha</span>
+          <span className="px-4 py-2 rounded-full bg-primary/10 text-primary text-[11px] font-black uppercase tracking-widest">v{appVersion || '0.0.0'}</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1439,7 +1521,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                 {t('settings.defaultHomePath', '默认主页目录')}
               </h4>
               <p className="text-[12px] text-on-surface/50">
-                {t('settings.defaultHomePathDesc', '应用启动时的主页，以及侧栏“主页”入口默认打开的位置。')}
+                {t('settings.defaultHomePathDesc', '应用启动时默认打开的位置；侧栏“主目录”始终指向系统用户目录。')}
               </p>
               <p className="text-[12px] font-mono text-on-surface/35 truncate">
                 {theme.defaultHomePath || 'aether://favorites'}
@@ -1864,7 +1946,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
               <div className="w-8 h-8 rounded-lg bg-primary text-on-primary flex items-center justify-center font-black text-[10px]">OS</div>
               <div className="space-y-0.5">
                 <p className="text-[11px] font-black text-on-surface tracking-tight">Aether Explorer</p>
-                <p className="text-[9px] font-bold text-on-surface/30">Build v2.4.0-Alpha</p>
+                <p className="text-[9px] font-bold text-on-surface/30">v{appVersion || '0.0.0'}</p>
               </div>
            </div>
            <p className="text-[10px] text-on-surface/40 leading-relaxed font-medium">设置保存在本地应用数据目录中（JSON 格式），重启后自动恢复。</p>

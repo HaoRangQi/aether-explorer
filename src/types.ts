@@ -71,6 +71,7 @@ export interface ThemeSettings {
   gridGap?: number;
   mediaGridWidth?: number;
   mediaGridHeight?: number;
+  mediaGridLinked?: boolean;
   columnWidth?: number;
   columnHeight?: number;
   showHiddenFiles?: boolean;
