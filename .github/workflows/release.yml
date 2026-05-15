@@ -19,6 +19,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag, for example v0.1.1'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -27,6 +32,8 @@ jobs:
   release:
     runs-on: macos-latest
     timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name || github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,15 +58,15 @@ jobs:
         run: npm ci
 
       - name: Build & sign & release
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: ${{ github.ref_name }}
-          releaseBody: 'Aether Explorer ${{ github.ref_name }}'
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: ${{ env.RELEASE_TAG }}
+          releaseBody: 'Aether Explorer ${{ env.RELEASE_TAG }}'
           releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
