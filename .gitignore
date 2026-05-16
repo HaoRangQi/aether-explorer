@@ -32,6 +32,9 @@ src-tauri/gen/
 # 工作流（开发过程文件，不参与版本控制）
 .workflow/
 
+# Git 工作树
+.worktrees/
+
 # 锁文件（保留 npm lock）
 *.lock
 !package-lock.json
