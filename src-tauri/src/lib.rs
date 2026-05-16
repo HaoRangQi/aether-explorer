@@ -373,29 +373,9 @@ fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>,
         // 性能保护：目录列表阶段不解析 app bundle 图标，防止大量 plutil 调用造成卡顿。
         let icon_path = None;
 
-        let child_count = if is_dir {
-            fs::read_dir(&path)
-                .ok()
-                .map(|children| {
-                    children
-                        .flatten()
-                        .filter(|child| {
-                            if show_hidden {
-                                true
-                            } else {
-                                child
-                                    .file_name()
-                                    .to_str()
-                                    .map(|name| !name.starts_with('.'))
-                                    .unwrap_or(true)
-                            }
-                        })
-                        .count() as u64
-                })
-                .or(Some(0))
-        } else {
-            None
-        };
+        // 性能保护：不再为每个子目录跑 read_dir 算子项数（N+1 系统调用）。
+        // 子项数改为按需通过 get_child_count 命令懒查，由前端缓存。
+        let child_count = None;
 
         let fe = FileEntry {
             name,
@@ -1214,6 +1194,25 @@ fn get_dir_size(path: String) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// 按需查目录的直接子项数（PERF_PLAN L2-B 配套）。
+/// 前端建议加 TTL 缓存避免重复调用。
+#[tauri::command]
+fn get_child_count(path: String, show_hidden: bool) -> Result<u64, String> {
+    let p = Path::new(&path);
+    if !p.is_dir() {
+        return Ok(0);
+    }
+    let count = fs::read_dir(p)
+        .map(|c| c.flatten()
+            .filter(|e| {
+                if show_hidden { true }
+                else { e.file_name().to_str().map(|n| !n.starts_with('.')).unwrap_or(true) }
+            })
+            .count() as u64)
+        .unwrap_or(0);
+    Ok(count)
+}
+
 #[tauri::command]
 fn get_file_info(path: String) -> Result<FileEntry, String> {
     let p = Path::new(&path);
@@ -1652,6 +1651,7 @@ pub fn run() {
             get_file_info,
             get_app_icon,
             get_dir_size,
+            get_child_count,
             open_devtools,
             quick_look,
             reveal_in_finder,

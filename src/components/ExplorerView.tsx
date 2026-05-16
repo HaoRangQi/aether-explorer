@@ -209,6 +209,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const loadRequestSeqRef = useRef(0);
   const pendingAppIconPathsRef = useRef<Set<string>>(new Set());
   const failedAppIconPathsRef = useRef<Set<string>>(new Set());
+  // 批量 setAppIconMap 缓冲：每个图标到达不立即 setState，80ms 内合并一次
+  // 避免 200 app 触发 200 次 setState → 200 次派生链全量重算
+  const pendingIconUpdatesRef = useRef<Record<string, string>>({});
+  const iconFlushTimerRef = useRef<number | null>(null);
   const [contextMenuSize, setContextMenuSize] = useState<{ key: string; width: number; height: number } | null>(null);
 
   const [dirSize, setDirSize] = useState<{ bytes: number; formatted: string; file_count: number } | null>(null);
@@ -290,6 +294,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     const queue = [...appPaths];
     appPaths.forEach(path => pendingAppIconPathsRef.current.add(path));
+
+    const scheduleFlush = () => {
+      if (iconFlushTimerRef.current) return;
+      iconFlushTimerRef.current = window.setTimeout(() => {
+        iconFlushTimerRef.current = null;
+        const pending = pendingIconUpdatesRef.current;
+        if (Object.keys(pending).length === 0) return;
+        pendingIconUpdatesRef.current = {};
+        setAppIconMap(prev => ({ ...prev, ...pending }));
+      }, 80);
+    };
+
     const runNext = () => {
       const path = queue.shift();
       if (!path) return;
@@ -300,7 +316,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             failedAppIconPathsRef.current.add(path);
             return;
           }
-          setAppIconMap(prev => prev[path] ? prev : { ...prev, [path]: iconUrl });
+          pendingIconUpdatesRef.current[path] = iconUrl;
+          scheduleFlush();
         })
         .catch(() => {
           failedAppIconPathsRef.current.add(path);
@@ -1003,8 +1020,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   }, [currentPath]);
 
+  // 虚拟滚动门槛：列表视图 > 80 项时启用；分组模式暂不虚拟化
+  const VIRTUAL_LIST_THRESHOLD = 80;
   const visibleRange = useMemo(() => {
-    if (displayMode !== 'list' || currentLevelFiles.length < 999999) return null; // 虚拟滚动暂时禁用
+    if (displayMode !== 'list') return null;
+    if (groupBy !== 'none') return null;
+    if (currentLevelFiles.length < VIRTUAL_LIST_THRESHOLD) return null;
     const containerH = containerRef.current?.clientHeight || 600;
     const adjustedTop = Math.max(0, scrollTop - fileListOffset);
     const start = Math.max(0, Math.floor(adjustedTop / listItemHeight) - listOverScan);
@@ -1026,6 +1047,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   // 卸载时确保 cursor raise 监听摘掉，避免泄漏 / 重复触发
   useEffect(() => () => { stopCursorRaiseTracking(); }, []);
+
+  // 卸载时刷掉未处理的 icon 缓冲 + 清 timer
+  useEffect(() => () => {
+    if (iconFlushTimerRef.current) {
+      window.clearTimeout(iconFlushTimerRef.current);
+      iconFlushTimerRef.current = null;
+    }
+  }, []);
 
   // 同步 ref，让 Tauri event listener 闭包能拿到最新值
   useEffect(() => { themeRef.current = theme; }, [theme]);
@@ -2216,8 +2245,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           onContextMenu={(e) => { void handleContextMenu(e, [file.id]); }}
           animate={isPulsing ? { scale: [1, 0.985, 1.01, 1] } : undefined}
           transition={isPulsing ? { duration: 0.26 } : undefined}
-          whileHover={{ y: -4 }}
-          className={`file-item select-none relative rounded-2xl p-4 flex flex-col justify-between group cursor-pointer transition-all duration-300 border
+          className={`file-item file-item-grid select-none relative rounded-2xl p-4 flex flex-col justify-between group cursor-pointer transition-[transform,background-color,border-color,box-shadow] duration-200 border
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
             ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
             ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)]' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm'}
