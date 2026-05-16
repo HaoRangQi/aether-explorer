@@ -87,6 +87,14 @@ export interface ThemeSettings {
   terminalScripts?: string[];
   customTerminalCommand?: string;
   defaultHomePath?: string;
+  /**
+   * 跨窗口拖拽默认动作。
+   * - `copy` 默认复制（Finder 跨卷一致，最安全）
+   * - `move` 默认移动（Finder 同卷一致）
+   * - `ask` 拖到目标窗口后弹出选择
+   * 修饰键在任何模式下都能临时覆盖（⌘ + 点击切换、⌥ 强制复制、⇧ 强制移动）。
+   */
+  crossWindowDropDefault?: 'copy' | 'move' | 'ask';
   language?: string;
   followSystemLanguage?: boolean;
   languageOptions?: LanguageOption[];

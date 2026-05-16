@@ -14,6 +14,7 @@ import { listDirectory, getHomeDir, getFileInfo, getAppIcon, copyFile, copyFiles
 import type { FileTransferPayload, MoveConflict, MoveConflictStrategy } from '../api/filesystem';
 import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction } from '../types';
 import { QUICK_ACCESS } from '../constants';
+import CrossWindowDropBanner from './CrossWindowDropBanner';
 
 const TAG_COLORS: Record<string, string> = {
   'tag-red': '#ff5f56',
@@ -39,7 +40,9 @@ const FILE_DROP_ACCEPTED_EVENT = 'aether-file-drop-accepted';
 const TAURI_DRAG_DROP_EVENT = 'tauri://drag-drop';
 const TAURI_DRAG_ENTER_EVENT = 'tauri://drag-enter';
 const TAURI_DRAG_LEAVE_EVENT = 'tauri://drag-leave';
-const INCOMING_DRAG_TIMEOUT_MS = 8000;
+// banner 最大可见时间 — 用户拖到目标窗口后必须留够时间看清并选择动作。
+// 即便源端 dragEnd 已 emit FILE_DRAG_END_EVENT 也不立即清，避免"一闪就没"。
+const INCOMING_DRAG_VISIBLE_MS = 12000;
 const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 const RECENT_VIRTUAL_PATH = 'aether://recent';
 const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
@@ -71,6 +74,8 @@ interface IncomingFileDrag {
   previewName: string;
   count: number;
   cut: boolean;
+  /** banner 出现时间戳，用于驱动倒计时进度条 */
+  shownAt: number;
 }
 
 interface FileDragBroadcastPayload {
@@ -973,11 +978,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
     };
 
-    const dismissIncoming = () => {
-      clearIncomingTimer();
-      setIncomingFileDrag(null);
-    };
-
     listen<FileDragBroadcastPayload>(FILE_DRAG_START_EVENT, ({ payload }) => {
       if (cancelled) return;
       if (payload.sourceWindow === getCurrentWindow().label) return;
@@ -990,18 +990,19 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         previewName: payload.previewName || `${payload.paths.length} 个项目`,
         count: payload.count ?? payload.paths.length,
         cut: payload.cut ?? true,
+        shownAt: Date.now(),
       });
       incomingDragTimerRef.current = window.setTimeout(() => {
         if (cancelled) return;
         setIncomingFileDrag(null);
         incomingDragTimerRef.current = null;
-      }, INCOMING_DRAG_TIMEOUT_MS);
+      }, INCOMING_DRAG_VISIBLE_MS);
     }).then(fn => unlistens.push(fn)).catch(() => {});
 
-    listen(FILE_DRAG_END_EVENT, () => {
-      if (cancelled) return;
-      dismissIncoming();
-    }).then(fn => unlistens.push(fn)).catch(() => {});
+    // 注意：故意不监听 FILE_DRAG_END_EVENT 关闭 banner。
+    // 源端 dragEnd 后会发 END 事件，但目标窗口的 banner 此时刚出现，
+    // 用户还没看清/操作，立即清掉会变成"一闪而过"。
+    // banner 只在以下情况关闭：① 用户点击执行 ② 用户右键 / ESC 取消 ③ VISIBLE_MS 超时
 
     listen<FileDropAcceptedPayload>(FILE_DROP_ACCEPTED_EVENT, ({ payload }) => {
       if (cancelled) return;
@@ -3339,42 +3340,21 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             >
               {/* 跨窗口拖拽接收 banner（Aether↔Aether） */}
               {incomingFileDrag && (
-                <div
-                  className="absolute inset-0 z-40 flex items-center justify-center bg-primary/15 backdrop-blur-md border-2 border-dashed border-primary/70 rounded-2xl m-2 cursor-pointer animate-in fade-in duration-200"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const op: 'copy' | 'move' = e.metaKey ? 'move' : 'copy';
-                    void acceptIncomingFileDrag(op);
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
+                <CrossWindowDropBanner
+                  drag={incomingFileDrag}
+                  currentPath={currentPath}
+                  defaultMode={theme.crossWindowDropDefault || 'copy'}
+                  visibleMs={INCOMING_DRAG_VISIBLE_MS}
+                  onAccept={(op) => { void acceptIncomingFileDrag(op); }}
+                  onCancel={() => {
+                    if (incomingDragTimerRef.current) {
+                      window.clearTimeout(incomingDragTimerRef.current);
+                      incomingDragTimerRef.current = null;
+                    }
                     setIncomingFileDrag(null);
                   }}
-                >
-                  <div className="bg-surface/95 rounded-2xl px-6 py-5 shadow-2xl text-center max-w-md pointer-events-none">
-                    <div className="text-on-surface text-base font-bold mb-1.5">
-                      {t('crossWindow.incomingTitle', {
-                        count: incomingFileDrag.count,
-                        defaultValue: '来自其他窗口的 {{count}} 个项目',
-                      })}
-                    </div>
-                    <div className="text-on-surface/70 text-xs mb-3 truncate">
-                      {incomingFileDrag.previewName}
-                    </div>
-                    <div className="text-on-surface/85 text-sm">
-                      {t('crossWindow.dropToHere', {
-                        path: currentPath || '当前目录',
-                        defaultValue: '点击放置到 {{path}}',
-                      })}
-                    </div>
-                    <div className="text-on-surface/55 text-[11px] mt-2 leading-relaxed">
-                      {t('crossWindow.modifierHint', {
-                        defaultValue: '点击 → 复制 · ⌘ 点击 → 移动 · 右键取消',
-                      })}
-                    </div>
-                  </div>
-                </div>
+                  t={t}
+                />
               )}
               {/* Finder→Aether 系统拖入视觉反馈 */}
               {isReceivingExternalDrag && !incomingFileDrag && (

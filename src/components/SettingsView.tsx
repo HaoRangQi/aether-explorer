@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw } from 'lucide-react';
+import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -1543,6 +1543,45 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
             </div>
           </div>
 
+          {/* 跨窗口拖拽默认动作 */}
+          <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group gap-6">
+            <div className="space-y-1 min-w-0">
+              <h4 className="text-[15px] font-bold text-on-surface flex items-center gap-2">
+                <ArrowRightLeft className="w-4 h-4 text-primary" />
+                {t('settings.crossWindowDrop', '跨窗口拖拽默认动作')}
+              </h4>
+              <p className="text-[12px] text-on-surface/50">
+                {t('settings.crossWindowDropDesc', '把文件从一个 Aether 窗口拖到另一个窗口时的默认行为；修饰键随时可临时覆盖（⌘ 切换、⌥ 强制复制、⇧ 强制移动）。')}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 p-1 bg-primary/5 rounded-2xl border border-primary/10">
+              {(['copy', 'move', 'ask'] as const).map((mode) => {
+                const active = (theme.crossWindowDropDefault || 'copy') === mode;
+                const icon = mode === 'copy' ? <Copy className="w-3.5 h-3.5" />
+                  : mode === 'move' ? <ArrowRightLeft className="w-3.5 h-3.5" />
+                  : <HelpCircle className="w-3.5 h-3.5" />;
+                const label = mode === 'copy' ? t('settings.crossWindowDropCopy', '复制')
+                  : mode === 'move' ? t('settings.crossWindowDropMove', '移动')
+                  : t('settings.crossWindowDropAsk', '每次询问');
+                return (
+                  <button
+                    key={mode}
+                    onClick={() => onThemeChange({ ...theme, crossWindowDropDefault: mode })}
+                    className={`px-3 py-1.5 rounded-xl text-[12px] font-black flex items-center gap-1.5 transition-all ${
+                      active
+                        ? 'bg-primary text-on-primary shadow-md shadow-primary/20'
+                        : 'text-on-surface/60 hover:text-on-surface hover:bg-primary/10'
+                    }`}
+                    title={label}
+                  >
+                    {icon}
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group">
             <div className="space-y-1">
               <h4 className="text-[15px] font-bold text-on-surface flex items-center gap-2">
@@ -1551,7 +1590,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
               </h4>
               <p className="text-[12px] text-on-surface/50">在文件浏览器中显示以点(.)开头的文件或系统受限项目。</p>
             </div>
-            <button 
+            <button
               onClick={() => onThemeChange({ ...theme, showHiddenFiles: !theme.showHiddenFiles })}
               className={`w-14 h-8 rounded-full p-1.5 transition-colors duration-300 flex items-center ${theme.showHiddenFiles ? 'bg-primary' : 'bg-on-surface/[0.1]'}`}
             >
