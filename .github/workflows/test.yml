@@ -1,0 +1,40 @@
+name: test
+
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**', 'test/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: TypeScript check
+        run: npm run lint
+
+      - name: Frontend tests (vitest)
+        run: npm test
+
+      - name: Rust tests (cargo test --lib)
+        run: npm run test:rust
+
+      - name: Production build smoke
+        run: npm run build
