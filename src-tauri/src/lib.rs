@@ -124,7 +124,7 @@ fn detect_mime(name: &str, is_dir: bool) -> String {
         "pdf" => "pdf",
         "zip" | "tar" | "gz" | "7z" | "rar" | "bz2" | "xz" | "tgz" | "dmg" | "pkg" | "iso" => "archive",
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "rs" | "go" | "java" | "c" | "cc" | "cpp" | "h" | "hpp" | "swift" | "kt" | "rb" | "php" | "sh" | "bash" | "zsh" | "fish" | "sql" | "css" | "scss" | "html" | "vue" | "svelte" => "code",
-        "txt" | "md" | "markdown" | "csv" | "tsv" | "json" | "yaml" | "yml" | "xml" | "toml" | "ini" | "cfg" | "conf" | "log" | "lock" | "env" | "rst" | "txt~" => "text",
+        "txt" | "md" | "markdown" | "csv" | "tsv" | "json" | "yaml" | "yml" | "xml" | "toml" | "ini" | "cfg" | "conf" | "log" | "lock" | "rst" | "txt~" => "text",
         _ => "file",
     }
     .into()
@@ -440,9 +440,35 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! Welcome to Aether Explorer.", name)
 }
 
+/// 敏感文件名 / 后缀黑名单 — 默认不允许 read_text_preview 读出来在预览面板展示。
+///
+/// 防的是：用户右键、空格预览不小心把 .env / id_rsa 暴露在屏幕上 / 被旁边人扫到。
+/// 用户仍可通过"打开方式"显式打开（go 经过他们认知层面），但不会被 8KB 自动预览。
+const SENSITIVE_PREVIEW_NAMES: &[&str] = &[
+    ".env", ".envrc", ".npmrc", ".pypirc", ".netrc",
+    "id_rsa", "id_dsa", "id_ed25519", "id_ecdsa",
+    ".aws/credentials", "kubeconfig", ".gnupg",
+];
+
+fn is_sensitive_for_preview(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_lowercase();
+    let full = path.to_string_lossy().to_lowercase();
+    for s in SENSITIVE_PREVIEW_NAMES {
+        let s = s.to_lowercase();
+        if name == s || name.ends_with(&format!(".{}", s)) || full.ends_with(&s) {
+            return true;
+        }
+    }
+    false
+}
+
 #[tauri::command]
 fn read_text_preview(path: String) -> Result<String, String> {
     use std::io::Read;
+    let p = Path::new(&path);
+    if is_sensitive_for_preview(p) {
+        return Err("此文件类型默认不在预览面板展示（含敏感信息）— 可使用『打开方式』显式打开".into());
+    }
     let mut file = fs::File::open(&path).map_err(|e| format!("无法打开文件: {}", e))?;
     let mut buf = vec![0u8; 8192]; // First 8KB
     let n = file.read(&mut buf).map_err(|e| format!("读取失败: {}", e))?;
@@ -613,6 +639,13 @@ fn list_fonts() -> Result<Vec<String>, String> {
 }
 
 // ── File Operations ──
+
+// 路径规范化 — 对用户输入的目标目录做 canonicalize。
+// 防 `..` 跳逃 + 符号链接绕过 scope。失败说明路径不存在或无权限，直接返 Err。
+fn safe_canonicalize(path: &Path) -> Result<std::path::PathBuf, String> {
+    path.canonicalize()
+        .map_err(|e| format!("路径解析失败 {}: {}", path.display(), e))
+}
 
 fn unique_destination(path: &Path) -> std::path::PathBuf {
     if !path.exists() {
@@ -799,7 +832,8 @@ fn copy_files(
     dst_dir: String,
     conflict_strategy: Option<MoveConflictStrategy>,
 ) -> Result<CopyResult, String> {
-    let dst = Path::new(&dst_dir);
+    let dst_buf = safe_canonicalize(Path::new(&dst_dir))?;
+    let dst = dst_buf.as_path();
     if !dst.is_dir() {
         return Err(format!("目标不是目录: {}", dst_dir));
     }
@@ -902,7 +936,8 @@ fn move_files(
     dst_dir: String,
     conflict_strategy: Option<MoveConflictStrategy>,
 ) -> Result<MoveResult, String> {
-    let dst = Path::new(&dst_dir);
+    let dst_buf = safe_canonicalize(Path::new(&dst_dir))?;
+    let dst = dst_buf.as_path();
     if !dst.is_dir() {
         return Err(format!("目标不是目录: {}", dst_dir));
     }
@@ -1427,6 +1462,42 @@ fn list_terminal_apps() -> Result<Vec<String>, String> {
     Ok(terminals)
 }
 
+/// 拒绝包含 shell 元字符的用户命令片段。
+///
+/// 这一层防御针对自动化路径：菜单扩展的 terminalArgs / shell command 字段在没有
+/// 用户二次确认时（confirmExecution=false）执行，必须保证 user_cmd 不会
+/// "逃出" 我们包装的引号 / `cd` 前缀。
+///
+/// 拒绝的字符 / 序列见 FORBIDDEN_TOKENS。用户在设置面板手敲"高级命令"应走
+/// confirmExecution=true 流程，前端可以选择跳过此校验。
+const FORBIDDEN_TOKENS: &[&str] = &["$(", "`", "&&", "||", ";", "|", ">", "<", "\n", "\r"];
+
+fn validate_shell_fragment(s: &str) -> Result<String, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err("命令为空".into());
+    }
+    for tok in FORBIDDEN_TOKENS {
+        if trimmed.contains(tok) {
+            return Err(format!(
+                "命令含受限字符 {} — 请改用『扩展菜单』的高级命令模式（启用执行前确认）",
+                tok
+            ));
+        }
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 终端应用白名单 — 拒绝任意名字以防 app_name 含 AppleScript 注入字符。
+const ALLOWED_TERMINAL_APPS: &[&str] = &[
+    "Terminal", "iTerm", "iTerm2", "Warp", "kitty", "WezTerm",
+    "Alacritty", "Ghostty", "Tabby", "Hyper",
+];
+
+fn is_allowed_terminal(name: &str) -> bool {
+    ALLOWED_TERMINAL_APPS.iter().any(|a| a.eq_ignore_ascii_case(name))
+}
+
 #[tauri::command]
 fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<String>, custom_command: Option<String>) -> Result<(), String> {
     let target_path = Path::new(&path);
@@ -1438,9 +1509,12 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
     let dir_str = dir.to_string_lossy().to_string();
 
     let app_name = terminal_app.unwrap_or_else(|| "Terminal".into());
+    if !is_allowed_terminal(&app_name) {
+        return Err(format!("不允许的终端应用: {}", app_name));
+    }
     let arg_text = args.unwrap_or_default();
     let lower = app_name.to_lowercase();
-    let command_tail = custom_command
+    let raw_tail = custom_command
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty())
@@ -1448,23 +1522,29 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
             let trimmed_args = arg_text.trim();
             if trimmed_args.is_empty() { None } else { Some(trimmed_args) }
         });
-    let command = match command_tail {
+    let validated_tail = match raw_tail {
+        Some(raw) => Some(validate_shell_fragment(raw)?),
+        None => None,
+    };
+    let command = match validated_tail.as_deref() {
         Some(tail) => format!("cd {} && {}", shell_quote(&dir_str), tail),
         None => format!("cd {}", shell_quote(&dir_str)),
     };
 
     if lower.contains("terminal") || lower.contains("iterm") {
+        // command 已经只含白名单字符 + 我们自己拼接的 cd 包装 — 用 apple_quote 包字符串进 AppleScript。
+        // app_name 已通过白名单，进 apple_quote 是双重保险。
         let script = if lower.contains("iterm") {
             format!(
-                "tell application \"{}\"\nactivate\ncreate window with default profile\ntell current session of current window to write text \"{}\"\nend tell",
-                app_name.replace('\\', "\\\\").replace('"', "\\\""),
-                command.replace('\\', "\\\\").replace('"', "\\\"")
+                "tell application {}\nactivate\ncreate window with default profile\ntell current session of current window to write text {}\nend tell",
+                apple_quote(&app_name),
+                apple_quote(&command),
             )
         } else {
             format!(
-                "tell application \"{}\" to do script \"{}\"",
-                app_name.replace('\\', "\\\\").replace('"', "\\\""),
-                command.replace('\\', "\\\\").replace('"', "\\\"")
+                "tell application {} to do script {}",
+                apple_quote(&app_name),
+                apple_quote(&command),
             )
         };
         let output = std::process::Command::new("osascript")
@@ -1820,6 +1900,82 @@ mod tests {
     fn encode_query_component_handles_multibyte() {
         // 中文按 UTF-8 三字节编码
         assert_eq!(encode_query_component("中"), "%E4%B8%AD");
+    }
+
+    // ── validate_shell_fragment ──
+    #[test]
+    fn validate_shell_fragment_accepts_safe_input() {
+        assert_eq!(validate_shell_fragment("npm run dev").unwrap(), "npm run dev");
+        assert_eq!(validate_shell_fragment("  ls -la  ").unwrap(), "ls -la");
+    }
+
+    #[test]
+    fn validate_shell_fragment_rejects_injection() {
+        assert!(validate_shell_fragment("rm -rf /; echo ok").is_err());
+        assert!(validate_shell_fragment("cat x | grep y").is_err());
+        assert!(validate_shell_fragment("a && b").is_err());
+        assert!(validate_shell_fragment("a || b").is_err());
+        assert!(validate_shell_fragment("$(whoami)").is_err());
+        assert!(validate_shell_fragment("`whoami`").is_err());
+        assert!(validate_shell_fragment("x > /etc/passwd").is_err());
+        assert!(validate_shell_fragment("x < secrets").is_err());
+        assert!(validate_shell_fragment("a\nb").is_err());
+    }
+
+    #[test]
+    fn validate_shell_fragment_rejects_empty() {
+        assert!(validate_shell_fragment("").is_err());
+        assert!(validate_shell_fragment("   ").is_err());
+    }
+
+    // ── is_allowed_terminal ──
+    #[test]
+    fn is_allowed_terminal_accepts_known() {
+        assert!(is_allowed_terminal("Terminal"));
+        assert!(is_allowed_terminal("iTerm"));
+        assert!(is_allowed_terminal("ITERM2"));   // 大小写不敏感
+        assert!(is_allowed_terminal("warp"));
+        assert!(is_allowed_terminal("WezTerm"));
+    }
+
+    #[test]
+    fn is_allowed_terminal_rejects_injection() {
+        // 攻击者控制 app_name 不应能注入 AppleScript
+        assert!(!is_allowed_terminal("Foo\"; do shell script \"evil"));
+        assert!(!is_allowed_terminal(""));
+        assert!(!is_allowed_terminal("SomeRandomApp"));
+        assert!(!is_allowed_terminal("Terminal.app")); // 必须是不带后缀
+    }
+
+    // ── apple_quote ──
+    #[test]
+    fn apple_quote_wraps_simple() {
+        assert_eq!(apple_quote("Terminal"), "\"Terminal\"");
+    }
+
+    #[test]
+    fn apple_quote_escapes_quotes_and_backslash() {
+        assert_eq!(apple_quote(r#"it"s"#), "\"it\\\"s\"");
+        assert_eq!(apple_quote(r"a\b"), "\"a\\\\b\"");
+    }
+
+    // ── is_sensitive_for_preview ──
+    #[test]
+    fn is_sensitive_for_preview_blocks_env_and_keys() {
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.env")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.ENV")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.envrc")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.ssh/id_rsa")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.ssh/id_ed25519")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.aws/credentials")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.netrc")));
+    }
+
+    #[test]
+    fn is_sensitive_for_preview_allows_normal_files() {
+        assert!(!is_sensitive_for_preview(Path::new("/Users/x/notes.md")));
+        assert!(!is_sensitive_for_preview(Path::new("/Users/x/.gitignore")));
+        assert!(!is_sensitive_for_preview(Path::new("/Users/x/script.sh")));
     }
 }
 

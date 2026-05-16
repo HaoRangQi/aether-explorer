@@ -9,6 +9,8 @@
  * 这是一个纯函数模块，不依赖 Tauri，便于单测。
  */
 
+import { open as tauriShellOpen } from '@tauri-apps/plugin-shell';
+
 const SAFE_SHELL_OPEN_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
 
 /**
@@ -86,4 +88,16 @@ export function validateShellFragment(raw: string): string | null {
     if (trimmed.includes(token)) return null;
   }
   return trimmed;
+}
+
+/**
+ * 安全包装 Tauri shell.open：协议不在白名单内则抛错。
+ *
+ * 调用方应该 try/catch，把错误转化为用户可见的 toast。
+ */
+export async function safeShellOpen(raw: string): Promise<void> {
+  if (!isSafeShellOpenUrl(raw)) {
+    throw new Error(`不允许的链接协议：${raw}`);
+  }
+  await tauriShellOpen(raw);
 }

@@ -6,7 +6,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
-import { open as shellOpen } from '@tauri-apps/plugin-shell';
+import { safeShellOpen } from '../lib/url-guard';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { ThemeSettings, ContextMenuAction, LanguageOption } from '../types';
@@ -1445,7 +1445,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
               <DownloadCloud className="w-4 h-4" /> {t('settings.update.downloadAndInstall')}
             </button>
             <button
-              onClick={() => updateStatus.releaseUrl && shellOpen(updateStatus.releaseUrl)}
+              onClick={() => updateStatus.releaseUrl && safeShellOpen(updateStatus.releaseUrl).catch(() => {})}
               className="flex-1 py-3 rounded-2xl bg-primary text-on-primary text-[13px] font-black flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:bg-primary/80 transition-colors"
             >
               <ExternalLink className="w-4 h-4" /> {t('settings.update.viewRelease')}

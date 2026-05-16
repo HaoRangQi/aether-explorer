@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { open as shellOpen } from '@tauri-apps/plugin-shell';
+import { safeShellOpen } from '../lib/url-guard';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { Menu, MenuItem, PredefinedMenuItem, Submenu } from '@tauri-apps/api/menu';
@@ -2874,26 +2874,39 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setContextMenu(null);
     setActiveDropdown('copy-move');
     const targets = getActionFiles(file);
-    const targetDir = prompt('复制到（输入目标目录路径）:', currentPath);
+    let targetDir: string | null = null;
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: true,
+        defaultPath: currentPath || undefined,
+        title: t('dialogs.copyToTitle', { defaultValue: '选择复制目标' }),
+      });
+      targetDir = typeof selected === 'string' ? selected : null;
+    } catch { /* user cancelled */ }
     setActiveDropdown(null);
     if (targetDir) {
       try {
-        await Promise.all(targets.map(item => copyFile(item.path, targetDir)));
-        refreshCurrentDir();
-        showFeedback(`已复制 ${targets.length} 个项目`);
+        await executeCopyFiles(targets, makeFolderItemFromPath(targetDir), 'abort');
       } catch (e) { showFeedback(`复制失败：${String(e)}`); }
     }
   };
 
   const handleMoveFile = async (file: FileItem) => {
     const targets = getActionFiles(file);
-    const targetDir = prompt('移动到（输入目标目录路径）:', currentPath);
+    let targetDir: string | null = null;
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: true,
+        defaultPath: currentPath || undefined,
+        title: t('dialogs.moveToTitle', { defaultValue: '选择移动目标' }),
+      });
+      targetDir = typeof selected === 'string' ? selected : null;
+    } catch { /* user cancelled */ }
     if (targetDir) {
       try {
-        await Promise.all(targets.map(item => moveFile(item.path, targetDir)));
-        refreshCurrentDir();
-        onSelectFiles([]);
-        showFeedback(`已移动 ${targets.length} 个项目`);
+        await executeMoveFiles(targets, makeFolderItemFromPath(targetDir), 'abort');
       } catch (e) { showFeedback(`移动失败：${String(e)}`); }
     }
     setContextMenu(null);
@@ -3049,8 +3062,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         if (!url) {
           showFeedback(`扩展「${extension.label}」未配置 URL。`);
         } else {
-          await shellOpen(url);
-          showFeedback(`已打开链接：${extension.label}`);
+          try {
+            await safeShellOpen(url);
+            showFeedback(`已打开链接：${extension.label}`);
+          } catch (err) {
+            showFeedback(`扩展「${extension.label}」链接不安全：${String(err)}`);
+          }
         }
       } else {
         showFeedback(`扩展「${extension.label}」已预留，等待插件接入。`);
