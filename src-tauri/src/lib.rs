@@ -1600,3 +1600,226 @@ pub fn run() {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── format_size ──
+    #[test]
+    fn format_size_bytes_under_1k() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1), "1 B");
+        assert_eq!(format_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_size_kib_to_gib() {
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+        assert_eq!(format_size(1024_u64.pow(3)), "1.0 GB");
+    }
+
+    #[test]
+    fn format_size_decimal_precision() {
+        assert_eq!(format_size(1536), "1.5 KB");
+        assert_eq!(format_size(1024 * 1024 * 3 / 2), "1.5 MB");
+    }
+
+    // ── format_kib ──
+    #[test]
+    fn format_kib_parses_numeric_string() {
+        // 输入 KiB 数字，输出人类可读
+        assert_eq!(format_kib("1"), "1.0 KB");
+        assert_eq!(format_kib("1024"), "1.0 MB");
+        assert_eq!(format_kib("0"), "0 B");
+    }
+
+    #[test]
+    fn format_kib_returns_input_on_parse_failure() {
+        assert_eq!(format_kib("not-a-number"), "not-a-number");
+        assert_eq!(format_kib(""), "");
+    }
+
+    // ── parse_df_line ──
+    #[test]
+    fn parse_df_line_simple_mount() {
+        let line = "/dev/disk1s1 488245288 244091128 244154160 50% /";
+        let (fs, size, used, avail, cap, mount) = parse_df_line(line).unwrap();
+        assert_eq!(fs, "/dev/disk1s1");
+        assert_eq!(size, "488245288");
+        assert_eq!(used, "244091128");
+        assert_eq!(avail, "244154160");
+        assert_eq!(cap, "50%");
+        assert_eq!(mount, "/");
+    }
+
+    #[test]
+    fn parse_df_line_mount_with_spaces() {
+        let line = "/dev/disk2s1 1000 500 500 50% /Volumes/My Drive";
+        let (_, _, _, _, _, mount) = parse_df_line(line).unwrap();
+        assert_eq!(mount, "/Volumes/My Drive");
+    }
+
+    #[test]
+    fn parse_df_line_rejects_short_input() {
+        assert!(parse_df_line("only three cols").is_err());
+        assert!(parse_df_line("").is_err());
+    }
+
+    // ── parse_capacity ──
+    #[test]
+    fn parse_capacity_strips_percent() {
+        assert_eq!(parse_capacity("85%"), 85);
+        assert_eq!(parse_capacity("0%"), 0);
+        assert_eq!(parse_capacity("100%"), 100);
+    }
+
+    #[test]
+    fn parse_capacity_caps_at_100() {
+        // value 超出 100 截断到 100（u8::min 操作）
+        assert_eq!(parse_capacity("200%"), 100);
+    }
+
+    #[test]
+    fn parse_capacity_invalid_returns_0() {
+        assert_eq!(parse_capacity(""), 0);
+        assert_eq!(parse_capacity("abc"), 0);
+        assert_eq!(parse_capacity("xx%"), 0);
+    }
+
+    // ── detect_mime ──
+    #[test]
+    fn detect_mime_images() {
+        assert_eq!(detect_mime("photo.png", false), "image");
+        assert_eq!(detect_mime("photo.JPG", false), "image");
+        assert_eq!(detect_mime("anim.gif", false), "image");
+        assert_eq!(detect_mime("logo.SVG", false), "image");
+    }
+
+    #[test]
+    fn detect_mime_video_audio() {
+        assert_eq!(detect_mime("clip.mp4", false), "video");
+        assert_eq!(detect_mime("song.mp3", false), "audio");
+        assert_eq!(detect_mime("voice.m4a", false), "audio");
+    }
+
+    #[test]
+    fn detect_mime_code_text_archive() {
+        assert_eq!(detect_mime("main.rs", false), "code");
+        assert_eq!(detect_mime("App.tsx", false), "code");
+        assert_eq!(detect_mime("notes.md", false), "text");
+        assert_eq!(detect_mime("data.json", false), "text");
+        assert_eq!(detect_mime("backup.zip", false), "archive");
+    }
+
+    #[test]
+    fn detect_mime_dir_vs_app_bundle() {
+        assert_eq!(detect_mime("Documents", true), "folder");
+        assert_eq!(detect_mime("Safari.app", true), "application");
+        assert_eq!(detect_mime("foo.APP", true), "application");
+    }
+
+    #[test]
+    fn detect_mime_unknown_extension() {
+        assert_eq!(detect_mime("data.xyzunknown", false), "file");
+        assert_eq!(detect_mime("Makefile", false), "file");
+        assert_eq!(detect_mime("no_extension", false), "file");
+    }
+
+    // ── unique_destination ──
+    #[test]
+    fn unique_destination_nonexistent_returns_original() {
+        let temp = std::env::temp_dir().join(format!("aether-uniq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let target = temp.join("brand-new.txt");
+        let result = unique_destination(&target);
+        assert_eq!(result, target);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn unique_destination_appends_copy_suffix() {
+        let temp = std::env::temp_dir().join(format!("aether-uniq2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let a = temp.join("a.txt");
+        std::fs::write(&a, b"").unwrap();
+        let next = unique_destination(&a);
+        assert_eq!(next.file_name().unwrap().to_str().unwrap(), "a copy.txt");
+
+        std::fs::write(temp.join("a copy.txt"), b"").unwrap();
+        let next2 = unique_destination(&a);
+        assert_eq!(next2.file_name().unwrap().to_str().unwrap(), "a copy 2.txt");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn unique_destination_handles_no_extension() {
+        let temp = std::env::temp_dir().join(format!("aether-uniq3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let f = temp.join("Makefile");
+        std::fs::write(&f, b"").unwrap();
+        let next = unique_destination(&f);
+        assert_eq!(next.file_name().unwrap().to_str().unwrap(), "Makefile copy");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    // ── shell_quote ──
+    #[test]
+    fn shell_quote_wraps_simple() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn shell_quote_escapes_single_quote() {
+        // POSIX 标准转义：'it' + \\' + 's' → 'it'\''s'
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_quote_keeps_shell_meta_safe() {
+        // 这些字符在引号内都不会被 shell 解释
+        assert_eq!(shell_quote("$(rm -rf /)"), "'$(rm -rf /)'");
+        assert_eq!(shell_quote("`whoami`"), "'`whoami`'");
+        assert_eq!(shell_quote("foo;bar"), "'foo;bar'");
+        assert_eq!(shell_quote("foo|bar"), "'foo|bar'");
+        assert_eq!(shell_quote("foo && bar"), "'foo && bar'");
+    }
+
+    #[test]
+    fn shell_quote_paths_with_spaces() {
+        assert_eq!(shell_quote("/Users/jane/My Documents"), "'/Users/jane/My Documents'");
+    }
+
+    // ── encode_query_component ──
+    #[test]
+    fn encode_query_component_keeps_safe_chars() {
+        assert_eq!(encode_query_component("abc123"), "abc123");
+        assert_eq!(encode_query_component("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn encode_query_component_percent_encodes_unsafe() {
+        assert_eq!(encode_query_component(" "), "%20");
+        assert_eq!(encode_query_component("a/b"), "a%2Fb");
+        assert_eq!(encode_query_component("a&b"), "a%26b");
+        assert_eq!(encode_query_component("a=b"), "a%3Db");
+    }
+
+    #[test]
+    fn encode_query_component_handles_multibyte() {
+        // 中文按 UTF-8 三字节编码
+        assert_eq!(encode_query_component("中"), "%E4%B8%AD");
+    }
+}
+

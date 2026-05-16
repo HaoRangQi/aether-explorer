@@ -10,110 +10,29 @@ import { load } from '@tauri-apps/plugin-store';
 import Sidebar from './components/Sidebar';
 import TopBar, { TabTransferPayload } from './components/TopBar';
 import ExplorerView from './components/ExplorerView';
-import { ThemeSettings, ViewMode, TabData, ContextMenuAction } from './types';
-import { ACCENT_COLORS } from './constants';
+import { ThemeSettings, ViewMode, TabData } from './types';
+import {
+  DEFAULT_THEME,
+  FAVORITES_VIRTUAL_PATH,
+  normalizeThemeSettings,
+  loadThemeFromLocalStorage,
+} from './lib/settings';
+import { getPathLeaf, getInitialTabs as buildInitialTabs } from './lib/path-helpers';
 
-const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 const MAX_RECENT_ITEMS = 100;
 
 const SettingsView = lazy(() => import('./components/SettingsView'));
 const StorageView = lazy(() => import('./components/StorageView'));
 const TransferModal = lazy(() => import('./components/TransferModal'));
 
-const DEFAULT_THEME: ThemeSettings = {
-  mode: 'auto',
-  accentColor: ACCENT_COLORS[0],
-  blurIntensity: 32,
-  transparency: 100,
-  enableMica: true,
-  fontFamily: 'Inter',
-  gridSize: 180,
-  gridWidth: 180,
-  gridHeight: 180,
-  gridGap: 16,
-  mediaGridWidth: 180,
-  mediaGridHeight: 180,
-  mediaGridLinked: true,
-  columnWidth: 280,
-  columnHeight: 60,
-  showHiddenFiles: false,
-  showPreviewPanel: false,
-  enableDevTools: false,
-  wallpaperBlur: 0,
-  contextMenuExtensions: [
-    { id: 'terminal-dev', label: '用终端打开并启动开发', enabled: true, actionType: 'terminal', terminalApp: 'Terminal', terminalArgs: 'npm run dev', workingDirectory: 'selection', confirmExecution: false },
-    { id: 'terminal-list', label: '终端列出详细信息', enabled: false, actionType: 'terminal', terminalApp: 'Terminal', terminalArgs: 'ls -la', workingDirectory: 'selection', confirmExecution: false },
-    { id: 'ai-scan', label: 'AI 智能扫描', enabled: false, actionType: 'placeholder', confirmExecution: false },
-  ],
-  terminalApp: 'Terminal',
-  terminalArgs: '',
-  defaultHomePath: FAVORITES_VIRTUAL_PATH,
-};
-
-function getPathLeaf(path: string) {
-  return path.split('/').filter(Boolean).pop() || path || '主页';
-}
-
 function getInitialTabs(defaultHomePath: string): TabData[] {
-  const params = new URLSearchParams(window.location.search);
-  const initialPath = params.get('path');
-  const label = params.get('label');
-
-  if (initialPath) {
-    return [{
-      id: `tab-${Date.now()}`,
-      labelTranslationKey: 'tabs.home',
-      label: label || getPathLeaf(initialPath),
-      initialPath,
-      currentPath: initialPath,
-    }];
-  }
-
-  return [
-    {
-      id: 'desktop',
-      labelTranslationKey: 'tabs.home',
-      label: defaultHomePath.startsWith('aether://') ? undefined : getPathLeaf(defaultHomePath),
-      initialPath: defaultHomePath,
-      currentPath: defaultHomePath,
-    },
-  ];
+  return buildInitialTabs(defaultHomePath, new URLSearchParams(window.location.search));
 }
 
 const STORE_OPTIONS = { autoSave: true, defaults: {} };
 
-const DEPRECATED_CONTEXT_EXTENSION_IDS = new Set(['open', 'rename', 'copy', 'move', 'share', 'compress', 'terminal', 'delete', 'tag', 'group']);
-
-function normalizeContextMenuExtensions(extensions?: ContextMenuAction[]) {
-  return (extensions || DEFAULT_THEME.contextMenuExtensions || [])
-    .filter(ext => !ext.isSystem && !DEPRECATED_CONTEXT_EXTENSION_IDS.has(ext.id))
-    .map(ext => ({
-      ...ext,
-      actionType: ext.actionType || 'placeholder',
-      workingDirectory: ext.workingDirectory || 'selection',
-      confirmExecution: ext.confirmExecution ?? true,
-    }));
-}
-
-function normalizeThemeSettings(settings: ThemeSettings): ThemeSettings {
-  return {
-    ...DEFAULT_THEME,
-    ...settings,
-    contextMenuExtensions: normalizeContextMenuExtensions(settings.contextMenuExtensions),
-  };
-}
-
 function loadSettingsStore() {
   return load('settings.json', STORE_OPTIONS);
-}
-
-function loadThemeFromLocalStorage(): ThemeSettings {
-  try {
-    const saved = localStorage.getItem('theme-settings');
-    return saved ? normalizeThemeSettings(JSON.parse(saved)) : DEFAULT_THEME;
-  } catch {
-    return DEFAULT_THEME;
-  }
 }
 
 function loadFavoritesFromLocalStorage(): string[] {
