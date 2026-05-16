@@ -59,6 +59,14 @@ struct VolumeInfo {
 struct FileTransferPayload {
     paths: Vec<String>,
     cut: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_window: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transfer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    count: Option<u32>,
 }
 
 struct FileClipboardState(Mutex<Option<FileTransferPayload>>);
@@ -641,7 +649,14 @@ fn set_file_clipboard(
     *clipboard = if paths.is_empty() {
         None
     } else {
-        Some(FileTransferPayload { paths, cut })
+        Some(FileTransferPayload {
+            paths,
+            cut,
+            source_window: None,
+            transfer_id: None,
+            preview_name: None,
+            count: None,
+        })
     };
     Ok(())
 }
@@ -666,12 +681,23 @@ fn set_file_drag_payload(
     state: tauri::State<FileDragState>,
     paths: Vec<String>,
     cut: bool,
+    source_window: Option<String>,
+    transfer_id: Option<String>,
+    preview_name: Option<String>,
+    count: Option<u32>,
 ) -> Result<(), String> {
     let mut drag_payload = state.0.lock().map_err(|_| "文件拖拽状态不可用".to_string())?;
     *drag_payload = if paths.is_empty() {
         None
     } else {
-        Some(FileTransferPayload { paths, cut })
+        Some(FileTransferPayload {
+            paths,
+            cut,
+            source_window,
+            transfer_id,
+            preview_name,
+            count,
+        })
     };
     Ok(())
 }
