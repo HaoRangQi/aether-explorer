@@ -76,6 +76,8 @@ export interface ThemeSettings {
   columnHeight?: number;
   showHiddenFiles?: boolean;
   showPreviewPanel?: boolean;
+  /** 空格键调用 macOS Quick Look 预览，默认开启 */
+  enableSpacePreview?: boolean;
   enableDevTools?: boolean;
   useSystemContextMenu?: boolean;
   wallpaperUrl?: string;

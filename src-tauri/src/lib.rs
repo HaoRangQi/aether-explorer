@@ -464,6 +464,42 @@ fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|e| format!("启动窗口拖拽失败: {}", e))
 }
 
+/// 拖拽期间被源窗口频繁调用：把屏幕坐标下的非源窗口置顶。
+/// 用于多窗口拖拽时让"底层窗口"自动浮到前面，看清放置提示。
+///
+/// - `screen_x` / `screen_y`：CSS 逻辑像素（DragEvent.screenX/screenY）
+/// - `except_window`：源窗口 label，不会被 raise
+///
+/// 返回被 raise 的窗口 label（如有），便于前端 debug 与去重。
+#[tauri::command]
+fn raise_window_at(
+    app: tauri::AppHandle,
+    screen_x: f64,
+    screen_y: f64,
+    except_window: String,
+) -> Result<Option<String>, String> {
+    let windows = app.webview_windows();
+    for (label, win) in windows.iter() {
+        if label == &except_window { continue; }
+        if label == "drag-preview" { continue; }
+        let factor = win.scale_factor().map_err(|e| e.to_string())?;
+        let pos = win.outer_position().map_err(|e| e.to_string())?;
+        let size = win.outer_size().map_err(|e| e.to_string())?;
+        let x0 = pos.x as f64 / factor;
+        let y0 = pos.y as f64 / factor;
+        let x1 = x0 + size.width as f64 / factor;
+        let y1 = y0 + size.height as f64 / factor;
+        if screen_x >= x0 && screen_x <= x1 && screen_y >= y0 && screen_y <= y1 {
+            let already_focused = win.is_focused().unwrap_or(false);
+            if !already_focused {
+                let _ = win.set_focus();
+            }
+            return Ok(Some(label.clone()));
+        }
+    }
+    Ok(None)
+}
+
 #[tauri::command]
 fn debug_log(message: String) {
     println!("[DEBUG-dnd] {}", message);
@@ -1506,6 +1542,7 @@ pub fn run() {
             get_home_dir,
             open_system_settings,
             start_window_drag,
+            raise_window_at,
             debug_log,
             list_fonts,
             list_terminal_apps,

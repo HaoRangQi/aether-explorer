@@ -196,6 +196,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const activeTransferRef = useRef<{ transferId: string; paths: string[] } | null>(null);
   const incomingDragTimerRef = useRef<number | null>(null);
   const recentExternalDropRef = useRef<Set<string>>(new Set());
+  // 拖拽期间监听光标位置，请求 Rust 把光标下的非源窗口 raise 到前台
+  const dragCursorHandlerRef = useRef<((e: DragEvent) => void) | null>(null);
+  const lastRaiseAtRef = useRef(0);
+  const lastRaisedLabelRef = useRef<string | null>(null);
   // 让事件 listener 能拿到最新 theme / incomingFileDrag / acceptIncomingFileDrag。
   // 事件 listener 创建时闭包冻结，但 dragEnd 时 theme 可能已变化。
   const themeRef = useRef(theme);
@@ -370,6 +374,44 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     } catch {
       // Focus is best-effort; the context menu should still open.
     }
+  };
+
+  // ── 拖拽期间的"光标下窗口自动置顶" ──
+  // HTML5 dragenter 跨窗口在 macOS 上不稳定；改由源窗口持续轮询 cursor 坐标，
+  // 请求 Rust 端把光标下的非源窗口 raise。50ms 节流避免轰炸。
+  const startCursorRaiseTracking = () => {
+    if (dragCursorHandlerRef.current) return;
+    const sourceLabel = getCurrentWindow().label;
+    const handler = (e: DragEvent) => {
+      const now = Date.now();
+      if (now - lastRaiseAtRef.current < 50) return;
+      // screenX/Y 在 drag 期间 0,0 是 Webkit 旧 bug，在 Tauri/wkwebview 上 Safari 17+ 已修
+      if (e.screenX === 0 && e.screenY === 0) return;
+      lastRaiseAtRef.current = now;
+      invoke<string | null>('raise_window_at', {
+        screenX: e.screenX,
+        screenY: e.screenY,
+        exceptWindow: sourceLabel,
+      })
+        .then(label => {
+          if (label && label !== lastRaisedLabelRef.current) {
+            lastRaisedLabelRef.current = label;
+            logDragDebug(`raised window=${label} at=${e.screenX},${e.screenY}`);
+          }
+        })
+        .catch(() => {});
+    };
+    document.addEventListener('drag', handler, true);
+    dragCursorHandlerRef.current = handler;
+  };
+
+  const stopCursorRaiseTracking = () => {
+    if (dragCursorHandlerRef.current) {
+      document.removeEventListener('drag', dragCursorHandlerRef.current, true);
+      dragCursorHandlerRef.current = null;
+    }
+    lastRaisedLabelRef.current = null;
+    lastRaiseAtRef.current = 0;
   };
 
   const writeDragPayload = (file: FileItem) => {
@@ -982,6 +1024,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
+  // 卸载时确保 cursor raise 监听摘掉，避免泄漏 / 重复触发
+  useEffect(() => () => { stopCursorRaiseTracking(); }, []);
+
   // 同步 ref，让 Tauri event listener 闭包能拿到最新值
   useEffect(() => { themeRef.current = theme; }, [theme]);
   useEffect(() => { incomingFileDragRef.current = incomingFileDrag; }, [incomingFileDrag]);
@@ -1358,8 +1403,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         handleOpenFile(lastSelectedFile);
         return;
       }
-      // Space: Quick Look 预览
-      if (e.key === ' ' && lastSelectedFile) {
+      // Space: Quick Look 预览（可在设置中关闭）
+      if (e.key === ' ' && lastSelectedFile && theme.enableSpacePreview !== false) {
         e.preventDefault();
         handleQuickLook(lastSelectedFile);
         return;
@@ -1807,6 +1852,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       count: paths.length,
       active: true,
     });
+
+    // 拖拽期间持续判定光标下窗口并 raise（让底层窗口自动上浮）
+    startCursorRaiseTracking();
+
     logDragDebug(`dragStart id=${file.id} name=${file.name} type=${file.type} paths=${paths.join('|')}`);
   };
 
@@ -1834,6 +1883,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleDragEnd = (e: React.DragEvent) => {
     logDragDebug(`dragEnd activeId=${draggedFileIdRef.current ?? ''} screenX=${e.screenX} screenY=${e.screenY} meta=${e.metaKey} alt=${e.altKey} shift=${e.shiftKey}`);
+
+    stopCursorRaiseTracking();
 
     // 松手即触发：广播屏幕坐标 + 修饰键到所有窗口。
     // 目标窗口收到后判定坐标是否落在自己范围内，落入则立刻执行 copy/move。
@@ -3425,6 +3476,17 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               onMouseMove={handleContainerMouseMove}
               onMouseUp={handleContainerMouseUp}
               onMouseLeave={handleContainerMouseUp}
+              onDragEnter={(e) => {
+                // 跨窗口 dragenter 是底层窗口"被进入"的最早信号 — 立刻 raise。
+                // 比 dragover 触发更早一帧，避免 banner 看到但窗口仍在底层。
+                if (incomingFileDragRef.current) {
+                  void focusCurrentWindow();
+                }
+                // 系统拖入（Finder→Aether）也需要 raise
+                if (e.dataTransfer.types.includes('Files')) {
+                  void focusCurrentWindow();
+                }
+              }}
               onDragOver={handleSurfaceDragOver}
               onDrop={handleSurfaceDrop}
               className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
