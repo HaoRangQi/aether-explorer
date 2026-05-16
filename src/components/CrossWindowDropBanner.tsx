@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
-import { Copy, ArrowRightLeft, X } from 'lucide-react';
+import { Copy, ArrowRightLeft, HelpCircle } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 export interface IncomingFileDragView {
@@ -18,27 +17,22 @@ interface Props {
   currentPath: string;
   defaultMode: 'copy' | 'move' | 'ask';
   visibleMs: number;
-  onAccept: (op: 'copy' | 'move') => void;
-  onCancel: () => void;
   t: TFunction;
 }
 
 /**
- * 跨窗口拖拽到达提示。
+ * 跨窗口拖拽悬停提示。
  *
- * 设计要点：
- * - 不立即响应任何 drag-end 系列事件 — 用户拖到目标窗口后必须有充足时间看清。
- * - 默认动作来自 theme.crossWindowDropDefault；修饰键临时覆盖（⌘ 切换、⌥ 复制、⇧ 移动）。
- * - ask 模式提供并列两个按钮，强制用户显式选择，没有"默认"动作。
- * - 视觉上的倒计时进度条暗示剩余时间，不让用户惊讶 banner 突然消失。
+ * 行为：纯视觉反馈，不接收任何点击。
+ * - dragstart 后由父组件挂载、dragEnd 后立即卸载
+ * - 用户「松开鼠标」是唯一触发动作的事件，由父组件根据屏幕坐标 + 修饰键统一判定
+ * - banner 自己不做任何决策，只回答：现在拖到了哪个 Aether 窗口、按当前设置会发生什么
  */
 export default function CrossWindowDropBanner({
   drag,
   currentPath,
   defaultMode,
   visibleMs,
-  onAccept,
-  onCancel,
   t,
 }: Props) {
   const [remainingPct, setRemainingPct] = useState(100);
@@ -57,132 +51,55 @@ export default function CrossWindowDropBanner({
     return () => cancelAnimationFrame(raf);
   }, [drag.shownAt, visibleMs]);
 
-  // ESC 取消
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onCancel();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+  const actionIcon = defaultMode === 'move' ? <ArrowRightLeft className="w-4 h-4" />
+    : defaultMode === 'ask' ? <HelpCircle className="w-4 h-4" />
+    : <Copy className="w-4 h-4" />;
 
-  const resolveOp = (e: ReactMouseEvent): 'copy' | 'move' => {
-    if (e.altKey) return 'copy';   // ⌥ 强制复制
-    if (e.shiftKey) return 'move'; // ⇧ 强制移动
-    if (defaultMode === 'copy') return e.metaKey ? 'move' : 'copy';
-    if (defaultMode === 'move') return e.metaKey ? 'copy' : 'move';
-    return 'copy'; // ask 模式的默认值（实际由按钮路径决定）
-  };
-
-  const isAsk = defaultMode === 'ask';
+  const actionText = defaultMode === 'move'
+    ? t('crossWindow.releaseToMove', { defaultValue: '松开鼠标即可移动到此' })
+    : defaultMode === 'ask'
+      ? t('crossWindow.releaseToAsk', { defaultValue: '松开鼠标后选择动作' })
+      : t('crossWindow.releaseToCopy', { defaultValue: '松开鼠标即可复制到此' });
 
   return (
-    <div
-      className="absolute inset-0 z-40 flex items-center justify-center bg-primary/15 backdrop-blur-md border-2 border-dashed border-primary/70 rounded-2xl m-2 cursor-pointer animate-in fade-in duration-200"
-      onClick={(e) => {
-        if (isAsk) return; // ask 模式必须点按钮
-        e.stopPropagation();
-        onAccept(resolveOp(e));
-      }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onCancel();
-      }}
-    >
-      <div className="bg-surface/95 rounded-2xl px-7 py-6 shadow-2xl text-center max-w-lg pointer-events-auto relative overflow-hidden">
-        {/* 倒计时进度条 */}
-        <div className="absolute top-0 left-0 right-0 h-1 bg-primary/10">
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-primary/15 backdrop-blur-md border-2 border-dashed border-primary/70 rounded-2xl m-2 pointer-events-none animate-in fade-in duration-150">
+      <div className="bg-surface/95 rounded-2xl px-7 py-6 shadow-2xl text-center max-w-lg relative overflow-hidden">
+        {/* 倒计时进度条（兜底，正常松手前就会消失） */}
+        <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary/10">
           <div
-            className="h-full bg-primary transition-[width] duration-100 ease-linear"
+            className="h-full bg-primary/60 transition-[width] duration-100 ease-linear"
             style={{ width: `${remainingPct}%` }}
           />
         </div>
 
-        {/* 取消按钮 */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onCancel();
-          }}
-          className="absolute top-2 right-2 p-1.5 rounded-lg text-on-surface/40 hover:text-on-surface hover:bg-primary/10 transition-colors"
-          title={t('crossWindow.cancel', { defaultValue: '取消（ESC）' })}
-        >
-          <X className="w-4 h-4" />
-        </button>
-
-        <div className="text-on-surface text-base font-bold mb-1.5 mt-2">
+        <div className="text-on-surface text-base font-bold mb-1.5 mt-1">
           {t('crossWindow.incomingTitle', {
             count: drag.count,
             defaultValue: '来自其他窗口的 {{count}} 个项目',
           })}
         </div>
 
-        <div className="text-on-surface/70 text-xs mb-4 truncate font-mono">
+        <div className="text-on-surface/60 text-xs mb-4 truncate font-mono">
           {drag.previewName}
         </div>
 
         <div className="text-on-surface/85 text-sm mb-1">
-          {t('crossWindow.targetPath', {
-            defaultValue: '目标目录',
-          })}
+          {t('crossWindow.targetPath', { defaultValue: '目标目录' })}
         </div>
         <div className="text-primary text-xs font-mono mb-4 truncate">
           {currentPath || t('crossWindow.unknownPath', { defaultValue: '（当前没有真实目录）' })}
         </div>
 
-        {isAsk ? (
-          <div className="flex gap-3 justify-center">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onAccept('copy');
-              }}
-              className="px-5 py-2.5 rounded-xl bg-primary text-on-primary text-sm font-bold flex items-center gap-2 hover:scale-[1.02] active:scale-95 transition-transform shadow-lg"
-            >
-              <Copy className="w-4 h-4" />
-              {t('crossWindow.copyHere', { defaultValue: '复制到此' })}
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onAccept('move');
-              }}
-              className="px-5 py-2.5 rounded-xl bg-primary/15 text-primary text-sm font-bold flex items-center gap-2 hover:bg-primary/25 active:scale-95 transition-all"
-            >
-              <ArrowRightLeft className="w-4 h-4" />
-              {t('crossWindow.moveHere', { defaultValue: '移动到此' })}
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary/15 text-primary text-sm font-bold">
-              {defaultMode === 'move' ? (
-                <>
-                  <ArrowRightLeft className="w-4 h-4" />
-                  {t('crossWindow.clickToMove', { defaultValue: '点击移动到此' })}
-                </>
-              ) : (
-                <>
-                  <Copy className="w-4 h-4" />
-                  {t('crossWindow.clickToCopy', { defaultValue: '点击复制到此' })}
-                </>
-              )}
-            </div>
-            <div className="text-on-surface/55 text-[11px] mt-3 leading-relaxed">
-              {defaultMode === 'move'
-                ? t('crossWindow.modifierHintMoveDefault', {
-                    defaultValue: '⌘ 改为复制 · ⌥ 强制复制 · ⇧ 强制移动 · 右键 / ESC 取消',
-                  })
-                : t('crossWindow.modifierHintCopyDefault', {
-                    defaultValue: '⌘ 改为移动 · ⌥ 强制复制 · ⇧ 强制移动 · 右键 / ESC 取消',
-                  })}
-            </div>
-          </>
-        )}
+        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary/15 text-primary text-sm font-bold">
+          {actionIcon}
+          {actionText}
+        </div>
+
+        <div className="text-on-surface/45 text-[11px] mt-3 leading-relaxed">
+          {t('crossWindow.modifierHintGlobal', {
+            defaultValue: '拖回去或松到别处即可取消 · ⌥ 强制复制 · ⇧ 强制移动 · ⌘ 切换默认',
+          })}
+        </div>
       </div>
     </div>
   );

@@ -36,12 +36,12 @@ const LIST_COLS = {
 const INTERNAL_FILE_DRAG_MIME = 'application/x-aether-file-paths';
 const FILE_DRAG_START_EVENT = 'aether-file-drag-start';
 const FILE_DRAG_END_EVENT = 'aether-file-drag-end';
+const FILE_DRAG_END_AT_EVENT = 'aether-file-drag-end-at';
 const FILE_DROP_ACCEPTED_EVENT = 'aether-file-drop-accepted';
 const TAURI_DRAG_DROP_EVENT = 'tauri://drag-drop';
 const TAURI_DRAG_ENTER_EVENT = 'tauri://drag-enter';
 const TAURI_DRAG_LEAVE_EVENT = 'tauri://drag-leave';
-// banner 最大可见时间 — 用户拖到目标窗口后必须留够时间看清并选择动作。
-// 即便源端 dragEnd 已 emit FILE_DRAG_END_EVENT 也不立即清，避免"一闪就没"。
+// banner 视觉提示的兜底超时（正常情况源端 dragEnd 会立即终结）
 const INCOMING_DRAG_VISIBLE_MS = 12000;
 const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 const RECENT_VIRTUAL_PATH = 'aether://recent';
@@ -92,6 +92,18 @@ interface FileDropAcceptedPayload {
   paths: string[];
   op: 'copy' | 'move';
   targetWindow: string;
+}
+
+interface FileDragEndAtPayload {
+  transferId: string;
+  /** 屏幕坐标（含多显示器情况） */
+  screenX: number;
+  screenY: number;
+  /** 用户松手时按下的修饰键，跨设备策略 + 强制 copy/move 用 */
+  metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  sourceWindow: string;
 }
 
 interface TauriDragDropPayload {
@@ -184,6 +196,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const activeTransferRef = useRef<{ transferId: string; paths: string[] } | null>(null);
   const incomingDragTimerRef = useRef<number | null>(null);
   const recentExternalDropRef = useRef<Set<string>>(new Set());
+  // 让事件 listener 能拿到最新 theme / incomingFileDrag / acceptIncomingFileDrag。
+  // 事件 listener 创建时闭包冻结，但 dragEnd 时 theme 可能已变化。
+  const themeRef = useRef(theme);
+  const incomingFileDragRef = useRef<IncomingFileDrag | null>(null);
+  const acceptIncomingFileDragRef = useRef<((op: 'copy' | 'move') => Promise<void>) | null>(null);
   const internalDragRef = useRef<InternalDragState | null>(null);
   const loadRequestSeqRef = useRef(0);
   const pendingAppIconPathsRef = useRef<Set<string>>(new Set());
@@ -965,6 +982,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
+  // 同步 ref，让 Tauri event listener 闭包能拿到最新值
+  useEffect(() => { themeRef.current = theme; }, [theme]);
+  useEffect(() => { incomingFileDragRef.current = incomingFileDrag; }, [incomingFileDrag]);
+
   // ── 跨窗口拖拽接收（Aether↔Aether + Finder→Aether 兜底） ──
   useEffect(() => {
     if (!isActive) return;
@@ -1004,6 +1025,56 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     // 用户还没看清/操作，立即清掉会变成"一闪而过"。
     // banner 只在以下情况关闭：① 用户点击执行 ② 用户右键 / ESC 取消 ③ VISIBLE_MS 超时
 
+    // ⭐ 关键：松手即处理 — 收到源端 dragEnd 携带的屏幕坐标，
+    // 若坐标落在本窗口范围内，立即执行 copy/move，无需用户点 banner。
+    listen<FileDragEndAtPayload>(FILE_DRAG_END_AT_EVENT, async ({ payload }) => {
+      if (cancelled) return;
+      if (payload.sourceWindow === getCurrentWindow().label) return;
+
+      const win = getCurrentWindow();
+      try {
+        const [pos, size, factor] = await Promise.all([
+          win.outerPosition(),
+          win.outerSize(),
+          win.scaleFactor(),
+        ]);
+        // Tauri 返回 PhysicalPosition/Size（物理像素），React screenX/Y 是逻辑像素
+        const x0 = pos.x / factor;
+        const y0 = pos.y / factor;
+        const x1 = x0 + size.width / factor;
+        const y1 = y0 + size.height / factor;
+        const inside = payload.screenX >= x0
+          && payload.screenX <= x1
+          && payload.screenY >= y0
+          && payload.screenY <= y1;
+
+        if (!inside) {
+          // 不在本窗口范围内 — 静默关闭 banner，不做任何操作
+          setIncomingFileDrag(null);
+          if (incomingDragTimerRef.current) {
+            window.clearTimeout(incomingDragTimerRef.current);
+            incomingDragTimerRef.current = null;
+          }
+          return;
+        }
+
+        // 落在本窗口内 → 计算 op 并执行
+        const defaultMode = (themeRef.current.crossWindowDropDefault || 'copy');
+        let op: 'copy' | 'move';
+        if (payload.altKey) op = 'copy';        // ⌥ 强制复制
+        else if (payload.shiftKey) op = 'move'; // ⇧ 强制移动
+        else if (defaultMode === 'ask') op = 'copy'; // ask 模式下没显式选择 → 复制（最安全）
+        else if (payload.metaKey) op = defaultMode === 'copy' ? 'move' : 'copy';
+        else op = defaultMode === 'move' ? 'move' : 'copy';
+
+        const current = incomingFileDragRef.current;
+        if (!current || current.transferId !== payload.transferId) return;
+        await acceptIncomingFileDragRef.current?.(op);
+      } catch (err) {
+        logDragDebug(`dragEndAt error=${String(err)}`);
+      }
+    }).then(fn => unlistens.push(fn)).catch(() => {});
+
     listen<FileDropAcceptedPayload>(FILE_DROP_ACCEPTED_EVENT, ({ payload }) => {
       if (cancelled) return;
       const active = activeTransferRef.current;
@@ -1031,9 +1102,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     };
   }, [isActive, t]);
 
-  // Aether↔Aether 跨窗口接收：banner 点击 → copy/move 到 currentPath
+  // Aether↔Aether 跨窗口接收：执行 copy/move 到 currentPath
+  // 来源可能是 ① banner 上的显式按钮点击 ② 源端 dragEnd 携带坐标命中本窗口
   const acceptIncomingFileDrag = async (op: 'copy' | 'move') => {
-    const drag = incomingFileDrag;
+    const drag = incomingFileDragRef.current;
     if (!drag) return;
     if (!currentPath) {
       showFeedback(t('messages.crossWindowNoTarget', {
@@ -1069,6 +1141,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }));
     }
   };
+  // 把最新版本的 accept 函数挂到 ref 上供 Tauri event listener 调用
+  acceptIncomingFileDragRef.current = acceptIncomingFileDrag;
 
   // Finder→Aether 全局兜底：Tauri 已经把系统拖入自动 emit 给当前 webview
   useEffect(() => {
@@ -1758,13 +1832,30 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (dragOverFolderId === fileId) setDragOverFolderId(null);
   };
 
-  const handleDragEnd = () => {
-    logDragDebug(`dragEnd activeId=${draggedFileIdRef.current ?? ''}`);
+  const handleDragEnd = (e: React.DragEvent) => {
+    logDragDebug(`dragEnd activeId=${draggedFileIdRef.current ?? ''} screenX=${e.screenX} screenY=${e.screenY} meta=${e.metaKey} alt=${e.altKey} shift=${e.shiftKey}`);
+
+    // 松手即触发：广播屏幕坐标 + 修饰键到所有窗口。
+    // 目标窗口收到后判定坐标是否落在自己范围内，落入则立刻执行 copy/move。
+    const active = activeTransferRef.current;
+    if (active) {
+      void emit(FILE_DRAG_END_AT_EVENT, {
+        transferId: active.transferId,
+        screenX: e.screenX,
+        screenY: e.screenY,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        shiftKey: e.shiftKey,
+        sourceWindow: getCurrentWindow().label,
+      } satisfies FileDragEndAtPayload);
+    }
+
     draggedFileIdRef.current = null;
     setDragPreview(null);
     if (dragOverFolderId !== null) setDragOverFolderId(null);
-    // 给目标窗口 1.5s 处理时间。若目标窗口先返回 drop-accepted，则会立刻 finishSharedFileDrag(0)。
-    finishSharedFileDrag(1500);
+    // 松手后立刻清理本地状态。目标窗口若接收，会反向 emit drop-accepted。
+    // 给一个短暂宽限期等 drop-accepted 回来再发 END（避免目标窗口 listener 还没就绪）。
+    finishSharedFileDrag(400);
   };
 
   const handleDrop = async (e: React.DragEvent, targetFolderId: string) => {
@@ -3338,21 +3429,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               onDrop={handleSurfaceDrop}
               className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
             >
-              {/* 跨窗口拖拽接收 banner（Aether↔Aether） */}
+              {/* 跨窗口拖拽悬停反馈 — 纯视觉，由源端 dragEnd 自动触发处理 */}
               {incomingFileDrag && (
                 <CrossWindowDropBanner
                   drag={incomingFileDrag}
                   currentPath={currentPath}
                   defaultMode={theme.crossWindowDropDefault || 'copy'}
                   visibleMs={INCOMING_DRAG_VISIBLE_MS}
-                  onAccept={(op) => { void acceptIncomingFileDrag(op); }}
-                  onCancel={() => {
-                    if (incomingDragTimerRef.current) {
-                      window.clearTimeout(incomingDragTimerRef.current);
-                      incomingDragTimerRef.current = null;
-                    }
-                    setIncomingFileDrag(null);
-                  }}
                   t={t}
                 />
               )}
