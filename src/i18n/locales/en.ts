@@ -1,8 +1,8 @@
 export default {
   sidebar: {
     favorites: 'Favorites',
-    home: 'Home',
-    homeDirectory: 'Home Folder',
+    home: 'User Home',
+    homeDirectory: 'User Home',
     documents: 'Documents',
     downloads: 'Downloads',
     applications: 'Applications',
@@ -69,8 +69,8 @@ export default {
     wallpaper: 'Wallpaper',
     wallpaperBlur: 'Wallpaper Blur',
     customWallpaper: 'Custom Wallpaper URL',
-    defaultHomePath: 'Default Home Folder',
-    defaultHomePathDesc: 'The location opened on startup; the sidebar Home Folder always points to the system user directory.',
+    defaultHomePath: 'Default Start Page',
+    defaultHomePathDesc: 'The page shown on startup. The sidebar "User Home" always points to the system user directory (~).',
     chooseDefaultHome: 'Choose Folder',
     resetDefaultHome: 'Reset to Favorites',
     showHiddenFiles: 'Show Hidden Files',
@@ -193,7 +193,7 @@ export default {
     timeRemaining: 'remaining'
   },
   tabs: {
-    home: 'Home',
+    home: 'Start',
     downloads: 'Downloads',
     documents: 'Documents',
     images: 'Images',

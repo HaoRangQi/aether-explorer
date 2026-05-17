@@ -20,10 +20,10 @@ describe('getPathLeaf', () => {
     expect(getPathLeaf('/')).toBe('/');
   });
 
-  it('defaults to "主页" on empty', () => {
-    expect(getPathLeaf('')).toBe('主页');
-    expect(getPathLeaf(undefined)).toBe('主页');
-    expect(getPathLeaf(null)).toBe('主页');
+  it('defaults to "首页" on empty', () => {
+    expect(getPathLeaf('')).toBe('首页');
+    expect(getPathLeaf(undefined)).toBe('首页');
+    expect(getPathLeaf(null)).toBe('首页');
   });
 });
 

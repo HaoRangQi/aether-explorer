@@ -127,7 +127,7 @@ export default function App() {
   }, []);
 
   const createNewWindow = useCallback((tab?: TabData) => {
-    // 关键：不传 tab 时（Cmd+N / 菜单 / 加号），把当前的默认主页带给新窗口，
+    // 关键：不传 tab 时（Cmd+N / 菜单 / 加号），把当前的默认首页带给新窗口，
     // 否则新窗口的 ExplorerView 会因 initialPath 为空而走 fallback。
     const fallbackPath = theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
     const path = tab?.currentPath || tab?.initialPath || fallbackPath;

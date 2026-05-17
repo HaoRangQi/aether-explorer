@@ -1,8 +1,8 @@
 export default {
   sidebar: {
     favorites: '个人收藏',
-    home: '主页',
-    homeDirectory: '主目录',
+    home: '用户主页',
+    homeDirectory: '用户主页',
     documents: '文稿',
     downloads: '下载',
     applications: '应用程序',
@@ -70,8 +70,8 @@ export default {
     wallpaperBlur: '壁纸模糊度',
     customWallpaper: '自定义壁纸链接',
     uploadWallpaper: '上传本地图片',
-    defaultHomePath: '默认主页目录',
-    defaultHomePathDesc: '应用启动时默认打开的位置；侧栏“主目录”始终指向系统用户目录。',
+    defaultHomePath: '默认首页',
+    defaultHomePathDesc: '应用启动时默认打开的内容；侧栏「用户主页」始终指向系统用户目录 (~)。',
     chooseDefaultHome: '选择目录',
     resetDefaultHome: '恢复我的收藏',
     showHiddenFiles: '显示隐藏文件',
@@ -202,7 +202,7 @@ export default {
     timeRemaining: '剩余'
   },
   tabs: {
-    home: '主页',
+    home: '首页',
     downloads: '下载',
     documents: '文档',
     images: '图片',

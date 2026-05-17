@@ -1523,10 +1523,10 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
             <div className="space-y-1 min-w-0">
               <h4 className="text-[15px] font-bold text-on-surface flex items-center gap-2">
                 <Folder className="w-4 h-4 text-primary" />
-                {t('settings.defaultHomePath', '默认主页目录')}
+                {t('settings.defaultHomePath', '默认首页')}
               </h4>
               <p className="text-[12px] text-on-surface/50">
-                {t('settings.defaultHomePathDesc', '应用启动时默认打开的位置；侧栏“主目录”始终指向系统用户目录。')}
+                {t('settings.defaultHomePathDesc', '应用启动时默认打开的内容；侧栏「用户主页」始终指向系统用户目录 (~)。')}
               </p>
               <p className="text-[12px] font-mono text-on-surface/35 truncate">
                 {(() => {

@@ -15,13 +15,14 @@ export const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
  *
  * - `/Users/jane/Pictures` → `Pictures`
  * - `/` → `/`
- * - 空字符串 / undefined → `主页`
+ * - 空字符串 / undefined → `首页`（App 内"首页"概念 — App 第一次进来定位的内容；
+ *   注意：不要混淆为系统主目录 `~/`，那个在侧栏叫"用户主页"）
  * - 带尾随斜杠的也正确处理：`/Users/jane/` → `jane`
  */
 export function getPathLeaf(path: string | undefined | null): string {
-  if (!path) return '主页';
+  if (!path) return '首页';
   const parts = path.split('/').filter(Boolean);
-  if (parts.length === 0) return path || '主页';
+  if (parts.length === 0) return path || '首页';
   return parts[parts.length - 1];
 }
 
@@ -33,10 +34,10 @@ export function isVirtualPath(path: string | undefined | null): boolean {
 }
 
 /**
- * 根据 URL search params 或默认主页路径返回初始 tabs 列表。
+ * 根据 URL search params 或默认首页路径返回初始 tabs 列表。
  *
  * - 含 `?path=...&label=...` → 用该路径打开单 tab
- * - 无参数 → 用 defaultHomePath 打开"主页"tab
+ * - 无参数 → 用 defaultHomePath 打开"首页" tab
  */
 export function getInitialTabs(
   defaultHomePath: string,
