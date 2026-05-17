@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle, File as FileIcon } from 'lucide-react';
+import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle, File as FileIcon, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -766,6 +766,84 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
             <RotateCw className="w-4 h-4" />
             全部重置为默认配色
           </button>
+        </div>
+
+        {/* 实时预览 */}
+        <div className="pt-6 border-t border-primary/10 space-y-4">
+          <h4 className="text-[13px] font-black text-on-surface/40 uppercase tracking-widest flex items-center gap-2">
+            <Eye className="w-3.5 h-3.5" /> 实时预览
+          </h4>
+          <div className="rounded-2xl border-2 border-custom overflow-hidden bg-panel-custom">
+            {/* 模拟侧边栏 + 文件区 */}
+            <div className="flex min-h-[220px]">
+              {/* 侧边栏 */}
+              <div className="w-40 shrink-0 border-r border-custom p-3 space-y-1">
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-selected">
+                  <div className="w-5 h-5 rounded-full bg-active-icon flex items-center justify-center">
+                    <Folder className="w-3 h-3 text-on-primary" />
+                  </div>
+                  <span className="text-[11px] font-bold text-selected">下载</span>
+                </div>
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-hover-custom transition-colors">
+                  <div className="w-5 h-5 rounded-full bg-panel-custom flex items-center justify-center">
+                    <FileIcon className="w-3 h-3 text-icon" />
+                  </div>
+                  <span className="text-[11px] text-primary-custom">文稿</span>
+                </div>
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-hover-custom transition-colors">
+                  <div className="w-5 h-5 rounded-full bg-panel-custom flex items-center justify-center">
+                    <ImageIcon className="w-3 h-3 text-icon" />
+                  </div>
+                  <span className="text-[11px] text-primary-custom">图片</span>
+                </div>
+                <div className="my-2 h-px bg-divider" />
+                <div className="px-2 text-[9px] font-bold text-secondary-custom uppercase tracking-wider">标签</div>
+                <div className="flex items-center gap-2 px-2 py-1">
+                  <div className="w-2.5 h-2.5 rounded-full bg-tag-selected" />
+                  <span className="text-[10px] text-secondary-custom">重要</span>
+                </div>
+              </div>
+              {/* 文件区 */}
+              <div className="flex-1 p-3 space-y-1.5">
+                {/* 搜索框 */}
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-search-custom border border-custom mb-3">
+                  <Search className="w-3 h-3 text-icon" />
+                  <span className="text-[11px] text-secondary-custom">搜索文件...</span>
+                </div>
+                {/* 文件项 - 选中 */}
+                <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-selected border border-custom shadow-custom">
+                  <Folder className="w-4 h-4 text-icon" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-bold text-selected truncate">Design Assets</p>
+                    <p className="text-[9px] text-secondary-custom">12 项 · 昨天</p>
+                  </div>
+                </div>
+                {/* 文件项 - 普通 */}
+                <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-panel-custom border border-transparent hover:bg-hover-custom hover:border-custom transition-all">
+                  <FileIcon className="w-4 h-4 text-icon" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-bold text-primary-custom truncate">报告_2024.pdf</p>
+                    <p className="text-[9px] text-secondary-custom">2.1 MB · 周一</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-panel-custom border border-transparent hover:bg-hover-custom hover:border-custom transition-all">
+                  <ImageIcon className="w-4 h-4 text-icon" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-bold text-primary-custom truncate">封面_final.png</p>
+                    <p className="text-[9px] text-secondary-custom">4.5 MB · 今天</p>
+                  </div>
+                </div>
+                {/* 底部状态栏 */}
+                <div className="flex items-center gap-3 mt-3 pt-2 border-t border-custom">
+                  <span className="text-[9px] text-icon font-bold">3</span>
+                  <span className="text-[9px] text-secondary-custom">个项目</span>
+                  <div className="w-px h-2 bg-divider" />
+                  <span className="text-[9px] text-icon font-bold">1</span>
+                  <span className="text-[9px] text-secondary-custom">项已选中</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 

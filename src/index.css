@@ -151,6 +151,8 @@
   .text-secondary-custom { color: var(--color-text-secondary) !important; }
   .border-custom { border-color: var(--color-border) !important; }
   .divide-custom { border-color: var(--color-divider) !important; }
+  .bg-divider { background-color: var(--color-divider) !important; }
+  .fill-icon { fill: var(--color-icon) !important; }
   .shadow-custom { box-shadow: 0 4px 12px rgba(from var(--color-shadow) r g b / 0.2) !important; }
   .bg-active-icon { background-color: var(--color-active-icon-bg) !important; }
   .bg-tag-selected { background-color: var(--color-tag-selected) !important; }
