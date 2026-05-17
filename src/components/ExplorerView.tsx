@@ -1021,10 +1021,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const fileListRef = useRef<HTMLDivElement>(null);
   const [fileListOffset, setFileListOffset] = useState(0);
   useEffect(() => {
-    if (fileListRef.current && containerRef.current) {
+    // 用真正的滚动容器（scrollContainerRef）来计算列表相对它的偏移；
+    // 之前用 containerRef.scrollTop 永远是 0，导致 visibleRange 起点不准。
+    const scrollEl = scrollContainerRef.current;
+    if (fileListRef.current && scrollEl) {
       const listTop = fileListRef.current.getBoundingClientRect().top;
-      const containerTop = containerRef.current.getBoundingClientRect().top;
-      setFileListOffset(listTop - containerTop + containerRef.current.scrollTop);
+      const scrollTop2 = scrollEl.getBoundingClientRect().top;
+      setFileListOffset(listTop - scrollTop2 + scrollEl.scrollTop);
     }
   }, [currentPath]);
 
@@ -1034,7 +1037,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (displayMode !== 'list') return null;
     if (groupBy !== 'none') return null;
     if (currentLevelFiles.length < VIRTUAL_LIST_THRESHOLD) return null;
-    const containerH = containerRef.current?.clientHeight || 600;
+    const containerH = scrollContainerRef.current?.clientHeight || 600;
     const adjustedTop = Math.max(0, scrollTop - fileListOffset);
     const start = Math.max(0, Math.floor(adjustedTop / listItemHeight) - listOverScan);
     const end = Math.min(currentLevelFiles.length, Math.ceil((adjustedTop + containerH) / listItemHeight) + listOverScan);
@@ -1047,7 +1050,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (rafRef.current) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
-      const el = containerRef.current;
+      // 真正滚动的是内层 scrollContainerRef（overflow-y-auto）；
+      // containerRef 是外层 wrapper（无 overflow），scrollTop 永远 0。
+      const el = scrollContainerRef.current;
       if (el) setScrollTop(el.scrollTop);
     });
   };
@@ -1319,8 +1324,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     pulseTimerRef.current = window.setTimeout(() => setPulseFileId(null), 260);
     if (next.type === 'folder') {
       if (displayMode === 'column') {
-        const currentFolderIndex = columnPaths.indexOf(next.path);
-        const newPaths = currentFolderIndex !== -1 ? columnPaths.slice(0, currentFolderIndex + 1) : [];
+        const parent = next.path.substring(0, next.path.lastIndexOf('/'));
+        const parentIndex = columnPaths.indexOf(parent);
+        const newPaths = parentIndex >= 0
+          ? columnPaths.slice(0, parentIndex + 1)
+          : columnPaths;
         setColumnPaths([...newPaths, next.path]);
       }
     }
@@ -1569,8 +1577,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     if (displayMode === 'column') {
       if (file.type === 'folder') {
-        const currentFolderIndex = columnPaths.indexOf(file.path);
-        const newPaths = currentFolderIndex !== -1 ? columnPaths.slice(0, currentFolderIndex + 1) : [];
+        // 找到这个文件夹所在列：父目录是 currentPath（第一列）还是 columnPaths 里的某一项。
+        // 之前实现错把"file.path 是否在 columnPaths"当判断，导致每次新点都清空 → 永远只有 2 列。
+        const parent = file.path.substring(0, file.path.lastIndexOf('/'));
+        const parentIndex = columnPaths.indexOf(parent);
+        const newPaths = parentIndex >= 0
+          ? columnPaths.slice(0, parentIndex + 1)
+          : columnPaths;
         setColumnPaths([...newPaths, file.path]);
       }
     }
@@ -3645,7 +3658,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 />
               )}
               {displayMode === 'grid' && currentLevelFiles.length > 0 && (
-                <div ref={scrollContainerRef} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-32 auto-scrollbar">
+                <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-32 auto-scrollbar">
                   <div className="space-y-8">
                     {(Object.entries(groupedFiles) as [string, FileItem[]][]).map(([groupName, files]) => (
                       <div key={groupName} className="space-y-4">
@@ -4075,7 +4088,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                   {contextSubmenu === 'openWith' && (
-                    <div className="absolute left-full top-0 z-[110] ml-1 w-52 rounded-2xl border border-primary/20 bg-primary/10 p-1.5 shadow-2xl backdrop-blur-3xl">
+                    <div className="absolute left-full top-0 z-[110] ml-1 w-52 rounded-2xl border border-primary/20 bg-surface shadow-2xl p-1.5">
                       {OPEN_WITH_APPS.map((appName) => (
                         <button
                           key={appName}
