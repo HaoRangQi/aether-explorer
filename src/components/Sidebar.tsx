@@ -239,7 +239,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
       title: 'sidebar.favorites',
       collapsible: true,
       items: [
-        { id: 'favorites-list', label: 'sidebar.favoritesList', icon: () => <Circle className="w-3.5 h-3.5 fill-primary text-primary" /> },
+        { id: 'favorites-list', label: 'sidebar.favoritesList', icon: () => <Circle className="w-3.5 h-3.5 fill-icon text-icon" /> },
         { id: 'applications', label: 'sidebar.applications', icon: Terminal },
         { id: 'desktop', label: 'sidebar.homeDirectory', icon: Home },
         { id: 'documents', label: 'sidebar.documents', icon: FileText, RightElement: () => <Cloud className="w-3 h-3 text-on-surface/30" /> },
@@ -306,7 +306,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
             {section.collapsible ? (
               <button
                 onClick={() => toggleSection(section.title)}
-              className="w-full px-3 flex items-center justify-between text-[11px] font-black text-on-surface/45 mb-2 hover:text-primary transition-colors min-w-0"
+              className="w-full px-3 flex items-center justify-between text-[11px] font-black text-on-surface/45 mb-2 hover:text-icon transition-colors min-w-0"
                 title={collapsedSections[section.title] ? t('tooltips.expand') : t('tooltips.collapse')}
               >
                 <span className="truncate">{t(section.title)}</span>
@@ -344,13 +344,13 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
                   {isActive && (
                     <motion.div
                       layoutId="sidebar-pill"
-                      className="absolute inset-0 bg-primary/10 border border-primary/20 rounded-lg z-0"
+                      className="absolute inset-0 bg-panel-custom border border-custom rounded-lg z-0"
                       transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
                     />
                   )}
                   <div className="flex items-center gap-2 relative z-10 w-full text-left">
                     <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-all duration-300
-                      ${isActive ? 'bg-primary text-on-primary shadow-md shadow-primary/20' : 'bg-primary/5 text-on-surface/40 group-hover:bg-primary/10'}
+                      ${isActive ? 'bg-active-icon text-on-primary shadow-md shadow-custom' : 'bg-panel-custom text-on-surface/40 group-hover:bg-hover-custom'}
                     `}>
                       {/* @ts-ignore */}
                       <Icon className="w-3.5 h-3.5" />
@@ -368,7 +368,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
           <div className="w-full px-3 flex items-center justify-between text-[11px] font-black text-on-surface/45 mb-2 min-w-0">
             <button
               onClick={() => toggleSection('sidebar.externalDisks')}
-              className="flex items-center gap-1 hover:text-primary transition-colors min-w-0"
+              className="flex items-center gap-1 hover:text-icon transition-colors min-w-0"
               title={collapsedSections['sidebar.externalDisks'] ? '展开' : '收起'}
             >
               <span className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity shrink-0">
@@ -378,7 +378,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
             </button>
             <button
               onClick={loadVolumes}
-              className="p-0.5 rounded hover:bg-primary/10 hover:text-primary transition-all opacity-0 group-hover/sidebar:opacity-100 shrink-0"
+              className="p-0.5 rounded hover:bg-hover-custom hover:text-icon transition-all opacity-0 group-hover/sidebar:opacity-100 shrink-0"
               title={t('tooltips.refreshExternalDisks')}
             >
               <RefreshCw className="w-3 h-3" />
@@ -396,16 +396,16 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
                   <div key={volume.path} className="group relative">
                     <button
                       onClick={() => openVolume(volume)}
-                      className={`w-full flex items-center px-3 py-1.5 rounded-lg transition-all duration-300 relative cursor-pointer font-semibold ${isActive ? 'text-on-surface font-black bg-primary/10' : 'text-on-surface/75 hover:bg-on-surface/[0.04] hover:text-on-surface'}`}
+                      className={`w-full flex items-center px-3 py-1.5 rounded-lg transition-all duration-300 relative cursor-pointer font-semibold ${isActive ? 'text-on-surface font-black bg-panel-custom' : 'text-on-surface/75 hover:bg-on-surface/[0.04] hover:text-on-surface'}`}
                     >
                       <div className="flex items-center gap-2 relative z-10 w-full text-left min-w-0">
-                        <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-all duration-300 ${isActive ? 'bg-primary text-on-primary shadow-md shadow-primary/20' : 'bg-primary/5 text-on-surface/40 group-hover:bg-primary/10'}`}>
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-all duration-300 ${isActive ? 'bg-active-icon text-on-primary shadow-md shadow-custom' : 'bg-panel-custom text-on-surface/40 group-hover:bg-hover-custom'}`}>
                           <HardDrive className="w-3.5 h-3.5" />
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                             <span className="text-[13px] truncate tracking-tight">{volume.name}</span>
-                            <span className="text-[9px] text-primary font-black shrink-0">{volume.capacity}</span>
+                            <span className="text-[9px] text-icon font-black shrink-0">{volume.capacity}</span>
                           </div>
                           <div className="h-1 rounded-full bg-on-surface/10 overflow-hidden mt-1">
                             <div className="h-full rounded-full bg-primary" style={{ width: `${volume.capacity_value}%` }} />
@@ -423,7 +423,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
                           stopVolumeEjectEvent(e);
                           void ejectVolume(volume);
                         }}
-                        className="absolute right-1 top-1.5 z-20 p-1.5 rounded-lg bg-primary/10 text-on-surface/35 opacity-0 group-hover:opacity-100 hover:text-primary hover:bg-primary/20 transition-all"
+                        className="absolute right-1 top-1.5 z-20 p-1.5 rounded-lg bg-panel-custom text-on-surface/35 opacity-0 group-hover:opacity-100 hover:text-icon hover:bg-hover-custom transition-all"
                         title={`弹出 ${volume.name}`}
                         aria-label={`弹出 ${volume.name}`}
                       >
@@ -436,7 +436,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
             </div>
           )}
           {volumeMessage && (
-            <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-primary/10 text-[11px] text-primary font-bold">
+            <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-panel-custom text-[11px] text-icon font-bold">
               {volumeMessage}
             </div>
           )}
@@ -446,14 +446,14 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
       {diskInfo && (
         <button
           onClick={() => handleMenuClick('storage', 'sidebar.storage')}
-          className={`mx-3 mt-4 px-3 py-2 rounded-lg border text-left transition-all shrink-0 ${currentView === 'storage' ? 'bg-primary/10 border-primary/20 text-on-surface' : 'bg-primary/5 border-primary/10 hover:bg-primary/10 text-on-surface/70'}`}
+          className={`mx-3 mt-4 px-3 py-2 rounded-lg border text-left transition-all shrink-0 ${currentView === 'storage' ? 'bg-panel-custom border-custom text-on-surface' : 'bg-panel-custom border-custom hover:bg-hover-custom text-on-surface/70'}`}
         >
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <div className="flex items-center gap-1.5 min-w-0">
-              <HardDrive className="w-3.5 h-3.5 text-primary shrink-0" />
+              <HardDrive className="w-3.5 h-3.5 text-icon shrink-0" />
               <span className="text-[11px] font-bold truncate">{t('sidebar.storage')}</span>
             </div>
-            <span className="text-[10px] font-black text-primary shrink-0 tabular-nums">{normalizeCapacity(diskInfo.capacity_value ?? diskInfo.capacity)}</span>
+            <span className="text-[10px] font-black text-icon shrink-0 tabular-nums">{normalizeCapacity(diskInfo.capacity_value ?? diskInfo.capacity)}</span>
           </div>
           <div className="h-1.5 rounded-full bg-on-surface/10 overflow-hidden mb-1.5">
             <div className="h-full rounded-full bg-primary" style={{ width: normalizeCapacity(diskInfo.capacity_value ?? diskInfo.capacity) }} />

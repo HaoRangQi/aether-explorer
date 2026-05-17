@@ -2031,13 +2031,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     switch (type) {
-      case 'image': return <ImageIcon className="w-5 h-5 text-primary" />;
+      case 'image': return <ImageIcon className="w-5 h-5 text-icon" />;
       case 'video': return <Video className="w-5 h-5 text-secondary" />;
       case 'pdf': return <FileText className="w-5 h-5 text-red-400" />;
       case 'archive': return <Archive className="w-5 h-5 text-yellow-400" />;
-      case 'folder': return <Folder className="w-5 h-5 text-primary fill-current opacity-80" />;
-      case 'application': return <Archive className="w-5 h-5 text-primary" />;
-      default: return <FileIcon className="w-5 h-5 text-on-surface/40" />;
+      case 'folder': return <Folder className="w-5 h-5 text-icon fill-current opacity-80" />;
+      case 'application': return <Archive className="w-5 h-5 text-icon" />;
+      default: return <FileIcon className="w-5 h-5 text-secondary-custom" />;
     }
   };
 
@@ -2117,8 +2117,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     const isLongName = file.name !== formattedName;
     const tags = fileTags[file.path] || file.tags || [];
     const isHiddenFile = file.name.startsWith('.');
-    const fileNameClass = isHiddenFile ? 'text-on-surface/45 group-hover:text-on-surface/60' : 'text-on-surface group-hover:text-primary';
-    const fileMetaClass = isHiddenFile ? 'text-on-surface/35' : 'text-on-surface';
+    const fileNameClass = isHiddenFile ? 'text-on-surface/45 group-hover:text-on-surface/60' : 'text-primary-custom group-hover:text-hover-custom';
+    const fileMetaClass = isHiddenFile ? 'text-on-surface/35' : 'text-primary-custom';
     const mediaNameClass = isHiddenFile ? 'text-white/55' : 'text-white';
     const mediaMetaClass = isHiddenFile ? 'text-white/45' : 'text-white/90';
     
@@ -2153,11 +2153,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             ${config.py} ${config.gap}
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
             ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
-            ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)] rounded-xl z-10' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm rounded-lg'}
+            ${isSelected ? 'bg-selected border-custom shadow-custom rounded-xl z-10' : 'bg-panel-custom border-transparent hover:bg-hover-custom hover:border-custom shadow-sm rounded-lg'}
           `}
         >
           <div className={`flex items-center flex-1 min-w-0 ${config.gap}`}>
-            <div className={`${config.icon} rounded-lg flex items-center justify-center shrink-0 shadow-sm border border-on-surface/5 transition-colors ${isSelected ? 'bg-primary/20' : 'bg-primary/5'}`}>
+            <div className={`${config.icon} rounded-lg flex items-center justify-center shrink-0 shadow-sm border border-on-surface/5 transition-colors ${isSelected ? 'bg-hover-custom' : 'bg-panel-custom'}`}>
                <div className={`w-full h-full flex items-center justify-center transition-transform ${config.scale}`}>
                  {getFileIcon(file.type, file.thumbnail)}
                </div>
@@ -2213,15 +2213,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           className={`file-item select-none flex items-center gap-3 px-3 rounded-xl cursor-pointer transition-all duration-300 group border
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
             ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
-            ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)]' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm'}
+            ${isSelected ? 'bg-selected border-custom shadow-custom' : 'bg-panel-custom border-transparent hover:bg-hover-custom hover:border-custom shadow-sm'}
           `}
-          style={{ 
+          style={{
             height: `${theme.columnHeight || 60}px`,
             width: '100%',
             marginBottom: '8px'
           }}
         >
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-primary/5 group-hover:bg-primary/10 transition-colors shrink-0 p-1">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-panel-custom group-hover:bg-hover-custom transition-colors shrink-0 p-1">
             {getFileIcon(file.type, file.thumbnail)}
           </div>
           <div className="flex-1 min-w-0 flex flex-col justify-center">
@@ -2269,7 +2269,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           className={`file-item file-item-grid select-none relative rounded-2xl p-4 flex flex-col justify-between group cursor-pointer transition-[transform,background-color,border-color,box-shadow] duration-200 border
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
             ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
-            ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)]' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm'}
+            ${isSelected ? 'bg-selected border-custom shadow-custom' : 'bg-panel-custom border-transparent hover:bg-hover-custom hover:border-custom shadow-sm'}
             ${isMediaItem ? 'p-0 overflow-hidden' + (!isSelected ? ' !border-none !bg-transparent' : '') : ''}
           `}
           style={{ 
@@ -2305,7 +2305,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           ) : (
             <>
               <div className="flex justify-between items-start">
-                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center bg-primary/5 group-hover:bg-primary/10 transition-colors shrink-0 p-1`}>
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center bg-panel-custom group-hover:bg-hover-custom transition-colors shrink-0 p-1`}>
                   {getFileIcon(file.type, file.thumbnail)}
                 </div>
               </div>
@@ -2887,7 +2887,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       case 'url':
         return <ExternalLink className="w-4 h-4" />;
       case 'placeholder':
-        return <Sparkles className="w-4 h-4 text-primary" />;
+        return <Sparkles className="w-4 h-4 text-icon" />;
       default:
         return <Puzzle className="w-4 h-4" />;
     }
@@ -3201,7 +3201,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <button
                   onClick={navigateBack}
                   disabled={backStack.length === 0}
-                  className={`p-1.5 rounded-lg transition-colors ${backStack.length > 0 ? 'hover:bg-primary/20 text-on-surface/50 hover:text-on-surface' : 'text-on-surface/20 cursor-not-allowed'}`}
+                  className={`p-1.5 rounded-lg transition-colors ${backStack.length > 0 ? 'hover:bg-hover-custom text-on-surface/50 hover:text-on-surface' : 'text-on-surface/20 cursor-not-allowed'}`}
                   title={t('tooltips.back')}
                 >
                   <ChevronLeft className="w-5 h-5" />
@@ -3209,13 +3209,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <button
                   onClick={navigateForward}
                   disabled={forwardStack.length === 0}
-                  className={`p-1.5 rounded-lg transition-colors ${forwardStack.length > 0 ? 'hover:bg-primary/20 text-on-surface/50 hover:text-on-surface' : 'text-on-surface/20 cursor-not-allowed'}`}
+                  className={`p-1.5 rounded-lg transition-colors ${forwardStack.length > 0 ? 'hover:bg-hover-custom text-on-surface/50 hover:text-on-surface' : 'text-on-surface/20 cursor-not-allowed'}`}
                   title={t('tooltips.forward')}
                 >
                   <ChevronRight className="w-5 h-5" />
                 </button>
               </div>
-              <div className="flex-1 flex items-center bg-primary/5 rounded-xl px-3 py-1.5 border border-transparent h-10 shrink-0 overflow-hidden transition-all duration-300 hover:border-primary/50 hover:shadow-[0_4px_12px_rgba(var(--primary-rgb),0.15)]">
+              <div className="flex-1 flex items-center bg-search-custom rounded-xl px-3 py-1.5 border border-transparent h-10 shrink-0 overflow-hidden transition-all duration-300 hover:border-custom hover:shadow-custom">
                 {!isVirtualRoot && (
                   <button
                     onClick={async () => {
@@ -3231,7 +3231,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 {isVirtualRoot ? (
                   <div className="flex items-center gap-2 flex-1 px-1 overflow-hidden text-[13px] text-on-surface/80 min-w-0">
                     {isFavoritesRoot ? (
-                      <Star className="w-4 h-4 shrink-0 text-primary fill-current" />
+                      <Star className="w-4 h-4 shrink-0 text-icon fill-current" />
                     ) : (
                       <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: TAG_COLORS[baseView] || '#8e8e93' }} />
                     )}
@@ -3306,13 +3306,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
               {/* Local Search */}
               <div className="w-56 relative shrink-0 group">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface/40 group-hover:text-primary transition-colors" />
-                <input 
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface/40 group-hover:text-icon transition-colors" />
+                <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={t('topbar.searchPlaceholder') || "搜索文件..."}
-                  className="w-full bg-primary/5 border border-primary/30 rounded-xl py-2 pl-10 pr-9 text-[13px] text-on-surface placeholder:text-on-surface/40 focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary focus:bg-primary/10 transition-all h-10 hover:border-primary/60 shadow-[0_2px_8px_rgba(var(--primary-rgb),0.1)]"
+                  className="w-full bg-search-custom border border-custom rounded-xl py-2 pl-10 pr-9 text-[13px] text-primary-custom placeholder:text-secondary-custom focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary focus:bg-hover-custom transition-all h-10 hover:border-custom shadow-custom"
                 />
                 {searchQuery && (
                   <button
@@ -3381,31 +3381,31 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   )}
                   
                   {/* Action Capsule */}
-          <div className="flex items-center bg-primary/5 p-1 rounded-xl border border-transparent mr-2 relative" ref={dropdownRef} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-                    <button 
+          <div className="flex items-center bg-panel-custom p-1 rounded-xl border border-transparent mr-2 relative" ref={dropdownRef} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+                    <button
                       onClick={() => setActiveDropdown(activeDropdown === 'upload' ? null : 'upload')}
-                      className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'upload' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
+                      className={`p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'upload' ? 'bg-hover-custom text-icon' : 'text-on-surface/60'}`}
                       title={t('tooltips.import')}
                     >
                       <Upload className="w-4 h-4" />
                     </button>
-                    <button 
+                    <button
                       onClick={onStartTransfer}
-                      className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
+                      className="p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
                       title={t('tooltips.transferManager')}
                     >
                       <ExternalLink className="w-4 h-4" />
                     </button>
-                    <button 
+                    <button
                       onClick={() => handleOpenTerminal(lastSelectedFile)}
-                      className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
+                      className="p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
                       title={t('tooltips.openInTerminal')}
                     >
                       <Terminal className="w-4 h-4" />
                     </button>
-                    <button 
+                    <button
                       onClick={() => setActiveDropdown(activeDropdown === 'tag' ? null : 'tag')}
-                      className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'tag' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
+                      className={`p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'tag' ? 'bg-hover-custom text-icon' : 'text-on-surface/60'}`}
                       title={t('tooltips.tags')}
                     >
                       <Tag className="w-4 h-4" />
@@ -3521,22 +3521,22 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     </AnimatePresence>
                   </div>
 
-                  <div className="flex p-1 bg-primary/5 rounded-lg border border-transparent">
-                    <button 
+                  <div className="flex p-1 bg-panel-custom rounded-lg border border-transparent">
+                    <button
                       onClick={() => setDisplayMode('list')}
-                      className={`p-1 rounded-sm transition-colors ${displayMode === 'list' ? 'bg-primary/20 text-primary' : 'text-on-surface/40 hover:text-on-surface'}`}
+                      className={`p-1 rounded-sm transition-colors ${displayMode === 'list' ? 'bg-hover-custom text-icon' : 'text-on-surface/40 hover:text-on-surface'}`}
                     >
                       <List className="w-4 h-4" />
                     </button>
-                    <button 
+                    <button
                       onClick={() => setDisplayMode('grid')}
-                      className={`p-1 rounded-sm transition-colors ${displayMode === 'grid' ? 'bg-primary/20 text-primary' : 'text-on-surface/40 hover:text-on-surface'}`}
+                      className={`p-1 rounded-sm transition-colors ${displayMode === 'grid' ? 'bg-hover-custom text-icon' : 'text-on-surface/40 hover:text-on-surface'}`}
                     >
                       <Grid2X2 className="w-4 h-4" />
                     </button>
-                    <button 
+                    <button
                       onClick={() => { setDisplayMode('column'); setColumnPaths([]); }}
-                      className={`p-1 rounded-sm transition-colors ${displayMode === 'column' ? 'bg-primary/20 text-primary' : 'text-on-surface/40 hover:text-on-surface'}`}
+                      className={`p-1 rounded-sm transition-colors ${displayMode === 'column' ? 'bg-hover-custom text-icon' : 'text-on-surface/40 hover:text-on-surface'}`}
                     >
                       <Columns className="w-4 h-4" />
                     </button>

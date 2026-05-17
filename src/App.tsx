@@ -637,15 +637,15 @@ export default function App() {
             </div>
           </div>
 
-	          <footer className="h-9 border-t border-on-surface/[0.03] bg-transparent flex items-center justify-between px-6 text-on-surface/40 text-[11px] font-medium shrink-0">
+	          <footer className="h-9 border-t border-divider bg-transparent flex items-center justify-between px-6 text-secondary-custom text-[11px] font-medium shrink-0">
 	            <div className="cursor-default tracking-wide flex items-center gap-4">
 	               <div className="flex items-center gap-2">
-	                 <span className="text-primary/70 font-bold tabular-nums">{visibleItemCount}</span>
+	                 <span className="text-icon font-bold tabular-nums">{visibleItemCount}</span>
 	                 <span>{t('footer.items', '个项目')}</span>
 	               </div>
-               <div className="w-px h-2.5 bg-on-surface/10" />
+               <div className="w-px h-2.5 bg-divider" />
                <div className={`flex items-center gap-2 transition-all duration-300 ${selectedFileIds.length > 0 ? 'opacity-100' : 'opacity-0 translate-x-2'}`}>
-                 <span className={selectedFileIds.length > 0 ? 'text-primary font-black' : ''}>{selectedFileIds.length}</span>
+                 <span className={selectedFileIds.length > 0 ? 'text-icon font-black' : ''}>{selectedFileIds.length}</span>
                  <span>{t('footer.itemsSelected', '项已选中')}</span>
                </div>
             </div>
@@ -653,10 +653,10 @@ export default function App() {
               {theme.enableDevTools && (
                 <button
                   onClick={handleOpenDevTools}
-                  className="hover:text-primary transition-colors flex items-center gap-1.5 uppercase tracking-widest text-[9px] font-black opacity-60 hover:opacity-100"
+                  className="hover:text-icon transition-colors flex items-center gap-1.5 uppercase tracking-widest text-[9px] font-black opacity-60 hover:opacity-100"
                   title="打开开发者控制台"
                 >
-                  <Terminal className="w-3 h-3 text-primary" /> 控制台
+                  <Terminal className="w-3 h-3 text-icon" /> 控制台
                 </button>
               )}
             </div>
