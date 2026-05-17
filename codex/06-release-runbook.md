@@ -152,6 +152,7 @@ bash scripts/release.sh
 | `latest.json.version` 还是旧版本 | tag、Tauri version、manifest 生成参数不一致 | 重新核对 `RELEASE_TAG` 和两处版本源，不要手改 manifest 凑数 |
 | updater 检查失败 `missing field signature` | `latest.json` 没有 `platforms.*.signature` | 重新生成 manifest，signature 必须来自 `.app.tar.gz.sig` 完整内容 |
 | updater 检查失败 `signature mismatch` | app 内公钥和签名私钥不配套 | 同步 `tauri.conf.json` pubkey 与 GitHub Secret 私钥，重新发更高版本 |
+| 客户端报 `The signature verification failed` | 手写 `latest.json` 并复用旧版本的签名，导致签名与 app 包内容不匹配 | 删除该 release，重新打 tag 让 CI 自动构建；或用正确的密钥为新版本 app 包重新签名 |
 | Release 里出现 `latest-json.xxxxx.json` 而不是 `latest.json` | `gh release upload/create` 的 `file#label` 只改显示标签，不改真实资产名 | 上传前先把文件写成真正的 `latest.json`，不要依赖 label 冒充文件名 |
 | `latest.json` 里的 URL 指向 `Aether Explorer.app.tar.gz` 等旧名 | manifest 用了原始构建文件 basename，而不是最终上传资产名 | 先把 release 资产归一化命名，再基于最终文件名生成 manifest |
 
@@ -208,6 +209,38 @@ bash scripts/release.sh
 - 如果失败只发生在命名或 manifest 层，且二进制本身正确，可原地修复该 tag 的 release。
 - 只有二进制本身、签名、版本号或 pubkey 出错，才应该放弃该 tag 并发更高版本。
 
+## 06.10 v0.3.0 事故记录
+
+### 事故现象
+
+- 本地手动构建 v0.3.0，生成了 `.dmg` 和 `.app.tar.gz`，但没有 `.sig` 文件。
+- 手写 `latest.json`，从 v0.2.1 的旧签名中复制，导致签名与 v0.3.0 的 app 包内容不匹配。
+- 上传到 GitHub Release 后，客户端尝试更新时报错：`The signature verification failed`。
+
+### 根因
+
+1. **本地构建缺少签名**：`npx tauri build` 需要 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 环境变量，本地密钥有密码但密码不对，导致签名失败。
+2. **手写 manifest 而不是从签名文件生成**：06.8 第 166 行明确规定"不手写，不临时凑字段，只从实际 `.app.tar.gz.sig` 生成"，但我直接手写了 JSON 并复用旧签名。
+3. **签名与内容不匹配**：v0.3.0 的 app 包内容与 v0.2.1 不同，但用了 v0.2.1 的签名，导致验证失败。
+
+### 修复动作
+
+1. 删除不完整的 v0.3.0 release 和 tag。
+2. 重新打 tag 并推送到远程，触发 CI workflow。
+3. CI 自动调用 `npx @tauri-apps/cli build --target universal-apple-darwin`，使用 GitHub Secrets 中的密钥和密码自动签名。
+4. CI 从生成的 `.app.tar.gz.sig` 文件读取签名内容，生成正确的 `latest.json`。
+5. CI 上传完整的四件套资产并验收。
+
+### 以后怎么做
+
+- **永远不要本地手写 `latest.json`**：即使有签名文件，也要用 `jq` 从 `.sig` 文件内容生成，不要复制粘贴。
+- **本地应急发布时**：如果本地密钥有密码但密码不对，不要尝试手工凑签名，而是：
+  1. 确认 GitHub Secrets 中的 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 是否正确。
+  2. 如果本地密码与 Secrets 不一致，更新 Secrets 或重新生成无密码的密钥。
+  3. 或者直接删除本地 release，让 CI 重新构建。
+- **优先使用 CI 发布**：CI 有完整的密钥和密码配置，不容易出错。本地应急脚本只在 CI 连续失败且原因已定位时才使用。
+- **验收时检查签名**：不仅要检查 `latest.json` 存在，还要检查 `platforms.*.signature` 字段长度 > 0，确保签名不是空字符串。
+
 ## 06.11 v0.2.0 已知基线
 
 `v0.2.0` 是第一版正式可用发布基线。发布资产已验证包含：
@@ -224,3 +257,19 @@ bash scripts/release.sh
 - 两个平台指向同一个 universal updater 包
 
 历史 `v0.1.1` 属于错误版本号和调试过程产物，不作为正式发布基线。
+
+## 06.12 v0.3.0 已知基线
+
+`v0.3.0` 是颜色细化控制系统的首个发布版本。发布资产已验证包含：
+
+- `Aether.Explorer_0.3.0_universal.dmg`
+- `Aether.Explorer_universal.app.tar.gz`
+- `Aether.Explorer_universal.app.tar.gz.sig`
+- `latest.json`
+
+`latest.json` 已验证：
+
+- `.version == "0.3.0"`
+- 包含 `darwin-aarch64` 与 `darwin-x86_64`
+- 两个平台指向同一个 universal updater 包
+- 签名验证通过（客户端可正常更新）
