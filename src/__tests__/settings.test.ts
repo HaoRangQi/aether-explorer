@@ -71,9 +71,9 @@ describe('normalizeThemeSettings', () => {
     expect(result.transparency).toBe(DEFAULT_THEME.transparency); // 其他保持默认
   });
 
-  it('default blur is 0 (perf-friendly)', () => {
+  it('default blur is 32 (brand visual)', () => {
     const result = normalizeThemeSettings({});
-    expect(result.blurIntensity).toBe(0);
+    expect(result.blurIntensity).toBe(32);
   });
 
   it('default crossWindowDropDefault is copy', () => {

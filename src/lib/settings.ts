@@ -22,7 +22,9 @@ export const DEPRECATED_CONTEXT_EXTENSION_IDS = new Set([
 export const DEFAULT_THEME: ThemeSettings = {
   mode: 'auto',
   accentColor: ACCENT_COLORS[0],
-  blurIntensity: 0,
+  // 保留品牌视觉的 32px 毛玻璃。性能差的设备可在设置面板里手动调小。
+  // 如未来发现"新装用户首屏 GPU 卡顿"再考虑降默认值并加 onboarding 提示。
+  blurIntensity: 32,
   transparency: 100,
   enableMica: true,
   fontFamily: 'Inter',
