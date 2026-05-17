@@ -62,6 +62,22 @@ export const DEFAULT_THEME: ThemeSettings = {
   terminalApp: 'Terminal',
   terminalArgs: '',
   defaultHomePath: FAVORITES_VIRTUAL_PATH,
+
+  // 颜色细化控制默认值（undefined = 使用 CSS 原生变量）
+  colorIcon: undefined,
+  colorSelectedFg: undefined,
+  colorSelectedBg: undefined,
+  colorHoverFg: undefined,
+  colorHoverBg: undefined,
+  colorPanelBg: undefined,
+  colorTextPrimary: undefined,
+  colorTextSecondary: undefined,
+  colorBorder: undefined,
+  colorDivider: undefined,
+  colorShadow: undefined,
+  colorActiveIconBg: undefined,
+  colorTagSelected: undefined,
+  colorSearchBg: undefined,
 };
 
 export function normalizeContextMenuExtensions(

@@ -100,6 +100,22 @@ export interface ThemeSettings {
   language?: string;
   followSystemLanguage?: boolean;
   languageOptions?: LanguageOption[];
+
+  // 颜色细化控制（14项）
+  colorIcon?: string;              // 图标颜色
+  colorSelectedFg?: string;        // 选中前景色
+  colorSelectedBg?: string;        // 选中背景色
+  colorHoverFg?: string;           // 悬浮前景色
+  colorHoverBg?: string;           // 悬浮背景色
+  colorPanelBg?: string;           // 面板底色
+  colorTextPrimary?: string;       // 主文字色
+  colorTextSecondary?: string;     // 次文字色
+  colorBorder?: string;            // 边框色
+  colorDivider?: string;           // 分隔线色
+  colorShadow?: string;            // 阴影色
+  colorActiveIconBg?: string;      // 激活图标背景
+  colorTagSelected?: string;       // 标签选中色
+  colorSearchBg?: string;          // 搜索框底色
 }
 
 export interface TabData {

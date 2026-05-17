@@ -329,6 +329,22 @@ export default function App() {
 
     root.style.setProperty('--primary', theme.accentColor);
     root.style.setProperty('--font-sans', theme.fontFamily || 'Inter');
+
+    // 注入颜色细化控制的 CSS 变量
+    if (theme.colorIcon) root.style.setProperty('--color-icon', theme.colorIcon);
+    if (theme.colorSelectedFg) root.style.setProperty('--color-selected-fg', theme.colorSelectedFg);
+    if (theme.colorSelectedBg) root.style.setProperty('--color-selected-bg', theme.colorSelectedBg);
+    if (theme.colorHoverFg) root.style.setProperty('--color-hover-fg', theme.colorHoverFg);
+    if (theme.colorHoverBg) root.style.setProperty('--color-hover-bg', theme.colorHoverBg);
+    if (theme.colorPanelBg) root.style.setProperty('--color-panel-bg', theme.colorPanelBg);
+    if (theme.colorTextPrimary) root.style.setProperty('--color-text-primary', theme.colorTextPrimary);
+    if (theme.colorTextSecondary) root.style.setProperty('--color-text-secondary', theme.colorTextSecondary);
+    if (theme.colorBorder) root.style.setProperty('--color-border', theme.colorBorder);
+    if (theme.colorDivider) root.style.setProperty('--color-divider', theme.colorDivider);
+    if (theme.colorShadow) root.style.setProperty('--color-shadow', theme.colorShadow);
+    if (theme.colorActiveIconBg) root.style.setProperty('--color-active-icon-bg', theme.colorActiveIconBg);
+    if (theme.colorTagSelected) root.style.setProperty('--color-tag-selected', theme.colorTagSelected);
+    if (theme.colorSearchBg) root.style.setProperty('--color-search-bg', theme.colorSearchBg);
   }, [theme, systemTheme]);
 
   useEffect(() => {

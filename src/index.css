@@ -59,6 +59,22 @@
   --color-tertiary: var(--tertiary);
   --color-on-tertiary: var(--on-tertiary);
 
+  /* 颜色细化控制变量（默认值基于现有颜色体系） */
+  --color-icon: var(--color-icon, var(--primary));
+  --color-selected-fg: var(--color-selected-fg, var(--on-surface));
+  --color-selected-bg: var(--color-selected-bg, color-mix(in srgb, var(--primary) 40%, transparent));
+  --color-hover-fg: var(--color-hover-fg, var(--primary));
+  --color-hover-bg: var(--color-hover-bg, color-mix(in srgb, var(--primary) 20%, transparent));
+  --color-panel-bg: var(--color-panel-bg, color-mix(in srgb, var(--primary) 5%, transparent));
+  --color-text-primary: var(--color-text-primary, var(--on-surface));
+  --color-text-secondary: var(--color-text-secondary, color-mix(in srgb, var(--on-surface) 60%, transparent));
+  --color-border: var(--color-border, color-mix(in srgb, var(--primary) 20%, transparent));
+  --color-divider: var(--color-divider, color-mix(in srgb, var(--on-surface) 10%, transparent));
+  --color-shadow: var(--color-shadow, var(--primary));
+  --color-active-icon-bg: var(--color-active-icon-bg, var(--primary));
+  --color-tag-selected: var(--color-tag-selected, var(--primary));
+  --color-search-bg: var(--color-search-bg, color-mix(in srgb, var(--primary) 5%, transparent));
+
   --radius-xs: 0.5rem;
   --radius-DEFAULT: 1rem;
   --radius-lg: 1.5rem;
