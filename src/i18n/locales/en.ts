@@ -123,6 +123,8 @@ export default {
     name: 'Name',
     recentDownloads: 'Recent Downloads',
     viewAll: 'View All',
+    setAsHome: 'Set as Start Page',
+    alreadyHome: 'Current Start Page',
     document: 'DOCUMENT',
     details: 'Details',
     size: 'Size',
@@ -260,6 +262,7 @@ export default {
   messages: {
     copied: 'Copied {{count}} items',
     cut: 'Cut {{count}} items',
+    setAsHome: 'Set the current location as the Start Page',
     clipboardEmpty: 'Clipboard is empty',
     moved: 'Moved {{count}} items',
     pasted: 'Pasted {{count}} items',

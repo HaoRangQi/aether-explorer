@@ -2537,6 +2537,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         enabled: canPaste,
         action: () => { void handlePasteFromClipboard(); },
       }));
+      // 第4分组: 设为首页
+      await addSeparator();
+      const isAlreadyHome = currentPath === (theme.defaultHomePath || FAVORITES_VIRTUAL_PATH);
+      items.push(await MenuItem.new({
+        text: isAlreadyHome
+          ? t('explorer.alreadyHome', '已是首页')
+          : t('explorer.setAsHome', '设为首页'),
+        enabled: !isAlreadyHome && !!currentPath,
+        action: () => { handleSetCurrentAsHome(); },
+      }));
     } else {
       // 第1分组: 打开 + 重命名
       items.push(await MenuItem.new({
@@ -2971,6 +2981,17 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     } catch (e) {
       showFeedback(`创建文件失败：${String(e)}`);
     }
+    setContextMenu(null);
+  };
+
+  // 把当前正在浏览的目录设为应用启动时的首页（避免用户走"选择目录"对话框的繁琐流程）。
+  // 虚拟根目录（收藏 / 最近 / 标签）也支持作为首页。
+  const handleSetCurrentAsHome = () => {
+    if (!currentPath) return;
+    onThemeChange({ ...theme, defaultHomePath: currentPath });
+    showFeedback(t('messages.setAsHome', {
+      defaultValue: '已将当前位置设为首页',
+    }));
     setContextMenu(null);
   };
 
@@ -4011,6 +4032,27 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 >
                   <Copy className="w-4 h-4" /> {t('explorer.paste', '粘贴')}
                 </button>
+                <div className="my-1 h-px bg-primary/10" />
+                {/* 第4分组: 设为首页（一键把当前目录变成 App 启动默认位置） */}
+                {(() => {
+                  const isAlreadyHome = currentPath === (theme.defaultHomePath || FAVORITES_VIRTUAL_PATH);
+                  return (
+                    <button
+                      onClick={handleSetCurrentAsHome}
+                      disabled={isAlreadyHome || !currentPath}
+                      className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all ${
+                        isAlreadyHome || !currentPath
+                          ? 'text-on-surface/25 cursor-not-allowed'
+                          : 'hover:bg-primary/10 text-on-surface hover:text-primary'
+                      }`}
+                    >
+                      <Star className={`w-4 h-4 ${isAlreadyHome ? 'fill-primary text-primary' : ''}`} />
+                      {isAlreadyHome
+                        ? t('explorer.alreadyHome', '已是首页')
+                        : t('explorer.setAsHome', '设为首页')}
+                    </button>
+                  );
+                })()}
               </>
             ) : findFileById(contextMenu.fileIds[0]) ? (
               (() => {
