@@ -175,7 +175,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     active: boolean;
   } | null>(null);
   const [contextSubmenu, setContextSubmenu] = useState<string | null>(null);
-  const [openWithSubmenuRect, setOpenWithSubmenuRect] = useState<{ left: number; top: number } | null>(null);
   const [moveConflictDialog, setMoveConflictDialog] = useState<MoveConflictDialogState | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -4079,13 +4078,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 </button>
                 <div
                   className="relative"
-                  onMouseEnter={(e) => {
-                    setContextSubmenu('openWith');
-                    // 记录"打开方式"按钮位置；子菜单用 fixed 跳出父菜单 stacking context，
-                    // 让 backdrop-blur 真正生效（backdrop-filter 在嵌套 filter context 中失效）
-                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    setOpenWithSubmenuRect({ left: rect.right + 4, top: rect.top });
-                  }}
+                  onMouseEnter={() => setContextSubmenu('openWith')}
                   onMouseLeave={() => setContextSubmenu(prev => prev === 'openWith' ? null : prev)}
                 >
                   <button className="w-full flex items-center justify-between gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
@@ -4094,14 +4087,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     </span>
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
-                  {contextSubmenu === 'openWith' && openWithSubmenuRect && (
+                  {contextSubmenu === 'openWith' && (
                     <div
-                      // fixed + 绝对坐标 = 脱离父菜单的 filter context，
-                      // backdrop-blur 这次会作用于文件区（更深的模糊）而非已模糊的父菜单
-                      className="fixed z-[120] w-52 rounded-2xl border border-primary/20 shadow-2xl p-1.5 glass-panel bg-primary/10 backdrop-blur-3xl"
+                      className="absolute left-full top-0 z-[110] ml-1 w-52 rounded-2xl border border-primary/20 shadow-2xl p-1.5"
                       style={{
-                        left: `${openWithSubmenuRect.left}px`,
-                        top: `${openWithSubmenuRect.top}px`,
+                        // 用 color-mix 把 primary 与 surface 实混，
+                        // 视觉上有"父菜单的玻璃淡色感"但不透明、不依赖 backdrop-filter
+                        // （backdrop-filter 在已被父菜单 backdrop-blur 包住的子菜单里几乎失效）
+                        background: 'color-mix(in srgb, var(--primary) 8%, var(--surface) 100%)',
                       }}
                     >
                       {OPEN_WITH_APPS.map((appName) => (
