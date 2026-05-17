@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
@@ -21,9 +22,15 @@ export default defineConfig(({mode}) => {
     server: {
       port: Number(env.VITE_DEV_PORT || 41873),
       strictPort: false,
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
+    },
+    esbuild: {
+      drop: mode === 'production' ? ['console', 'debugger'] : [],
+    },
+    test: {
+      environment: 'jsdom',
+      globals: false,
+      include: ['src/**/__tests__/**/*.test.{ts,tsx}'],
     },
   };
 });

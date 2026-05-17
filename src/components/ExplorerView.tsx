@@ -2,18 +2,19 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { open as shellOpen } from '@tauri-apps/plugin-shell';
+import { safeShellOpen } from '../lib/url-guard';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { Menu, MenuItem, PredefinedMenuItem, Submenu } from '@tauri-apps/api/menu';
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { emit, listen } from '@tauri-apps/api/event';
+import { emit, emitTo, listen } from '@tauri-apps/api/event';
 import { listDirectory, getHomeDir, getFileInfo, getAppIcon, copyFile, copyFiles, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, makeAlias, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload } from '../api/filesystem';
 import type { FileTransferPayload, MoveConflict, MoveConflictStrategy } from '../api/filesystem';
 import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction } from '../types';
 import { QUICK_ACCESS } from '../constants';
+import CrossWindowDropBanner from './CrossWindowDropBanner';
 
 const TAG_COLORS: Record<string, string> = {
   'tag-red': '#ff5f56',
@@ -35,6 +36,13 @@ const LIST_COLS = {
 const INTERNAL_FILE_DRAG_MIME = 'application/x-aether-file-paths';
 const FILE_DRAG_START_EVENT = 'aether-file-drag-start';
 const FILE_DRAG_END_EVENT = 'aether-file-drag-end';
+const FILE_DRAG_END_AT_EVENT = 'aether-file-drag-end-at';
+const FILE_DROP_ACCEPTED_EVENT = 'aether-file-drop-accepted';
+const TAURI_DRAG_DROP_EVENT = 'tauri://drag-drop';
+const TAURI_DRAG_ENTER_EVENT = 'tauri://drag-enter';
+const TAURI_DRAG_LEAVE_EVENT = 'tauri://drag-leave';
+// banner 视觉提示的兜底超时（正常情况源端 dragEnd 会立即终结）
+const INCOMING_DRAG_VISIBLE_MS = 12000;
 const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 const RECENT_VIRTUAL_PATH = 'aether://recent';
 const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
@@ -57,6 +65,50 @@ interface MoveConflictDialogState {
   operation: 'move' | 'copy';
   clearClipboardOnSuccess?: boolean;
   clearDragPayloadOnSuccess?: boolean;
+}
+
+interface IncomingFileDrag {
+  paths: string[];
+  sourceWindow: string;
+  transferId: string;
+  previewName: string;
+  count: number;
+  cut: boolean;
+  /** banner 出现时间戳，用于驱动倒计时进度条 */
+  shownAt: number;
+}
+
+interface FileDragBroadcastPayload {
+  paths: string[];
+  sourceWindow: string;
+  transferId: string;
+  previewName: string;
+  count: number;
+  cut: boolean;
+}
+
+interface FileDropAcceptedPayload {
+  transferId: string;
+  paths: string[];
+  op: 'copy' | 'move';
+  targetWindow: string;
+}
+
+interface FileDragEndAtPayload {
+  transferId: string;
+  /** 屏幕坐标（含多显示器情况） */
+  screenX: number;
+  screenY: number;
+  /** 用户松手时按下的修饰键，跨设备策略 + 强制 copy/move 用 */
+  metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  sourceWindow: string;
+}
+
+interface TauriDragDropPayload {
+  paths: string[];
+  position: { x: number; y: number };
 }
 
 interface ExplorerViewProps {
@@ -136,13 +188,31 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const typeaheadTimerRef = useRef<number | null>(null);
   const [hasFileClipboard, setHasFileClipboard] = useState(false);
   const [isAppFileDragActive, setIsAppFileDragActive] = useState(false);
+  const [incomingFileDrag, setIncomingFileDrag] = useState<IncomingFileDrag | null>(null);
+  const [isReceivingExternalDrag, setIsReceivingExternalDrag] = useState(false);
   const fileDragActivityTimerRef = useRef<number | null>(null);
   const fileDragClearTimerRef = useRef<number | null>(null);
   const draggedFileIdRef = useRef<string | null>(null);
+  const activeTransferRef = useRef<{ transferId: string; paths: string[] } | null>(null);
+  const incomingDragTimerRef = useRef<number | null>(null);
+  const recentExternalDropRef = useRef<Set<string>>(new Set());
+  // 拖拽期间监听光标位置，请求 Rust 把光标下的非源窗口 raise 到前台
+  const dragCursorHandlerRef = useRef<((e: DragEvent) => void) | null>(null);
+  const lastRaiseAtRef = useRef(0);
+  const lastRaisedLabelRef = useRef<string | null>(null);
+  // 让事件 listener 能拿到最新 theme / incomingFileDrag / acceptIncomingFileDrag。
+  // 事件 listener 创建时闭包冻结，但 dragEnd 时 theme 可能已变化。
+  const themeRef = useRef(theme);
+  const incomingFileDragRef = useRef<IncomingFileDrag | null>(null);
+  const acceptIncomingFileDragRef = useRef<((op: 'copy' | 'move') => Promise<void>) | null>(null);
   const internalDragRef = useRef<InternalDragState | null>(null);
   const loadRequestSeqRef = useRef(0);
   const pendingAppIconPathsRef = useRef<Set<string>>(new Set());
   const failedAppIconPathsRef = useRef<Set<string>>(new Set());
+  // 批量 setAppIconMap 缓冲：每个图标到达不立即 setState，80ms 内合并一次
+  // 避免 200 app 触发 200 次 setState → 200 次派生链全量重算
+  const pendingIconUpdatesRef = useRef<Record<string, string>>({});
+  const iconFlushTimerRef = useRef<number | null>(null);
   const [contextMenuSize, setContextMenuSize] = useState<{ key: string; width: number; height: number } | null>(null);
 
   const [dirSize, setDirSize] = useState<{ bytes: number; formatted: string; file_count: number } | null>(null);
@@ -224,6 +294,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     const queue = [...appPaths];
     appPaths.forEach(path => pendingAppIconPathsRef.current.add(path));
+
+    const scheduleFlush = () => {
+      if (iconFlushTimerRef.current) return;
+      iconFlushTimerRef.current = window.setTimeout(() => {
+        iconFlushTimerRef.current = null;
+        const pending = pendingIconUpdatesRef.current;
+        if (Object.keys(pending).length === 0) return;
+        pendingIconUpdatesRef.current = {};
+        setAppIconMap(prev => ({ ...prev, ...pending }));
+      }, 80);
+    };
+
     const runNext = () => {
       const path = queue.shift();
       if (!path) return;
@@ -234,7 +316,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             failedAppIconPathsRef.current.add(path);
             return;
           }
-          setAppIconMap(prev => prev[path] ? prev : { ...prev, [path]: iconUrl });
+          pendingIconUpdatesRef.current[path] = iconUrl;
+          scheduleFlush();
         })
         .catch(() => {
           failedAppIconPathsRef.current.add(path);
@@ -310,16 +393,69 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
+  // ── 拖拽期间的"光标下窗口自动置顶" ──
+  // HTML5 dragenter 跨窗口在 macOS 上不稳定；改由源窗口持续轮询 cursor 坐标，
+  // 请求 Rust 端把光标下的非源窗口 raise。50ms 节流避免轰炸。
+  const startCursorRaiseTracking = () => {
+    if (dragCursorHandlerRef.current) return;
+    const sourceLabel = getCurrentWindow().label;
+    const handler = (e: DragEvent) => {
+      const now = Date.now();
+      if (now - lastRaiseAtRef.current < 50) return;
+      // screenX/Y 在 drag 期间 0,0 是 Webkit 旧 bug，在 Tauri/wkwebview 上 Safari 17+ 已修
+      if (e.screenX === 0 && e.screenY === 0) return;
+      lastRaiseAtRef.current = now;
+      invoke<string | null>('raise_window_at', {
+        screenX: e.screenX,
+        screenY: e.screenY,
+        exceptWindow: sourceLabel,
+      })
+        .then(label => {
+          if (label && label !== lastRaisedLabelRef.current) {
+            lastRaisedLabelRef.current = label;
+            logDragDebug(`raised window=${label} at=${e.screenX},${e.screenY}`);
+          }
+        })
+        .catch(() => {});
+    };
+    document.addEventListener('drag', handler, true);
+    dragCursorHandlerRef.current = handler;
+  };
+
+  const stopCursorRaiseTracking = () => {
+    if (dragCursorHandlerRef.current) {
+      document.removeEventListener('drag', dragCursorHandlerRef.current, true);
+      dragCursorHandlerRef.current = null;
+    }
+    lastRaisedLabelRef.current = null;
+    lastRaiseAtRef.current = 0;
+  };
+
   const writeDragPayload = (file: FileItem) => {
     const paths = getTransferPathsForFile(file);
-    const payload: FileTransferPayload = { paths, cut: true };
+    const sourceWindow = getCurrentWindow().label;
+    const transferId = `xfer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const previewName = paths.length === 1 ? file.name : `${file.name} 等 ${paths.length} 项`;
     if (fileDragClearTimerRef.current) {
       window.clearTimeout(fileDragClearTimerRef.current);
       fileDragClearTimerRef.current = null;
     }
+    activeTransferRef.current = { transferId, paths };
     markAppFileDragActive();
-    void setFileDragPayload(paths, true)
-      .then(() => emit(FILE_DRAG_START_EVENT, payload))
+    void setFileDragPayload(paths, true, {
+      sourceWindow,
+      transferId,
+      previewName,
+      count: paths.length,
+    })
+      .then(() => emit(FILE_DRAG_START_EVENT, {
+        paths,
+        sourceWindow,
+        transferId,
+        previewName,
+        count: paths.length,
+        cut: true,
+      } satisfies FileDragBroadcastPayload))
       .catch(() => {});
     return paths;
   };
@@ -884,8 +1020,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   }, [currentPath]);
 
+  // 虚拟滚动门槛：列表视图 > 80 项时启用；分组模式暂不虚拟化
+  const VIRTUAL_LIST_THRESHOLD = 80;
   const visibleRange = useMemo(() => {
-    if (displayMode !== 'list' || currentLevelFiles.length < 999999) return null; // 虚拟滚动暂时禁用
+    if (displayMode !== 'list') return null;
+    if (groupBy !== 'none') return null;
+    if (currentLevelFiles.length < VIRTUAL_LIST_THRESHOLD) return null;
     const containerH = containerRef.current?.clientHeight || 600;
     const adjustedTop = Math.max(0, scrollTop - fileListOffset);
     const start = Math.max(0, Math.floor(adjustedTop / listItemHeight) - listOverScan);
@@ -904,6 +1044,243 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     });
   };
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
+
+  // 卸载时确保 cursor raise 监听摘掉，避免泄漏 / 重复触发
+  useEffect(() => () => { stopCursorRaiseTracking(); }, []);
+
+  // 卸载时刷掉未处理的 icon 缓冲 + 清 timer
+  useEffect(() => () => {
+    if (iconFlushTimerRef.current) {
+      window.clearTimeout(iconFlushTimerRef.current);
+      iconFlushTimerRef.current = null;
+    }
+  }, []);
+
+  // 同步 ref，让 Tauri event listener 闭包能拿到最新值
+  useEffect(() => { themeRef.current = theme; }, [theme]);
+  useEffect(() => { incomingFileDragRef.current = incomingFileDrag; }, [incomingFileDrag]);
+
+  // ── 跨窗口拖拽接收（Aether↔Aether + Finder→Aether 兜底） ──
+  useEffect(() => {
+    if (!isActive) return;
+    const unlistens: Array<() => void> = [];
+    let cancelled = false;
+
+    const clearIncomingTimer = () => {
+      if (incomingDragTimerRef.current) {
+        window.clearTimeout(incomingDragTimerRef.current);
+        incomingDragTimerRef.current = null;
+      }
+    };
+
+    listen<FileDragBroadcastPayload>(FILE_DRAG_START_EVENT, ({ payload }) => {
+      if (cancelled) return;
+      if (payload.sourceWindow === getCurrentWindow().label) return;
+      if (!payload.paths || payload.paths.length === 0) return;
+      clearIncomingTimer();
+      setIncomingFileDrag({
+        paths: payload.paths,
+        sourceWindow: payload.sourceWindow,
+        transferId: payload.transferId,
+        previewName: payload.previewName || `${payload.paths.length} 个项目`,
+        count: payload.count ?? payload.paths.length,
+        cut: payload.cut ?? true,
+        shownAt: Date.now(),
+      });
+      incomingDragTimerRef.current = window.setTimeout(() => {
+        if (cancelled) return;
+        setIncomingFileDrag(null);
+        incomingDragTimerRef.current = null;
+      }, INCOMING_DRAG_VISIBLE_MS);
+    }).then(fn => unlistens.push(fn)).catch(() => {});
+
+    // 注意：故意不监听 FILE_DRAG_END_EVENT 关闭 banner。
+    // 源端 dragEnd 后会发 END 事件，但目标窗口的 banner 此时刚出现，
+    // 用户还没看清/操作，立即清掉会变成"一闪而过"。
+    // banner 只在以下情况关闭：① 用户点击执行 ② 用户右键 / ESC 取消 ③ VISIBLE_MS 超时
+
+    // ⭐ 关键：松手即处理 — 收到源端 dragEnd 携带的屏幕坐标，
+    // 若坐标落在本窗口范围内，立即执行 copy/move，无需用户点 banner。
+    listen<FileDragEndAtPayload>(FILE_DRAG_END_AT_EVENT, async ({ payload }) => {
+      if (cancelled) return;
+      if (payload.sourceWindow === getCurrentWindow().label) return;
+
+      const win = getCurrentWindow();
+      try {
+        const [pos, size, factor] = await Promise.all([
+          win.outerPosition(),
+          win.outerSize(),
+          win.scaleFactor(),
+        ]);
+        // Tauri 返回 PhysicalPosition/Size（物理像素），React screenX/Y 是逻辑像素
+        const x0 = pos.x / factor;
+        const y0 = pos.y / factor;
+        const x1 = x0 + size.width / factor;
+        const y1 = y0 + size.height / factor;
+        const inside = payload.screenX >= x0
+          && payload.screenX <= x1
+          && payload.screenY >= y0
+          && payload.screenY <= y1;
+
+        if (!inside) {
+          // 不在本窗口范围内 — 静默关闭 banner，不做任何操作
+          setIncomingFileDrag(null);
+          if (incomingDragTimerRef.current) {
+            window.clearTimeout(incomingDragTimerRef.current);
+            incomingDragTimerRef.current = null;
+          }
+          return;
+        }
+
+        // 落在本窗口内 → 计算 op 并执行
+        const defaultMode = (themeRef.current.crossWindowDropDefault || 'copy');
+        let op: 'copy' | 'move';
+        if (payload.altKey) op = 'copy';        // ⌥ 强制复制
+        else if (payload.shiftKey) op = 'move'; // ⇧ 强制移动
+        else if (defaultMode === 'ask') op = 'copy'; // ask 模式下没显式选择 → 复制（最安全）
+        else if (payload.metaKey) op = defaultMode === 'copy' ? 'move' : 'copy';
+        else op = defaultMode === 'move' ? 'move' : 'copy';
+
+        const current = incomingFileDragRef.current;
+        if (!current || current.transferId !== payload.transferId) return;
+        await acceptIncomingFileDragRef.current?.(op);
+      } catch (err) {
+        logDragDebug(`dragEndAt error=${String(err)}`);
+      }
+    }).then(fn => unlistens.push(fn)).catch(() => {});
+
+    listen<FileDropAcceptedPayload>(FILE_DROP_ACCEPTED_EVENT, ({ payload }) => {
+      if (cancelled) return;
+      const active = activeTransferRef.current;
+      if (!active || active.transferId !== payload.transferId) return;
+      activeTransferRef.current = null;
+      finishSharedFileDrag(0);
+      if (payload.op === 'move') {
+        void refreshCurrentDir();
+        showFeedback(t('messages.crossWindowMoved', {
+          count: payload.paths.length,
+          defaultValue: '已移动 {{count}} 项到另一窗口',
+        }));
+      } else {
+        showFeedback(t('messages.crossWindowCopied', {
+          count: payload.paths.length,
+          defaultValue: '已复制 {{count}} 项到另一窗口',
+        }));
+      }
+    }).then(fn => unlistens.push(fn)).catch(() => {});
+
+    return () => {
+      cancelled = true;
+      clearIncomingTimer();
+      unlistens.forEach(fn => fn());
+    };
+  }, [isActive, t]);
+
+  // Aether↔Aether 跨窗口接收：执行 copy/move 到 currentPath
+  // 来源可能是 ① banner 上的显式按钮点击 ② 源端 dragEnd 携带坐标命中本窗口
+  const acceptIncomingFileDrag = async (op: 'copy' | 'move') => {
+    const drag = incomingFileDragRef.current;
+    if (!drag) return;
+    if (!currentPath) {
+      showFeedback(t('messages.crossWindowNoTarget', {
+        defaultValue: '当前没有可作为目标的真实目录',
+      }));
+      return;
+    }
+    setIncomingFileDrag(null);
+    if (incomingDragTimerRef.current) {
+      window.clearTimeout(incomingDragTimerRef.current);
+      incomingDragTimerRef.current = null;
+    }
+
+    const targetFolder = makeFolderItemFromPath(currentPath);
+    const items = makeFileItemsFromPaths(drag.paths);
+
+    try {
+      if (op === 'move') {
+        await executeMoveFiles(items, targetFolder, 'abort');
+      } else {
+        await executeCopyFiles(items, targetFolder, 'abort');
+      }
+      await emitTo(drag.sourceWindow, FILE_DROP_ACCEPTED_EVENT, {
+        transferId: drag.transferId,
+        paths: drag.paths,
+        op,
+        targetWindow: getCurrentWindow().label,
+      } satisfies FileDropAcceptedPayload);
+    } catch (err) {
+      showFeedback(t('messages.crossWindowReceiveFailed', {
+        error: String(err),
+        defaultValue: '接收跨窗口文件失败：{{error}}',
+      }));
+    }
+  };
+  // 把最新版本的 accept 函数挂到 ref 上供 Tauri event listener 调用
+  acceptIncomingFileDragRef.current = acceptIncomingFileDrag;
+
+  // Finder→Aether 全局兜底：Tauri 已经把系统拖入自动 emit 给当前 webview
+  useEffect(() => {
+    if (!isActive) return;
+    const unlistens: Array<() => void> = [];
+    let cancelled = false;
+
+    listen<TauriDragDropPayload>(TAURI_DRAG_ENTER_EVENT, ({ payload }) => {
+      if (cancelled) return;
+      // 仅当包含真实路径时才认为是 Finder 类系统拖入
+      if (!Array.isArray(payload?.paths) || payload.paths.length === 0) return;
+      setIsReceivingExternalDrag(true);
+    }).then(fn => unlistens.push(fn)).catch(() => {});
+
+    listen(TAURI_DRAG_LEAVE_EVENT, () => {
+      if (cancelled) return;
+      setIsReceivingExternalDrag(false);
+    }).then(fn => unlistens.push(fn)).catch(() => {});
+
+    listen<TauriDragDropPayload>(TAURI_DRAG_DROP_EVENT, async ({ payload }) => {
+      if (cancelled) return;
+      setIsReceivingExternalDrag(false);
+      const paths = Array.isArray(payload?.paths) ? payload.paths.filter(Boolean) : [];
+      if (paths.length === 0) return;
+      if (!currentPath) return;
+      // 系统拖入和 HTML5 拖入可能同时触发；用 surface 元素 onDrop 也会收到 e.dataTransfer.files。
+      // 这里只处理"webview onDrop 没拿到"的兜底场景：检查 paths 是否已被处理过。
+      if (recentExternalDropRef.current.has(paths[0])) return;
+      recentExternalDropRef.current.add(paths[0]);
+      window.setTimeout(() => recentExternalDropRef.current.delete(paths[0]), 1500);
+
+      try {
+        const result = await copyFiles(paths, currentPath, 'abort');
+        if (result.conflicts.length > 0) {
+          setMoveConflictDialog({
+            filesToMove: makeFileItemsFromPaths(paths),
+            targetFolder: makeFolderItemFromPath(currentPath),
+            conflicts: result.conflicts,
+            operation: 'copy',
+          });
+          return;
+        }
+        await refreshCurrentDir();
+        if (result.failed.length === 0 && result.copied.length > 0) {
+          showFeedback(t('messages.importedFromFinder', { count: result.copied.length }));
+        } else if (result.failed.length > 0) {
+          showFeedback(t('messages.finderImportFailed', {
+            error: result.failed[0].error,
+            defaultValue: '导入失败：{{error}}',
+          }));
+        }
+      } catch (err) {
+        showFeedback(t('messages.finderImportFailed', {
+          error: String(err),
+          defaultValue: '导入失败：{{error}}',
+        }));
+      }
+    }).then(fn => unlistens.push(fn)).catch(() => {});
+
+    return () => {
+      cancelled = true;
+      unlistens.forEach(fn => fn());
+    };
+  }, [isActive, currentPath, t]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -1055,8 +1432,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         handleOpenFile(lastSelectedFile);
         return;
       }
-      // Space: Quick Look 预览
-      if (e.key === ' ' && lastSelectedFile) {
+      // Space: Quick Look 预览（可在设置中关闭）
+      if (e.key === ' ' && lastSelectedFile && theme.enableSpacePreview !== false) {
         e.preventDefault();
         handleQuickLook(lastSelectedFile);
         return;
@@ -1504,6 +1881,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       count: paths.length,
       active: true,
     });
+
+    // 拖拽期间持续判定光标下窗口并 raise（让底层窗口自动上浮）
+    startCursorRaiseTracking();
+
     logDragDebug(`dragStart id=${file.id} name=${file.name} type=${file.type} paths=${paths.join('|')}`);
   };
 
@@ -1529,12 +1910,32 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (dragOverFolderId === fileId) setDragOverFolderId(null);
   };
 
-  const handleDragEnd = () => {
-    logDragDebug(`dragEnd activeId=${draggedFileIdRef.current ?? ''}`);
+  const handleDragEnd = (e: React.DragEvent) => {
+    logDragDebug(`dragEnd activeId=${draggedFileIdRef.current ?? ''} screenX=${e.screenX} screenY=${e.screenY} meta=${e.metaKey} alt=${e.altKey} shift=${e.shiftKey}`);
+
+    stopCursorRaiseTracking();
+
+    // 松手即触发：广播屏幕坐标 + 修饰键到所有窗口。
+    // 目标窗口收到后判定坐标是否落在自己范围内，落入则立刻执行 copy/move。
+    const active = activeTransferRef.current;
+    if (active) {
+      void emit(FILE_DRAG_END_AT_EVENT, {
+        transferId: active.transferId,
+        screenX: e.screenX,
+        screenY: e.screenY,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        shiftKey: e.shiftKey,
+        sourceWindow: getCurrentWindow().label,
+      } satisfies FileDragEndAtPayload);
+    }
+
     draggedFileIdRef.current = null;
     setDragPreview(null);
     if (dragOverFolderId !== null) setDragOverFolderId(null);
-    finishSharedFileDrag(600);
+    // 松手后立刻清理本地状态。目标窗口若接收，会反向 emit drop-accepted。
+    // 给一个短暂宽限期等 drop-accepted 回来再发 END（避免目标窗口 listener 还没就绪）。
+    finishSharedFileDrag(400);
   };
 
   const handleDrop = async (e: React.DragEvent, targetFolderId: string) => {
@@ -1844,8 +2245,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           onContextMenu={(e) => { void handleContextMenu(e, [file.id]); }}
           animate={isPulsing ? { scale: [1, 0.985, 1.01, 1] } : undefined}
           transition={isPulsing ? { duration: 0.26 } : undefined}
-          whileHover={{ y: -4 }}
-          className={`file-item select-none relative rounded-2xl p-4 flex flex-col justify-between group cursor-pointer transition-all duration-300 border
+          className={`file-item file-item-grid select-none relative rounded-2xl p-4 flex flex-col justify-between group cursor-pointer transition-[transform,background-color,border-color,box-shadow] duration-200 border
             ${isPulsing ? 'ring-2 ring-primary/35' : ''}
             ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
             ${isSelected ? 'bg-primary/40 border-primary/60 shadow-[0_4px_12px_rgba(var(--primary-rgb),0.2)]' : 'bg-primary/10 border-transparent hover:bg-primary/20 hover:border-primary/20 shadow-sm'}
@@ -2502,26 +2902,39 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setContextMenu(null);
     setActiveDropdown('copy-move');
     const targets = getActionFiles(file);
-    const targetDir = prompt('复制到（输入目标目录路径）:', currentPath);
+    let targetDir: string | null = null;
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: true,
+        defaultPath: currentPath || undefined,
+        title: t('dialogs.copyToTitle', { defaultValue: '选择复制目标' }),
+      });
+      targetDir = typeof selected === 'string' ? selected : null;
+    } catch { /* user cancelled */ }
     setActiveDropdown(null);
     if (targetDir) {
       try {
-        await Promise.all(targets.map(item => copyFile(item.path, targetDir)));
-        refreshCurrentDir();
-        showFeedback(`已复制 ${targets.length} 个项目`);
+        await executeCopyFiles(targets, makeFolderItemFromPath(targetDir), 'abort');
       } catch (e) { showFeedback(`复制失败：${String(e)}`); }
     }
   };
 
   const handleMoveFile = async (file: FileItem) => {
     const targets = getActionFiles(file);
-    const targetDir = prompt('移动到（输入目标目录路径）:', currentPath);
+    let targetDir: string | null = null;
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: true,
+        defaultPath: currentPath || undefined,
+        title: t('dialogs.moveToTitle', { defaultValue: '选择移动目标' }),
+      });
+      targetDir = typeof selected === 'string' ? selected : null;
+    } catch { /* user cancelled */ }
     if (targetDir) {
       try {
-        await Promise.all(targets.map(item => moveFile(item.path, targetDir)));
-        refreshCurrentDir();
-        onSelectFiles([]);
-        showFeedback(`已移动 ${targets.length} 个项目`);
+        await executeMoveFiles(targets, makeFolderItemFromPath(targetDir), 'abort');
       } catch (e) { showFeedback(`移动失败：${String(e)}`); }
     }
     setContextMenu(null);
@@ -2677,8 +3090,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         if (!url) {
           showFeedback(`扩展「${extension.label}」未配置 URL。`);
         } else {
-          await shellOpen(url);
-          showFeedback(`已打开链接：${extension.label}`);
+          try {
+            await safeShellOpen(url);
+            showFeedback(`已打开链接：${extension.label}`);
+          } catch (err) {
+            showFeedback(`扩展「${extension.label}」链接不安全：${String(err)}`);
+          }
         }
       } else {
         showFeedback(`扩展「${extension.label}」已预留，等待插件接入。`);
@@ -3104,10 +3521,44 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               onMouseMove={handleContainerMouseMove}
               onMouseUp={handleContainerMouseUp}
               onMouseLeave={handleContainerMouseUp}
+              onDragEnter={(e) => {
+                // 跨窗口 dragenter 是底层窗口"被进入"的最早信号 — 立刻 raise。
+                // 比 dragover 触发更早一帧，避免 banner 看到但窗口仍在底层。
+                if (incomingFileDragRef.current) {
+                  void focusCurrentWindow();
+                }
+                // 系统拖入（Finder→Aether）也需要 raise
+                if (e.dataTransfer.types.includes('Files')) {
+                  void focusCurrentWindow();
+                }
+              }}
               onDragOver={handleSurfaceDragOver}
               onDrop={handleSurfaceDrop}
               className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
             >
+              {/* 跨窗口拖拽悬停反馈 — 纯视觉，由源端 dragEnd 自动触发处理 */}
+              {incomingFileDrag && (
+                <CrossWindowDropBanner
+                  drag={incomingFileDrag}
+                  currentPath={currentPath}
+                  defaultMode={theme.crossWindowDropDefault || 'copy'}
+                  visibleMs={INCOMING_DRAG_VISIBLE_MS}
+                  t={t}
+                />
+              )}
+              {/* Finder→Aether 系统拖入视觉反馈 */}
+              {isReceivingExternalDrag && !incomingFileDrag && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center bg-primary/10 backdrop-blur-sm border-2 border-dashed border-primary/60 rounded-2xl m-2 pointer-events-none">
+                  <div className="bg-surface/95 rounded-2xl px-6 py-4 shadow-xl text-center">
+                    <div className="text-on-surface font-bold text-sm">
+                      {t('crossWindow.externalDropHint', {
+                        path: currentPath || '当前目录',
+                        defaultValue: '松手即可复制到 {{path}}',
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
               {loading && (
                 <div className="flex-1 min-h-0 flex items-center justify-center text-on-surface/40 text-sm">{t('explorer.loading')}</div>
               )}

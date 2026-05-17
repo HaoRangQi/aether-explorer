@@ -36,6 +36,11 @@ CARGO_VERSION="$(awk -F ' *= *' '/^version = / { gsub(/\"/, "", $2); print $2; e
 TAG="v$VERSION"
 echo "📦 准备发布 $TAG"
 
+# ─── 测试门槛（test 不过不允许发版） ────────────────────────────────
+echo "🧪 跑前端 + Rust 测试..."
+npm test
+(cd src-tauri && cargo test --lib)
+
 # ─── 注入签名密钥环境变量 ────────────────────────────────────────
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$PRIVATE_KEY_PATH")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"

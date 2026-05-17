@@ -30,7 +30,26 @@ permissions:
   contents: write
 
 jobs:
+  test-gate:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run test:rust
+
   release:
+    needs: test-gate
     runs-on: macos-latest
     timeout-minutes: 60
     env:
@@ -132,9 +151,20 @@ jobs:
           SIG_CONTENT="$(cat "$STAGING_DIR/$APP_SIG_NAME")"
           PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+          # 从 CHANGELOG.md 抽出本版块作为 release notes；找不到则用 tag 兜底
+          NOTES=""
+          if [ -f CHANGELOG.md ]; then
+            NOTES="$(awk -v ver="$VERSION" '
+              $0 ~ "^## "ver { p=1; next }
+              p && /^## / { exit }
+              p { print }
+            ' CHANGELOG.md)"
+          fi
+          [ -n "$NOTES" ] || NOTES="Aether Explorer $TAG"
+
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "Aether Explorer $TAG" \
+            --arg notes "$NOTES" \
             --arg pub_date "$PUB_DATE" \
             --arg sig "$SIG_CONTENT" \
             --arg url "$APP_TAR_URL" \
@@ -167,7 +197,7 @@ jobs:
           else
             gh release create "$TAG" -R "$REPO" \
               --title "$TAG" \
-              --notes "Aether Explorer $TAG" \
+              --notes "$NOTES" \
               "$STAGING_DIR/$DMG_NAME" \
               "$STAGING_DIR/$APP_TAR_NAME" \
               "$STAGING_DIR/$APP_SIG_NAME" \

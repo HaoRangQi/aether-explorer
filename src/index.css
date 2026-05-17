@@ -179,3 +179,23 @@ html, body, #root {
   contain-intrinsic-size: auto 48px;
   contain: layout style;
 }
+
+/* 网格视图 hover 上浮 — 用 CSS 取代 framer-motion whileHover y:-4，
+   消除每个 file-item 的 motion runtime 开销 */
+.file-item-grid {
+  will-change: transform;
+}
+.file-item-grid:hover {
+  transform: translateY(-4px);
+}
+
+/* 尊重用户的"减少动态效果"系统设置 */
+@media (prefers-reduced-motion: reduce) {
+  .file-item-grid:hover {
+    transform: none;
+  }
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

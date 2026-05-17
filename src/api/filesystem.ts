@@ -80,6 +80,10 @@ export async function moveFile(src: string, dstDir: string): Promise<string> {
 export interface FileTransferPayload {
   paths: string[];
   cut: boolean;
+  sourceWindow?: string;
+  transferId?: string;
+  previewName?: string;
+  count?: number;
 }
 
 export async function setFileClipboard(paths: string[], cut: boolean): Promise<void> {
@@ -94,8 +98,26 @@ export async function clearFileClipboard(): Promise<void> {
   return invoke('clear_file_clipboard');
 }
 
-export async function setFileDragPayload(paths: string[], cut: boolean): Promise<void> {
-  return invoke('set_file_drag_payload', { paths, cut });
+export interface FileDragMeta {
+  sourceWindow?: string;
+  transferId?: string;
+  previewName?: string;
+  count?: number;
+}
+
+export async function setFileDragPayload(
+  paths: string[],
+  cut: boolean,
+  meta: FileDragMeta = {},
+): Promise<void> {
+  return invoke('set_file_drag_payload', {
+    paths,
+    cut,
+    sourceWindow: meta.sourceWindow,
+    transferId: meta.transferId,
+    previewName: meta.previewName,
+    count: meta.count,
+  });
 }
 
 export async function getFileDragPayload(): Promise<FileTransferPayload | null> {

@@ -59,6 +59,14 @@ struct VolumeInfo {
 struct FileTransferPayload {
     paths: Vec<String>,
     cut: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_window: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transfer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    count: Option<u32>,
 }
 
 struct FileClipboardState(Mutex<Option<FileTransferPayload>>);
@@ -116,7 +124,7 @@ fn detect_mime(name: &str, is_dir: bool) -> String {
         "pdf" => "pdf",
         "zip" | "tar" | "gz" | "7z" | "rar" | "bz2" | "xz" | "tgz" | "dmg" | "pkg" | "iso" => "archive",
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "rs" | "go" | "java" | "c" | "cc" | "cpp" | "h" | "hpp" | "swift" | "kt" | "rb" | "php" | "sh" | "bash" | "zsh" | "fish" | "sql" | "css" | "scss" | "html" | "vue" | "svelte" => "code",
-        "txt" | "md" | "markdown" | "csv" | "tsv" | "json" | "yaml" | "yml" | "xml" | "toml" | "ini" | "cfg" | "conf" | "log" | "lock" | "env" | "rst" | "txt~" => "text",
+        "txt" | "md" | "markdown" | "csv" | "tsv" | "json" | "yaml" | "yml" | "xml" | "toml" | "ini" | "cfg" | "conf" | "log" | "lock" | "rst" | "txt~" => "text",
         _ => "file",
     }
     .into()
@@ -365,29 +373,9 @@ fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>,
         // 性能保护：目录列表阶段不解析 app bundle 图标，防止大量 plutil 调用造成卡顿。
         let icon_path = None;
 
-        let child_count = if is_dir {
-            fs::read_dir(&path)
-                .ok()
-                .map(|children| {
-                    children
-                        .flatten()
-                        .filter(|child| {
-                            if show_hidden {
-                                true
-                            } else {
-                                child
-                                    .file_name()
-                                    .to_str()
-                                    .map(|name| !name.starts_with('.'))
-                                    .unwrap_or(true)
-                            }
-                        })
-                        .count() as u64
-                })
-                .or(Some(0))
-        } else {
-            None
-        };
+        // 性能保护：不再为每个子目录跑 read_dir 算子项数（N+1 系统调用）。
+        // 子项数改为按需通过 get_child_count 命令懒查，由前端缓存。
+        let child_count = None;
 
         let fe = FileEntry {
             name,
@@ -432,9 +420,35 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! Welcome to Aether Explorer.", name)
 }
 
+/// 敏感文件名 / 后缀黑名单 — 默认不允许 read_text_preview 读出来在预览面板展示。
+///
+/// 防的是：用户右键、空格预览不小心把 .env / id_rsa 暴露在屏幕上 / 被旁边人扫到。
+/// 用户仍可通过"打开方式"显式打开（go 经过他们认知层面），但不会被 8KB 自动预览。
+const SENSITIVE_PREVIEW_NAMES: &[&str] = &[
+    ".env", ".envrc", ".npmrc", ".pypirc", ".netrc",
+    "id_rsa", "id_dsa", "id_ed25519", "id_ecdsa",
+    ".aws/credentials", "kubeconfig", ".gnupg",
+];
+
+fn is_sensitive_for_preview(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_lowercase();
+    let full = path.to_string_lossy().to_lowercase();
+    for s in SENSITIVE_PREVIEW_NAMES {
+        let s = s.to_lowercase();
+        if name == s || name.ends_with(&format!(".{}", s)) || full.ends_with(&s) {
+            return true;
+        }
+    }
+    false
+}
+
 #[tauri::command]
 fn read_text_preview(path: String) -> Result<String, String> {
     use std::io::Read;
+    let p = Path::new(&path);
+    if is_sensitive_for_preview(p) {
+        return Err("此文件类型默认不在预览面板展示（含敏感信息）— 可使用『打开方式』显式打开".into());
+    }
     let mut file = fs::File::open(&path).map_err(|e| format!("无法打开文件: {}", e))?;
     let mut buf = vec![0u8; 8192]; // First 8KB
     let n = file.read(&mut buf).map_err(|e| format!("读取失败: {}", e))?;
@@ -454,6 +468,42 @@ fn open_system_settings() -> Result<(), String> {
 #[tauri::command]
 fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|e| format!("启动窗口拖拽失败: {}", e))
+}
+
+/// 拖拽期间被源窗口频繁调用：把屏幕坐标下的非源窗口置顶。
+/// 用于多窗口拖拽时让"底层窗口"自动浮到前面，看清放置提示。
+///
+/// - `screen_x` / `screen_y`：CSS 逻辑像素（DragEvent.screenX/screenY）
+/// - `except_window`：源窗口 label，不会被 raise
+///
+/// 返回被 raise 的窗口 label（如有），便于前端 debug 与去重。
+#[tauri::command]
+fn raise_window_at(
+    app: tauri::AppHandle,
+    screen_x: f64,
+    screen_y: f64,
+    except_window: String,
+) -> Result<Option<String>, String> {
+    let windows = app.webview_windows();
+    for (label, win) in windows.iter() {
+        if label == &except_window { continue; }
+        if label == "drag-preview" { continue; }
+        let factor = win.scale_factor().map_err(|e| e.to_string())?;
+        let pos = win.outer_position().map_err(|e| e.to_string())?;
+        let size = win.outer_size().map_err(|e| e.to_string())?;
+        let x0 = pos.x as f64 / factor;
+        let y0 = pos.y as f64 / factor;
+        let x1 = x0 + size.width as f64 / factor;
+        let y1 = y0 + size.height as f64 / factor;
+        if screen_x >= x0 && screen_x <= x1 && screen_y >= y0 && screen_y <= y1 {
+            let already_focused = win.is_focused().unwrap_or(false);
+            if !already_focused {
+                let _ = win.set_focus();
+            }
+            return Ok(Some(label.clone()));
+        }
+    }
+    Ok(None)
 }
 
 #[tauri::command]
@@ -570,6 +620,13 @@ fn list_fonts() -> Result<Vec<String>, String> {
 
 // ── File Operations ──
 
+// 路径规范化 — 对用户输入的目标目录做 canonicalize。
+// 防 `..` 跳逃 + 符号链接绕过 scope。失败说明路径不存在或无权限，直接返 Err。
+fn safe_canonicalize(path: &Path) -> Result<std::path::PathBuf, String> {
+    path.canonicalize()
+        .map_err(|e| format!("路径解析失败 {}: {}", path.display(), e))
+}
+
 fn unique_destination(path: &Path) -> std::path::PathBuf {
     if !path.exists() {
         return path.to_path_buf();
@@ -641,7 +698,14 @@ fn set_file_clipboard(
     *clipboard = if paths.is_empty() {
         None
     } else {
-        Some(FileTransferPayload { paths, cut })
+        Some(FileTransferPayload {
+            paths,
+            cut,
+            source_window: None,
+            transfer_id: None,
+            preview_name: None,
+            count: None,
+        })
     };
     Ok(())
 }
@@ -666,12 +730,23 @@ fn set_file_drag_payload(
     state: tauri::State<FileDragState>,
     paths: Vec<String>,
     cut: bool,
+    source_window: Option<String>,
+    transfer_id: Option<String>,
+    preview_name: Option<String>,
+    count: Option<u32>,
 ) -> Result<(), String> {
     let mut drag_payload = state.0.lock().map_err(|_| "文件拖拽状态不可用".to_string())?;
     *drag_payload = if paths.is_empty() {
         None
     } else {
-        Some(FileTransferPayload { paths, cut })
+        Some(FileTransferPayload {
+            paths,
+            cut,
+            source_window,
+            transfer_id,
+            preview_name,
+            count,
+        })
     };
     Ok(())
 }
@@ -737,7 +812,8 @@ fn copy_files(
     dst_dir: String,
     conflict_strategy: Option<MoveConflictStrategy>,
 ) -> Result<CopyResult, String> {
-    let dst = Path::new(&dst_dir);
+    let dst_buf = safe_canonicalize(Path::new(&dst_dir))?;
+    let dst = dst_buf.as_path();
     if !dst.is_dir() {
         return Err(format!("目标不是目录: {}", dst_dir));
     }
@@ -840,7 +916,8 @@ fn move_files(
     dst_dir: String,
     conflict_strategy: Option<MoveConflictStrategy>,
 ) -> Result<MoveResult, String> {
-    let dst = Path::new(&dst_dir);
+    let dst_buf = safe_canonicalize(Path::new(&dst_dir))?;
+    let dst = dst_buf.as_path();
     if !dst.is_dir() {
         return Err(format!("目标不是目录: {}", dst_dir));
     }
@@ -1117,6 +1194,25 @@ fn get_dir_size(path: String) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// 按需查目录的直接子项数（PERF_PLAN L2-B 配套）。
+/// 前端建议加 TTL 缓存避免重复调用。
+#[tauri::command]
+fn get_child_count(path: String, show_hidden: bool) -> Result<u64, String> {
+    let p = Path::new(&path);
+    if !p.is_dir() {
+        return Ok(0);
+    }
+    let count = fs::read_dir(p)
+        .map(|c| c.flatten()
+            .filter(|e| {
+                if show_hidden { true }
+                else { e.file_name().to_str().map(|n| !n.starts_with('.')).unwrap_or(true) }
+            })
+            .count() as u64)
+        .unwrap_or(0);
+    Ok(count)
+}
+
 #[tauri::command]
 fn get_file_info(path: String) -> Result<FileEntry, String> {
     let p = Path::new(&path);
@@ -1365,6 +1461,42 @@ fn list_terminal_apps() -> Result<Vec<String>, String> {
     Ok(terminals)
 }
 
+/// 拒绝包含 shell 元字符的用户命令片段。
+///
+/// 这一层防御针对自动化路径：菜单扩展的 terminalArgs / shell command 字段在没有
+/// 用户二次确认时（confirmExecution=false）执行，必须保证 user_cmd 不会
+/// "逃出" 我们包装的引号 / `cd` 前缀。
+///
+/// 拒绝的字符 / 序列见 FORBIDDEN_TOKENS。用户在设置面板手敲"高级命令"应走
+/// confirmExecution=true 流程，前端可以选择跳过此校验。
+const FORBIDDEN_TOKENS: &[&str] = &["$(", "`", "&&", "||", ";", "|", ">", "<", "\n", "\r"];
+
+fn validate_shell_fragment(s: &str) -> Result<String, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err("命令为空".into());
+    }
+    for tok in FORBIDDEN_TOKENS {
+        if trimmed.contains(tok) {
+            return Err(format!(
+                "命令含受限字符 {} — 请改用『扩展菜单』的高级命令模式（启用执行前确认）",
+                tok
+            ));
+        }
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 终端应用白名单 — 拒绝任意名字以防 app_name 含 AppleScript 注入字符。
+const ALLOWED_TERMINAL_APPS: &[&str] = &[
+    "Terminal", "iTerm", "iTerm2", "Warp", "kitty", "WezTerm",
+    "Alacritty", "Ghostty", "Tabby", "Hyper",
+];
+
+fn is_allowed_terminal(name: &str) -> bool {
+    ALLOWED_TERMINAL_APPS.iter().any(|a| a.eq_ignore_ascii_case(name))
+}
+
 #[tauri::command]
 fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<String>, custom_command: Option<String>) -> Result<(), String> {
     let target_path = Path::new(&path);
@@ -1376,9 +1508,12 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
     let dir_str = dir.to_string_lossy().to_string();
 
     let app_name = terminal_app.unwrap_or_else(|| "Terminal".into());
+    if !is_allowed_terminal(&app_name) {
+        return Err(format!("不允许的终端应用: {}", app_name));
+    }
     let arg_text = args.unwrap_or_default();
     let lower = app_name.to_lowercase();
-    let command_tail = custom_command
+    let raw_tail = custom_command
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty())
@@ -1386,23 +1521,29 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
             let trimmed_args = arg_text.trim();
             if trimmed_args.is_empty() { None } else { Some(trimmed_args) }
         });
-    let command = match command_tail {
+    let validated_tail = match raw_tail {
+        Some(raw) => Some(validate_shell_fragment(raw)?),
+        None => None,
+    };
+    let command = match validated_tail.as_deref() {
         Some(tail) => format!("cd {} && {}", shell_quote(&dir_str), tail),
         None => format!("cd {}", shell_quote(&dir_str)),
     };
 
     if lower.contains("terminal") || lower.contains("iterm") {
+        // command 已经只含白名单字符 + 我们自己拼接的 cd 包装 — 用 apple_quote 包字符串进 AppleScript。
+        // app_name 已通过白名单，进 apple_quote 是双重保险。
         let script = if lower.contains("iterm") {
             format!(
-                "tell application \"{}\"\nactivate\ncreate window with default profile\ntell current session of current window to write text \"{}\"\nend tell",
-                app_name.replace('\\', "\\\\").replace('"', "\\\""),
-                command.replace('\\', "\\\\").replace('"', "\\\"")
+                "tell application {}\nactivate\ncreate window with default profile\ntell current session of current window to write text {}\nend tell",
+                apple_quote(&app_name),
+                apple_quote(&command),
             )
         } else {
             format!(
-                "tell application \"{}\" to do script \"{}\"",
-                app_name.replace('\\', "\\\\").replace('"', "\\\""),
-                command.replace('\\', "\\\\").replace('"', "\\\"")
+                "tell application {} to do script {}",
+                apple_quote(&app_name),
+                apple_quote(&command),
             )
         };
         let output = std::process::Command::new("osascript")
@@ -1480,6 +1621,7 @@ pub fn run() {
             get_home_dir,
             open_system_settings,
             start_window_drag,
+            raise_window_at,
             debug_log,
             list_fonts,
             list_terminal_apps,
@@ -1509,6 +1651,7 @@ pub fn run() {
             get_file_info,
             get_app_icon,
             get_dir_size,
+            get_child_count,
             open_devtools,
             quick_look,
             reveal_in_finder,
@@ -1537,3 +1680,302 @@ pub fn run() {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── format_size ──
+    #[test]
+    fn format_size_bytes_under_1k() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1), "1 B");
+        assert_eq!(format_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_size_kib_to_gib() {
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+        assert_eq!(format_size(1024_u64.pow(3)), "1.0 GB");
+    }
+
+    #[test]
+    fn format_size_decimal_precision() {
+        assert_eq!(format_size(1536), "1.5 KB");
+        assert_eq!(format_size(1024 * 1024 * 3 / 2), "1.5 MB");
+    }
+
+    // ── format_kib ──
+    #[test]
+    fn format_kib_parses_numeric_string() {
+        // 输入 KiB 数字，输出人类可读
+        assert_eq!(format_kib("1"), "1.0 KB");
+        assert_eq!(format_kib("1024"), "1.0 MB");
+        assert_eq!(format_kib("0"), "0 B");
+    }
+
+    #[test]
+    fn format_kib_returns_input_on_parse_failure() {
+        assert_eq!(format_kib("not-a-number"), "not-a-number");
+        assert_eq!(format_kib(""), "");
+    }
+
+    // ── parse_df_line ──
+    #[test]
+    fn parse_df_line_simple_mount() {
+        let line = "/dev/disk1s1 488245288 244091128 244154160 50% /";
+        let (fs, size, used, avail, cap, mount) = parse_df_line(line).unwrap();
+        assert_eq!(fs, "/dev/disk1s1");
+        assert_eq!(size, "488245288");
+        assert_eq!(used, "244091128");
+        assert_eq!(avail, "244154160");
+        assert_eq!(cap, "50%");
+        assert_eq!(mount, "/");
+    }
+
+    #[test]
+    fn parse_df_line_mount_with_spaces() {
+        let line = "/dev/disk2s1 1000 500 500 50% /Volumes/My Drive";
+        let (_, _, _, _, _, mount) = parse_df_line(line).unwrap();
+        assert_eq!(mount, "/Volumes/My Drive");
+    }
+
+    #[test]
+    fn parse_df_line_rejects_short_input() {
+        assert!(parse_df_line("only three cols").is_err());
+        assert!(parse_df_line("").is_err());
+    }
+
+    // ── parse_capacity ──
+    #[test]
+    fn parse_capacity_strips_percent() {
+        assert_eq!(parse_capacity("85%"), 85);
+        assert_eq!(parse_capacity("0%"), 0);
+        assert_eq!(parse_capacity("100%"), 100);
+    }
+
+    #[test]
+    fn parse_capacity_caps_at_100() {
+        // value 超出 100 截断到 100（u8::min 操作）
+        assert_eq!(parse_capacity("200%"), 100);
+    }
+
+    #[test]
+    fn parse_capacity_invalid_returns_0() {
+        assert_eq!(parse_capacity(""), 0);
+        assert_eq!(parse_capacity("abc"), 0);
+        assert_eq!(parse_capacity("xx%"), 0);
+    }
+
+    // ── detect_mime ──
+    #[test]
+    fn detect_mime_images() {
+        assert_eq!(detect_mime("photo.png", false), "image");
+        assert_eq!(detect_mime("photo.JPG", false), "image");
+        assert_eq!(detect_mime("anim.gif", false), "image");
+        assert_eq!(detect_mime("logo.SVG", false), "image");
+    }
+
+    #[test]
+    fn detect_mime_video_audio() {
+        assert_eq!(detect_mime("clip.mp4", false), "video");
+        assert_eq!(detect_mime("song.mp3", false), "audio");
+        assert_eq!(detect_mime("voice.m4a", false), "audio");
+    }
+
+    #[test]
+    fn detect_mime_code_text_archive() {
+        assert_eq!(detect_mime("main.rs", false), "code");
+        assert_eq!(detect_mime("App.tsx", false), "code");
+        assert_eq!(detect_mime("notes.md", false), "text");
+        assert_eq!(detect_mime("data.json", false), "text");
+        assert_eq!(detect_mime("backup.zip", false), "archive");
+    }
+
+    #[test]
+    fn detect_mime_dir_vs_app_bundle() {
+        assert_eq!(detect_mime("Documents", true), "folder");
+        assert_eq!(detect_mime("Safari.app", true), "application");
+        assert_eq!(detect_mime("foo.APP", true), "application");
+    }
+
+    #[test]
+    fn detect_mime_unknown_extension() {
+        assert_eq!(detect_mime("data.xyzunknown", false), "file");
+        assert_eq!(detect_mime("Makefile", false), "file");
+        assert_eq!(detect_mime("no_extension", false), "file");
+    }
+
+    // ── unique_destination ──
+    #[test]
+    fn unique_destination_nonexistent_returns_original() {
+        let temp = std::env::temp_dir().join(format!("aether-uniq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let target = temp.join("brand-new.txt");
+        let result = unique_destination(&target);
+        assert_eq!(result, target);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn unique_destination_appends_copy_suffix() {
+        let temp = std::env::temp_dir().join(format!("aether-uniq2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let a = temp.join("a.txt");
+        std::fs::write(&a, b"").unwrap();
+        let next = unique_destination(&a);
+        assert_eq!(next.file_name().unwrap().to_str().unwrap(), "a copy.txt");
+
+        std::fs::write(temp.join("a copy.txt"), b"").unwrap();
+        let next2 = unique_destination(&a);
+        assert_eq!(next2.file_name().unwrap().to_str().unwrap(), "a copy 2.txt");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn unique_destination_handles_no_extension() {
+        let temp = std::env::temp_dir().join(format!("aether-uniq3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let f = temp.join("Makefile");
+        std::fs::write(&f, b"").unwrap();
+        let next = unique_destination(&f);
+        assert_eq!(next.file_name().unwrap().to_str().unwrap(), "Makefile copy");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    // ── shell_quote ──
+    #[test]
+    fn shell_quote_wraps_simple() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn shell_quote_escapes_single_quote() {
+        // POSIX 标准转义：'it' + \\' + 's' → 'it'\''s'
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_quote_keeps_shell_meta_safe() {
+        // 这些字符在引号内都不会被 shell 解释
+        assert_eq!(shell_quote("$(rm -rf /)"), "'$(rm -rf /)'");
+        assert_eq!(shell_quote("`whoami`"), "'`whoami`'");
+        assert_eq!(shell_quote("foo;bar"), "'foo;bar'");
+        assert_eq!(shell_quote("foo|bar"), "'foo|bar'");
+        assert_eq!(shell_quote("foo && bar"), "'foo && bar'");
+    }
+
+    #[test]
+    fn shell_quote_paths_with_spaces() {
+        assert_eq!(shell_quote("/Users/jane/My Documents"), "'/Users/jane/My Documents'");
+    }
+
+    // ── encode_query_component ──
+    #[test]
+    fn encode_query_component_keeps_safe_chars() {
+        assert_eq!(encode_query_component("abc123"), "abc123");
+        assert_eq!(encode_query_component("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn encode_query_component_percent_encodes_unsafe() {
+        assert_eq!(encode_query_component(" "), "%20");
+        assert_eq!(encode_query_component("a/b"), "a%2Fb");
+        assert_eq!(encode_query_component("a&b"), "a%26b");
+        assert_eq!(encode_query_component("a=b"), "a%3Db");
+    }
+
+    #[test]
+    fn encode_query_component_handles_multibyte() {
+        // 中文按 UTF-8 三字节编码
+        assert_eq!(encode_query_component("中"), "%E4%B8%AD");
+    }
+
+    // ── validate_shell_fragment ──
+    #[test]
+    fn validate_shell_fragment_accepts_safe_input() {
+        assert_eq!(validate_shell_fragment("npm run dev").unwrap(), "npm run dev");
+        assert_eq!(validate_shell_fragment("  ls -la  ").unwrap(), "ls -la");
+    }
+
+    #[test]
+    fn validate_shell_fragment_rejects_injection() {
+        assert!(validate_shell_fragment("rm -rf /; echo ok").is_err());
+        assert!(validate_shell_fragment("cat x | grep y").is_err());
+        assert!(validate_shell_fragment("a && b").is_err());
+        assert!(validate_shell_fragment("a || b").is_err());
+        assert!(validate_shell_fragment("$(whoami)").is_err());
+        assert!(validate_shell_fragment("`whoami`").is_err());
+        assert!(validate_shell_fragment("x > /etc/passwd").is_err());
+        assert!(validate_shell_fragment("x < secrets").is_err());
+        assert!(validate_shell_fragment("a\nb").is_err());
+    }
+
+    #[test]
+    fn validate_shell_fragment_rejects_empty() {
+        assert!(validate_shell_fragment("").is_err());
+        assert!(validate_shell_fragment("   ").is_err());
+    }
+
+    // ── is_allowed_terminal ──
+    #[test]
+    fn is_allowed_terminal_accepts_known() {
+        assert!(is_allowed_terminal("Terminal"));
+        assert!(is_allowed_terminal("iTerm"));
+        assert!(is_allowed_terminal("ITERM2"));   // 大小写不敏感
+        assert!(is_allowed_terminal("warp"));
+        assert!(is_allowed_terminal("WezTerm"));
+    }
+
+    #[test]
+    fn is_allowed_terminal_rejects_injection() {
+        // 攻击者控制 app_name 不应能注入 AppleScript
+        assert!(!is_allowed_terminal("Foo\"; do shell script \"evil"));
+        assert!(!is_allowed_terminal(""));
+        assert!(!is_allowed_terminal("SomeRandomApp"));
+        assert!(!is_allowed_terminal("Terminal.app")); // 必须是不带后缀
+    }
+
+    // ── apple_quote ──
+    #[test]
+    fn apple_quote_wraps_simple() {
+        assert_eq!(apple_quote("Terminal"), "\"Terminal\"");
+    }
+
+    #[test]
+    fn apple_quote_escapes_quotes_and_backslash() {
+        assert_eq!(apple_quote(r#"it"s"#), "\"it\\\"s\"");
+        assert_eq!(apple_quote(r"a\b"), "\"a\\\\b\"");
+    }
+
+    // ── is_sensitive_for_preview ──
+    #[test]
+    fn is_sensitive_for_preview_blocks_env_and_keys() {
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.env")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.ENV")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.envrc")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.ssh/id_rsa")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.ssh/id_ed25519")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.aws/credentials")));
+        assert!(is_sensitive_for_preview(Path::new("/Users/x/.netrc")));
+    }
+
+    #[test]
+    fn is_sensitive_for_preview_allows_normal_files() {
+        assert!(!is_sensitive_for_preview(Path::new("/Users/x/notes.md")));
+        assert!(!is_sensitive_for_preview(Path::new("/Users/x/.gitignore")));
+        assert!(!is_sensitive_for_preview(Path::new("/Users/x/script.sh")));
+    }
+}
+
