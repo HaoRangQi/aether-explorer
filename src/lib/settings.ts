@@ -77,11 +77,25 @@ export function normalizeContextMenuExtensions(
     }));
 }
 
+/**
+ * defaultHomePath 兜底归一：空 / undefined / null → FAVORITES_VIRTUAL_PATH。
+ *
+ * 不主动改写用户手选的真实路径（包括他们故意选的 ~/Downloads）—
+ * 那是 8.2 的"tagged union"重构才能根治的领域问题，本函数只做最小兜底。
+ */
+function normalizeDefaultHomePath(raw: string | undefined | null): string {
+  if (!raw || typeof raw !== 'string') return FAVORITES_VIRTUAL_PATH;
+  const trimmed = raw.trim();
+  if (!trimmed) return FAVORITES_VIRTUAL_PATH;
+  return trimmed;
+}
+
 export function normalizeThemeSettings(settings: Partial<ThemeSettings>): ThemeSettings {
   return {
     ...DEFAULT_THEME,
     ...settings,
     contextMenuExtensions: normalizeContextMenuExtensions(settings.contextMenuExtensions),
+    defaultHomePath: normalizeDefaultHomePath(settings.defaultHomePath),
   };
 }
 

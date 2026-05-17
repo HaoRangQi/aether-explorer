@@ -745,10 +745,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     getHomeDir().then(home => {
       if (cancelled) return;
       setHomeDir(home);
-      setCurrentPath(initialPath || `${home}/Downloads`);
+      // initialPath 缺失时默认进"我的收藏"虚拟根目录，与 DEFAULT_THEME.defaultHomePath 一致。
+      // 历史上 fallback 到 ${home}/Downloads，是 v0.2 之前留下的硬编码，
+      // 与新的"默认主页 = 我的收藏"产品决策不一致。
+      setCurrentPath(initialPath || FAVORITES_VIRTUAL_PATH);
     }).catch(() => {
       if (cancelled) return;
-      setCurrentPath(initialPath || '/Users');
+      setCurrentPath(initialPath || FAVORITES_VIRTUAL_PATH);
     });
     return () => { cancelled = true; };
   }, [initialPath]);

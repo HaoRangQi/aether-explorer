@@ -127,12 +127,15 @@ export default function App() {
   }, []);
 
   const createNewWindow = useCallback((tab?: TabData) => {
-    const path = tab?.currentPath || tab?.initialPath;
-    const label = tab?.label || (path ? getPathLeaf(path) : undefined);
+    // 关键：不传 tab 时（Cmd+N / 菜单 / 加号），把当前的默认主页带给新窗口，
+    // 否则新窗口的 ExplorerView 会因 initialPath 为空而走 fallback。
+    const fallbackPath = theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
+    const path = tab?.currentPath || tab?.initialPath || fallbackPath;
+    const label = tab?.label || (path && !path.startsWith('aether://') ? getPathLeaf(path) : undefined);
     invoke<string>('create_app_window', { initialPath: path, tabLabel: label }).catch(err => {
       console.error('创建新窗口失败:', err);
     });
-  }, []);
+  }, [theme.defaultHomePath]);
 
   const removeTabAfterTransfer = useCallback((tabId: string) => {
     console.log('=== removeTabAfterTransfer 被调用 ===');

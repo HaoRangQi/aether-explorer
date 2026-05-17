@@ -1529,7 +1529,12 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                 {t('settings.defaultHomePathDesc', '应用启动时默认打开的位置；侧栏“主目录”始终指向系统用户目录。')}
               </p>
               <p className="text-[12px] font-mono text-on-surface/35 truncate">
-                {theme.defaultHomePath || 'aether://favorites'}
+                {(() => {
+                  const v = theme.defaultHomePath || 'aether://favorites';
+                  if (v === 'aether://favorites') return t('settings.defaultHomeFavorites', '我的收藏');
+                  if (v === 'aether://recent') return t('settings.defaultHomeRecent', '最近使用');
+                  return v;
+                })()}
               </p>
             </div>
             <div className="flex items-center gap-3 shrink-0">
