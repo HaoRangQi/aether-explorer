@@ -56,10 +56,17 @@ export function getInitialTabs(
     }];
   }
 
+  // 首页 tab label 跟随用户的默认首页：虚拟路径用专属 i18n key（"我的收藏" / "最近使用"），
+  // 真实路径用末段名。让用户一眼看出标签页代表的是什么内容。
+  const homeLabelKey =
+    defaultHomePath === FAVORITES_VIRTUAL_PATH ? 'tabs.favorites' :
+    defaultHomePath === RECENT_VIRTUAL_PATH ? 'tabs.recent' :
+    'tabs.home';
+
   return [
     {
       id: 'desktop',
-      labelTranslationKey: 'tabs.home',
+      labelTranslationKey: homeLabelKey,
       label: isVirtualPath(defaultHomePath) ? undefined : getPathLeaf(defaultHomePath),
       initialPath: defaultHomePath,
       currentPath: defaultHomePath,

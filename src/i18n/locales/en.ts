@@ -194,6 +194,8 @@ export default {
   },
   tabs: {
     home: 'Start',
+    favorites: 'Favorites',
+    recent: 'Recent',
     downloads: 'Downloads',
     documents: 'Documents',
     images: 'Images',

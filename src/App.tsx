@@ -95,12 +95,20 @@ export default function App() {
   useEffect(() => {
     setTabs(prev => prev.map(tab => {
       const defaultHomePath = theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
+      // 首页标签页的 label 跟随当前默认首页内容：
+      // - 虚拟路径 → 友好名（"我的收藏"/"最近使用"），用 labelTranslationKey 让 i18n 接管
+      // - 真实路径 → 路径末段
+      const homeTabLabelKey =
+        defaultHomePath === FAVORITES_VIRTUAL_PATH ? 'tabs.favorites' :
+        defaultHomePath === 'aether://recent' ? 'tabs.recent' :
+        'tabs.home';
+      const homeTabLabel = defaultHomePath.startsWith('aether://') ? undefined : getPathLeaf(defaultHomePath);
       if (tab.id === 'favorites-list') {
         return {
           ...tab,
           id: 'desktop',
-          labelTranslationKey: 'tabs.home',
-          label: defaultHomePath.startsWith('aether://') ? undefined : getPathLeaf(defaultHomePath),
+          labelTranslationKey: homeTabLabelKey,
+          label: homeTabLabel,
           initialPath: defaultHomePath,
           currentPath: defaultHomePath,
         };
@@ -110,9 +118,10 @@ export default function App() {
       // 不再保留原 currentPath；想去原位置请新建标签页。
       return {
         ...tab,
+        labelTranslationKey: homeTabLabelKey,
         initialPath: defaultHomePath,
         currentPath: defaultHomePath,
-        label: defaultHomePath.startsWith('aether://') ? undefined : getPathLeaf(defaultHomePath),
+        label: homeTabLabel,
       };
     }));
     setView(prev => prev === 'favorites-list' ? 'desktop' : prev);

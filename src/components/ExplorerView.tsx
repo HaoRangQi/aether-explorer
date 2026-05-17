@@ -606,10 +606,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       ? getTagLabel(activeTagId)
       : '';
 
+  // 首页 tab 的 id 历史上叫 'desktop'（与 sidebar 的"桌面"项命名冲突）。
+  // 在新产品决策下，"首页"指 theme.defaultHomePath（默认我的收藏），不是 ~/。
+  // 这里映射跟随用户的默认首页设置；如果是 aether:// 虚拟路径就原样返回。
+  const homeTabPath = theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
+
   const viewPathMap: Record<string, string> = {
     downloads: `${homeDir}/Downloads`,
     documents: `${homeDir}/Documents`,
-    desktop: homeDir,
+    desktop: homeTabPath,
     applications: '/Applications',
     home: homeDir,
     recent: RECENT_VIRTUAL_PATH,

@@ -203,6 +203,8 @@ export default {
   },
   tabs: {
     home: '首页',
+    favorites: '我的收藏',
+    recent: '最近使用',
     downloads: '下载',
     documents: '文档',
     images: '图片',
