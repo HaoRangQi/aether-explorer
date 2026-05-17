@@ -19,6 +19,8 @@
 | 05 | [收藏与颜色标签域 (Favorites-Tags-Domain)](./05-favorites-tags.md) | ✅ | 2026-05-15 |
 | 06 | [发布运行手册 (Release-Runbook)](./06-release-runbook.md) | ✅ | 2026-05-15 |
 | 07 | [桌面壳与文件展示体验 (Desktop-Shell-File-Experience)](./07-desktop-shell-file-experience.md) | ✅ | 2026-05-15 |
+| 08 | [默认首页 (Default-Start-Page)](./08-default-start-page.md) | ✅ | 2026-05-17 |
+| 09 | [测试与发版安全基础 (Test-Release-Safety-Baseline)](./09-test-release-safety-baseline.md) | ✅ | 2026-05-17 |
 | — | [草稿池 SCRATCH](./scratch.md) | — | — |
 
 新增章节时：在本表追加一行，文件命名为 `NN-<域名小写连字符>.md`，NN 取下一个未用编号。

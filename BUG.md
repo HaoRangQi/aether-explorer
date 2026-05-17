@@ -8,6 +8,8 @@
 
 **临时方案：** 暂无。待进一步调试 AppleScript 执行环境。
 
+> 注意：v0.3 P0-1 安全修复（commit `5388fe5`）后，命令片段必须通过 `validate_shell_fragment` 校验。如果脚本包含元字符（`$()` `&&` `;` 等）会被拒绝，看起来像"未执行" — 这是预期的安全行为，不算 bug。
+
 ---
 
 ## 分栏模式预览框
@@ -28,18 +30,25 @@
 
 ---
 
-## 跨窗口拖拽
+## 跨窗口拖拽 — 底层窗口置顶不可靠
 
-**现象：** 拖拽标签页到桌面空白处会生成 `textClipping` 文件。
+**现象：** 两个 Aether 窗口堆叠，从顶层窗口拖文件出去，底层窗口收到了 banner 提示但本身不会自动浮到前台。
 
-**原因：** HTML5 拖拽 API 在 macOS 上向桌面拖放时，`text/plain` MIME 数据被系统解释为文本片段文件。
+**原因：** macOS WebKit 在鼠标离开源 webview 可视区后停止派发 `drag` 事件，前端节流广播屏幕坐标的方案在跨窗口边界瞬间失效。
 
-**临时方案：** 已移除 `text/plain` 数据设置，当前拖到空白处不会创建新窗口。需要通过菜单或快捷键新建窗口后，再拖拽标签页合并。
+**临时方案：** 窗口不重叠时正常工作；重叠场景需手动 `Cmd+~` 切窗口。
+
+**根治路线：** Rust 端 `core-graphics` `CGEventTap` 全局监听 mouseMoved（需"输入监控"权限）。详见 `docs/CROSS_WINDOW_DRAG.md` + `codex/scratch.md`。
 
 ---
 
-## 拖拽放置提示不消失
+## 子菜单背景颜色
 
-**现象：** 跨窗口拖拽后，点击放置区域，部分情况下提示文字不消失。
+**现象：** 右键文件 → 悬停"打开方式"，子菜单当前是实色 `color-mix(primary 8%, surface)`，与父菜单的玻璃质感不完全一致。
 
-**状态：** 已通过 `clearDragState` 统一清除函数 + `isAcceptedRef` 防重复机制修复，需持续观察。
+**原因：** WebKit 不嵌套 `backdrop-filter` — 子菜单父级已 blur，再 blur 几乎无效；改 `fixed` 定位 + 真模糊后位置算错（曾 revert `commit 8d99793`）。
+
+**临时方案：** 实色背景，可读性 OK 但视觉与父菜单略不统一。
+
+**根治路线：** 抽 `<FloatingMenu>` 公共组件 portal 到 body，与 `Cmd+K` 命令面板共用。详见 `codex/scratch.md` 2026-05-17 条目。
+

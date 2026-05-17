@@ -16,6 +16,11 @@
 | ✅ | banner 可见时长加长 + 倒计时进度条（修"一闪就没"） | commit `0a65435` |
 | ✅ | 空格预览改为真开关（默认开） | commit `ae5a46d` |
 | ⚠️ | **底层窗口自动置顶 — 部分有效** | commit `ae5a46d`；详见下条 |
+| ✅ | 默认首页全链路统一为「我的收藏」+ 文案厘清「首页/用户主页」 | commits `29dab7c` `6a9e2d1` `e007d2f` `7b91400` |
+| ✅ | 空白右键「设为首页」一键设当前目录 | commit `83b9ce9` |
+| ✅ | 分栏视图多列横向滚动 + 子文件夹真正展开 | commits `4ebe106` `d0ff36a` |
+| ✅ | 列表视图虚拟滚动修复（两套 list 视图共存陷阱） | commits `4ebe106` `d0ff36a` |
+| ⚠️ | 打开方式子菜单背景跟父菜单不完全统一 | commit `7d969c2`，详见 `codex/scratch.md` |
 
 ### 🟠 跨窗口拖拽 — 底层窗口置顶仍不可靠
 **现状**：源端 `document.addEventListener('drag')` 节流广播屏幕坐标到 Rust `raise_window_at`，目标端 `onDragEnter` 兜底 `setFocus`。
