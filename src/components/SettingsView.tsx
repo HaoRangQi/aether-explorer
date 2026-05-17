@@ -689,348 +689,56 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
             颜色细化控制
           </h3>
           <p className="text-[13px] text-on-surface/40 leading-relaxed max-w-2xl">
-            精细调整 UI 各个部分的颜色。留空则使用默认配色方案。
+            点击色块修改颜色，右键重置为默认。
           </p>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* 图标颜色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: theme.colorIcon || 'var(--primary)' }} />
-              图标颜色
-            </label>
-            <input
-              type="color"
-              value={theme.colorIcon || '#7cb342'}
-              onChange={(e) => onThemeChange({ ...theme, colorIcon: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorIcon: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 选中前景色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: theme.colorSelectedFg || 'var(--on-surface)' }} />
-              选中前景色
-            </label>
-            <input
-              type="color"
-              value={theme.colorSelectedFg || '#141317'}
-              onChange={(e) => onThemeChange({ ...theme, colorSelectedFg: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorSelectedFg: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 选中背景色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: theme.colorSelectedBg || 'rgba(124, 179, 66, 0.4)' }} />
-              选中背景色
-            </label>
-            <input
-              type="color"
-              value={theme.colorSelectedBg || '#7cb34266'}
-              onChange={(e) => onThemeChange({ ...theme, colorSelectedBg: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorSelectedBg: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 悬浮前景色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: theme.colorHoverFg || 'var(--primary)' }} />
-              悬浮前景色
-            </label>
-            <input
-              type="color"
-              value={theme.colorHoverFg || '#7cb342'}
-              onChange={(e) => onThemeChange({ ...theme, colorHoverFg: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorHoverFg: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 悬浮背景色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: theme.colorHoverBg || 'rgba(124, 179, 66, 0.2)' }} />
-              悬浮背景色
-            </label>
-            <input
-              type="color"
-              value={theme.colorHoverBg || '#7cb34233'}
-              onChange={(e) => onThemeChange({ ...theme, colorHoverBg: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorHoverBg: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 面板底色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: theme.colorPanelBg || 'rgba(124, 179, 66, 0.05)' }} />
-              面板底色
-            </label>
-            <input
-              type="color"
-              value={theme.colorPanelBg || '#7cb3420d'}
-              onChange={(e) => onThemeChange({ ...theme, colorPanelBg: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorPanelBg: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 主文字色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: theme.colorTextPrimary || 'var(--on-surface)' }} />
-              主文字色
-            </label>
-            <input
-              type="color"
-              value={theme.colorTextPrimary || '#141317'}
-              onChange={(e) => onThemeChange({ ...theme, colorTextPrimary: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorTextPrimary: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 次文字色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: theme.colorTextSecondary || 'rgba(20, 19, 23, 0.6)' }} />
-              次文字色
-            </label>
-            <input
-              type="color"
-              value={theme.colorTextSecondary || '#14131799'}
-              onChange={(e) => onThemeChange({ ...theme, colorTextSecondary: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorTextSecondary: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 边框色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded border-2" style={{ borderColor: theme.colorBorder || 'rgba(124, 179, 66, 0.2)' }} />
-              边框色
-            </label>
-            <input
-              type="color"
-              value={theme.colorBorder || '#7cb34233'}
-              onChange={(e) => onThemeChange({ ...theme, colorBorder: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorBorder: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 分隔线色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-0.5 bg-current" style={{ color: theme.colorDivider || 'rgba(20, 19, 23, 0.1)' }} />
-              分隔线色
-            </label>
-            <input
-              type="color"
-              value={theme.colorDivider || '#1413171a'}
-              onChange={(e) => onThemeChange({ ...theme, colorDivider: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorDivider: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 阴影色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded shadow-lg" style={{ backgroundColor: theme.colorShadow || 'var(--primary)' }} />
-              阴影色
-            </label>
-            <input
-              type="color"
-              value={theme.colorShadow || '#7cb342'}
-              onChange={(e) => onThemeChange({ ...theme, colorShadow: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorShadow: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 激活图标背景 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: theme.colorActiveIconBg || 'var(--primary)' }} />
-              激活图标背景
-            </label>
-            <input
-              type="color"
-              value={theme.colorActiveIconBg || '#7cb342'}
-              onChange={(e) => onThemeChange({ ...theme, colorActiveIconBg: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorActiveIconBg: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 标签选中色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: theme.colorTagSelected || 'var(--primary)' }} />
-              标签选中色
-            </label>
-            <input
-              type="color"
-              value={theme.colorTagSelected || '#7cb342'}
-              onChange={(e) => onThemeChange({ ...theme, colorTagSelected: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorTagSelected: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-
-          {/* 搜索框底色 */}
-          <div className="space-y-3">
-            <label className="text-[12px] font-bold text-on-surface/60 flex items-center gap-2">
-              <div className="w-4 h-4 rounded-lg" style={{ backgroundColor: theme.colorSearchBg || 'rgba(124, 179, 66, 0.05)' }} />
-              搜索框底色
-            </label>
-            <input
-              type="color"
-              value={theme.colorSearchBg || '#7cb3420d'}
-              onChange={(e) => onThemeChange({ ...theme, colorSearchBg: e.target.value })}
-              className="w-full h-12 rounded-xl border-2 border-primary/20 cursor-pointer"
-            />
-            <button
-              onClick={() => onThemeChange({ ...theme, colorSearchBg: undefined })}
-              className="text-[11px] text-on-surface/40 hover:text-primary transition-colors"
-            >
-              重置为默认
-            </button>
-          </div>
-        </div>
-
-        {/* 实时预览区域 */}
-        <div className="pt-6 border-t border-primary/10">
-          <h4 className="text-[15px] font-bold text-on-surface mb-4 flex items-center gap-2">
-            <Eye className="w-4 h-4 text-primary" />
-            实时预览
-          </h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 图标预览 */}
-            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
-              <div className="flex items-center gap-3 mb-3">
-                <ImageIcon className="w-6 h-6 text-icon" />
-                <Folder className="w-6 h-6 text-icon" />
-                <FileIcon className="w-6 h-6 text-icon" />
-              </div>
-              <p className="text-[11px] text-secondary-custom">图标颜色预览</p>
+        <div className="grid grid-cols-4 sm:grid-cols-7 gap-6">
+          {([
+            { key: 'colorIcon', label: '图标' },
+            { key: 'colorSelectedFg', label: '选中前景' },
+            { key: 'colorSelectedBg', label: '选中背景' },
+            { key: 'colorHoverFg', label: '悬浮前景' },
+            { key: 'colorHoverBg', label: '悬浮背景' },
+            { key: 'colorPanelBg', label: '面板底色' },
+            { key: 'colorTextPrimary', label: '主文字' },
+            { key: 'colorTextSecondary', label: '次文字' },
+            { key: 'colorBorder', label: '边框' },
+            { key: 'colorDivider', label: '分隔线' },
+            { key: 'colorShadow', label: '阴影' },
+            { key: 'colorActiveIconBg', label: '激活图标' },
+            { key: 'colorTagSelected', label: '标签选中' },
+            { key: 'colorSearchBg', label: '搜索框' },
+          ] as { key: keyof ThemeSettings; label: string }[]).map(({ key, label }) => (
+            <div key={key} className="flex flex-col items-center gap-2">
+              <label className="relative group">
+                <input
+                  type="color"
+                  value={(theme[key] as string) || theme.accentColor}
+                  onChange={(e) => onThemeChange({ ...theme, [key]: e.target.value })}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                />
+                <div
+                  className={`w-10 h-10 rounded-full border-2 transition-all group-hover:scale-110 group-hover:shadow-lg ${theme[key] ? 'border-on-surface/20 shadow-md' : 'border-dashed border-on-surface/20'}`}
+                  style={{ backgroundColor: (theme[key] as string) || undefined }}
+                />
+                {!theme[key] && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="w-5 h-5 rounded-full bg-primary/30" />
+                  </div>
+                )}
+              </label>
+              <span className="text-[10px] font-bold text-on-surface/50 text-center leading-tight">{label}</span>
+              {theme[key] && (
+                <button
+                  onClick={() => onThemeChange({ ...theme, [key]: undefined })}
+                  className="text-[9px] text-on-surface/30 hover:text-primary transition-colors"
+                >
+                  重置
+                </button>
+              )}
             </div>
-
-            {/* 选中状态预览 */}
-            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
-              <div className="p-3 rounded-lg bg-selected">
-                <p className="text-[13px] font-bold text-selected">选中的文件项</p>
-                <p className="text-[11px] text-secondary-custom mt-1">选中前景 + 背景</p>
-              </div>
-            </div>
-
-            {/* 悬浮状态预览 */}
-            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
-              <div className="p-3 rounded-lg bg-hover-custom">
-                <p className="text-[13px] font-bold text-hover-custom">悬浮的按钮</p>
-                <p className="text-[11px] text-secondary-custom mt-1">悬浮前景 + 背景</p>
-              </div>
-            </div>
-
-            {/* 文字颜色预览 */}
-            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
-              <p className="text-[13px] font-bold text-primary-custom mb-2">主文字颜色</p>
-              <p className="text-[11px] text-secondary-custom">次文字颜色</p>
-            </div>
-
-            {/* 搜索框预览 */}
-            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
-              <div className="p-3 rounded-lg bg-search-custom border border-custom">
-                <p className="text-[12px] text-primary-custom">搜索框样式</p>
-              </div>
-            </div>
-
-            {/* 激活图标预览 */}
-            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-active-icon flex items-center justify-center">
-                  <Check className="w-5 h-5 text-on-primary" />
-                </div>
-                <p className="text-[11px] text-secondary-custom">激活图标背景</p>
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
 
         {/* 全部重置按钮 */}
