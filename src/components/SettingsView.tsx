@@ -15,6 +15,8 @@ import { ACCENT_COLORS } from '../constants';
 interface SettingsViewProps {
   theme: ThemeSettings;
   onThemeChange: (theme: ThemeSettings) => void;
+  /** 用户在设置内点了"恢复我的收藏"后，App 把 view 切到首页 tab 给即时反馈 */
+  onNavigateToHome?: () => void;
 }
 
 type SettingsCategory = 'appearance' | 'files' | 'permissions' | 'extensions' | 'features' | 'about';
@@ -97,7 +99,7 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-export default function SettingsView({ theme, onThemeChange }: SettingsViewProps) {
+export default function SettingsView({ theme, onThemeChange, onNavigateToHome }: SettingsViewProps) {
   const { t, i18n } = useTranslation();
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>('appearance');
   const [availableFonts, setAvailableFonts] = useState<string[]>(['Inter', 'System Default', 'Arial', 'Segoe UI', 'Roboto', 'Times New Roman']);
@@ -189,6 +191,8 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
 
   const handleResetDefaultHome = () => {
     onThemeChange({ ...theme, defaultHomePath: 'aether://favorites' });
+    // 立即切到首页 tab，给用户即时视觉反馈
+    onNavigateToHome?.();
   };
 
   const resetActionForm = () => {
@@ -1525,10 +1529,7 @@ export default function SettingsView({ theme, onThemeChange }: SettingsViewProps
                 <Folder className="w-4 h-4 text-primary" />
                 {t('settings.defaultHomePath', '默认首页')}
               </h4>
-              <p className="text-[12px] text-on-surface/50">
-                {t('settings.defaultHomePathDesc', '应用启动时默认打开的内容；侧栏「用户主页」始终指向系统用户目录 (~)。')}
-              </p>
-              <p className="text-[12px] font-mono text-on-surface/35 truncate">
+              <p className="text-[12px] font-mono text-on-surface/50 truncate">
                 {(() => {
                   const v = theme.defaultHomePath || 'aether://favorites';
                   if (v === 'aether://favorites') return t('settings.defaultHomeFavorites', '我的收藏');

@@ -72,6 +72,17 @@
     background: #fdfdfd !important;
   }
 
+  /* 所有可点击的 button / role=button 默认 cursor pointer
+     （Tailwind 4 默认 button cursor 是 default，与原生 HTML 不一致）。
+     disabled 的按钮保持 not-allowed。 */
+  button:not(:disabled):not([aria-disabled="true"]),
+  [role="button"]:not(:disabled):not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  button:disabled, [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
   :root, .light {
     --surface: #fdfdfd;
     --on-surface: #141317;

@@ -106,12 +106,12 @@ export default function App() {
         };
       }
       if (tab.id !== 'desktop') return tab;
+      // 用户改默认首页 = 把"首页"标签页跳到新位置（也包括点"恢复我的收藏"的场景）。
+      // 不再保留原 currentPath；想去原位置请新建标签页。
       return {
         ...tab,
         initialPath: defaultHomePath,
-        currentPath: tab.currentPath?.startsWith('aether://') || tab.currentPath === tab.initialPath
-          ? defaultHomePath
-          : tab.currentPath,
+        currentPath: defaultHomePath,
         label: defaultHomePath.startsWith('aether://') ? undefined : getPathLeaf(defaultHomePath),
       };
     }));
@@ -565,7 +565,11 @@ export default function App() {
             <div className="relative h-full">
               <div className={`h-full ${view === 'settings' ? '' : 'hidden'}`}>
                 <Suspense fallback={<div className="h-full flex items-center justify-center text-on-surface/40">加载设置中...</div>}>
-                  <SettingsView theme={theme} onThemeChange={setTheme} />
+                  <SettingsView
+                    theme={theme}
+                    onThemeChange={setTheme}
+                    onNavigateToHome={() => setView('desktop')}
+                  />
                 </Suspense>
               </div>
               <div className={`h-full ${view === 'storage' ? '' : 'hidden'}`}>
