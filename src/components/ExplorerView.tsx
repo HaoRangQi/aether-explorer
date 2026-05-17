@@ -3193,7 +3193,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }
       }}>
         <div className="flex-1 overflow-hidden px-8 py-4 min-h-0">
-          <div className={`${displayMode === 'column' ? 'min-w-max h-full' : 'max-w-7xl mx-auto w-full'} h-full min-h-0 flex flex-col space-y-4`}>
+          <div className={`${displayMode === 'column' ? 'w-full h-full' : 'max-w-7xl mx-auto w-full'} h-full min-h-0 flex flex-col space-y-4`}>
             
             {/* Breadcrumbs & Search Area */}
             <div className="flex items-center justify-between gap-3 shrink-0">
@@ -3704,7 +3704,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               )}
 
               {displayMode === 'list' && currentLevelFiles.length > 0 && (
-                <div ref={scrollContainerRef} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-32 auto-scrollbar">
+                <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-32 auto-scrollbar">
                   <div className="min-w-[760px] flex flex-col">
                     {/* Table Header */}
                     <div className="sticky top-0 z-20 shrink-0 flex items-center px-4 py-3 pr-4 text-[12px] font-black text-on-surface select-none uppercase tracking-[0.1em] border-b border-primary/20 mb-2 bg-primary/10 rounded-t-xl backdrop-blur-xl">
@@ -4088,7 +4088,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                   {contextSubmenu === 'openWith' && (
-                    <div className="absolute left-full top-0 z-[110] ml-1 w-52 rounded-2xl border border-primary/20 bg-surface shadow-2xl p-1.5">
+                    <div className={`absolute left-full top-0 z-[110] ml-1 w-52 rounded-2xl shadow-2xl p-1.5 ${
+                      theme.useSystemContextMenu
+                        ? 'bg-surface/95 border border-on-surface/10 backdrop-blur-xl'
+                        : 'glass-panel bg-primary/10 border border-primary/20 backdrop-blur-3xl'
+                    }`}>
                       {OPEN_WITH_APPS.map((appName) => (
                         <button
                           key={appName}
