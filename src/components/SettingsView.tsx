@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle } from 'lucide-react';
+import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle, File as FileIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -972,6 +972,64 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
             >
               重置为默认
             </button>
+          </div>
+        </div>
+
+        {/* 实时预览区域 */}
+        <div className="pt-6 border-t border-primary/10">
+          <h4 className="text-[15px] font-bold text-on-surface mb-4 flex items-center gap-2">
+            <Eye className="w-4 h-4 text-primary" />
+            实时预览
+          </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* 图标预览 */}
+            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
+              <div className="flex items-center gap-3 mb-3">
+                <ImageIcon className="w-6 h-6 text-icon" />
+                <Folder className="w-6 h-6 text-icon" />
+                <FileIcon className="w-6 h-6 text-icon" />
+              </div>
+              <p className="text-[11px] text-secondary-custom">图标颜色预览</p>
+            </div>
+
+            {/* 选中状态预览 */}
+            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
+              <div className="p-3 rounded-lg bg-selected">
+                <p className="text-[13px] font-bold text-selected">选中的文件项</p>
+                <p className="text-[11px] text-secondary-custom mt-1">选中前景 + 背景</p>
+              </div>
+            </div>
+
+            {/* 悬浮状态预览 */}
+            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
+              <div className="p-3 rounded-lg bg-hover-custom">
+                <p className="text-[13px] font-bold text-hover-custom">悬浮的按钮</p>
+                <p className="text-[11px] text-secondary-custom mt-1">悬浮前景 + 背景</p>
+              </div>
+            </div>
+
+            {/* 文字颜色预览 */}
+            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
+              <p className="text-[13px] font-bold text-primary-custom mb-2">主文字颜色</p>
+              <p className="text-[11px] text-secondary-custom">次文字颜色</p>
+            </div>
+
+            {/* 搜索框预览 */}
+            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
+              <div className="p-3 rounded-lg bg-search-custom border border-custom">
+                <p className="text-[12px] text-primary-custom">搜索框样式</p>
+              </div>
+            </div>
+
+            {/* 激活图标预览 */}
+            <div className="p-4 rounded-2xl bg-panel-custom border border-custom">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-active-icon flex items-center justify-center">
+                  <Check className="w-5 h-5 text-on-primary" />
+                </div>
+                <p className="text-[11px] text-secondary-custom">激活图标背景</p>
+              </div>
+            </div>
           </div>
         </div>
 

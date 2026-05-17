@@ -59,21 +59,21 @@
   --color-tertiary: var(--tertiary);
   --color-on-tertiary: var(--on-tertiary);
 
-  /* 颜色细化控制变量（默认值基于现有颜色体系） */
-  --color-icon: var(--color-icon, var(--primary));
-  --color-selected-fg: var(--color-selected-fg, var(--on-surface));
-  --color-selected-bg: var(--color-selected-bg, color-mix(in srgb, var(--primary) 40%, transparent));
-  --color-hover-fg: var(--color-hover-fg, var(--primary));
-  --color-hover-bg: var(--color-hover-bg, color-mix(in srgb, var(--primary) 20%, transparent));
-  --color-panel-bg: var(--color-panel-bg, color-mix(in srgb, var(--primary) 5%, transparent));
-  --color-text-primary: var(--color-text-primary, var(--on-surface));
-  --color-text-secondary: var(--color-text-secondary, color-mix(in srgb, var(--on-surface) 60%, transparent));
-  --color-border: var(--color-border, color-mix(in srgb, var(--primary) 20%, transparent));
-  --color-divider: var(--color-divider, color-mix(in srgb, var(--on-surface) 10%, transparent));
-  --color-shadow: var(--color-shadow, var(--primary));
-  --color-active-icon-bg: var(--color-active-icon-bg, var(--primary));
-  --color-tag-selected: var(--color-tag-selected, var(--primary));
-  --color-search-bg: var(--color-search-bg, color-mix(in srgb, var(--primary) 5%, transparent));
+  /* 颜色细化控制变量（默认值基于现有颜色体系，可通过 :root 覆盖） */
+  --color-icon: var(--primary);
+  --color-selected-fg: var(--on-surface);
+  --color-selected-bg: color-mix(in srgb, var(--primary) 40%, transparent);
+  --color-hover-fg: var(--primary);
+  --color-hover-bg: color-mix(in srgb, var(--primary) 20%, transparent);
+  --color-panel-bg: color-mix(in srgb, var(--primary) 5%, transparent);
+  --color-text-primary: var(--on-surface);
+  --color-text-secondary: color-mix(in srgb, var(--on-surface) 60%, transparent);
+  --color-border: color-mix(in srgb, var(--primary) 20%, transparent);
+  --color-divider: color-mix(in srgb, var(--on-surface) 10%, transparent);
+  --color-shadow: var(--primary);
+  --color-active-icon-bg: var(--primary);
+  --color-tag-selected: var(--primary);
+  --color-search-bg: color-mix(in srgb, var(--primary) 5%, transparent);
 
   --radius-xs: 0.5rem;
   --radius-DEFAULT: 1rem;
@@ -139,6 +139,22 @@
     @apply font-sans;
     color: var(--on-surface);
   }
+
+  /* 颜色细化控制工具类 */
+  .text-icon { color: var(--color-icon) !important; }
+  .text-selected { color: var(--color-selected-fg) !important; }
+  .bg-selected { background-color: var(--color-selected-bg) !important; }
+  .text-hover-custom { color: var(--color-hover-fg) !important; }
+  .bg-hover-custom { background-color: var(--color-hover-bg) !important; }
+  .bg-panel-custom { background-color: var(--color-panel-bg) !important; }
+  .text-primary-custom { color: var(--color-text-primary) !important; }
+  .text-secondary-custom { color: var(--color-text-secondary) !important; }
+  .border-custom { border-color: var(--color-border) !important; }
+  .divide-custom { border-color: var(--color-divider) !important; }
+  .shadow-custom { box-shadow: 0 4px 12px rgba(from var(--color-shadow) r g b / 0.2) !important; }
+  .bg-active-icon { background-color: var(--color-active-icon-bg) !important; }
+  .bg-tag-selected { background-color: var(--color-tag-selected) !important; }
+  .bg-search-custom { background-color: var(--color-search-bg) !important; }
 }
 
 /* Window rounded corners — Material Design 3 extra-large radius */
