@@ -4088,11 +4088,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                   {contextSubmenu === 'openWith' && (
-                    <div className={`absolute left-full top-0 z-[110] ml-1 w-52 rounded-2xl shadow-2xl p-1.5 ${
-                      theme.useSystemContextMenu
-                        ? 'bg-surface/95 border border-on-surface/10 backdrop-blur-xl'
-                        : 'glass-panel bg-primary/10 border border-primary/20 backdrop-blur-3xl'
-                    }`}>
+                    <div
+                      className="absolute left-full top-0 z-[110] ml-1 w-52 rounded-2xl border border-primary/20 shadow-2xl p-1.5"
+                      style={{
+                        // 用 color-mix 把 primary 与 surface 实混，
+                        // 视觉上有"父菜单的玻璃淡色感"但不透明、不依赖 backdrop-filter
+                        // （backdrop-filter 在已被父菜单 backdrop-blur 包住的子菜单里几乎失效）
+                        background: 'color-mix(in srgb, var(--primary) 8%, var(--surface) 100%)',
+                      }}
+                    >
                       {OPEN_WITH_APPS.map((appName) => (
                         <button
                           key={appName}
