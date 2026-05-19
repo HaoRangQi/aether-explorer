@@ -356,7 +356,6 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
                       <Icon className="w-3.5 h-3.5" />
                     </div>
                     <span className="text-[13px] flex-1 truncate text-left tracking-tight font-semibold">{t(item.label)}</span>
-                    {item.RightElement && <div className="shrink-0 scale-75 origin-right"><item.RightElement /></div>}
                   </div>
                 </button>
               );
