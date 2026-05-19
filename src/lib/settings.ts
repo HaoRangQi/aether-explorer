@@ -14,6 +14,9 @@ import { ACCENT_COLORS } from '../constants';
 
 export const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 
+export const DEFAULT_LIGHT_ACCENT = '#789262'; // 竹青
+export const DEFAULT_DARK_ACCENT = '#425066';  // 黛蓝
+
 export const DEPRECATED_CONTEXT_EXTENSION_IDS = new Set([
   'open', 'rename', 'copy', 'move', 'share', 'compress',
   'terminal', 'delete', 'tag', 'group',
@@ -21,7 +24,7 @@ export const DEPRECATED_CONTEXT_EXTENSION_IDS = new Set([
 
 export const DEFAULT_THEME: ThemeSettings = {
   mode: 'auto',
-  accentColor: ACCENT_COLORS[0],
+  accentColor: DEFAULT_LIGHT_ACCENT,
   // 保留品牌视觉的 32px 毛玻璃。性能差的设备可在设置面板里手动调小。
   // 如未来发现"新装用户首屏 GPU 卡顿"再考虑降默认值并加 onboarding 提示。
   blurIntensity: 32,
@@ -43,6 +46,7 @@ export const DEFAULT_THEME: ThemeSettings = {
   enableSpacePreview: true,
   crossWindowDropDefault: 'copy',
   wallpaperBlur: 0,
+  enableGradient: false,
   contextMenuExtensions: [
     {
       id: 'terminal-dev', label: '用终端打开并启动开发', enabled: true,
@@ -78,6 +82,7 @@ export const DEFAULT_THEME: ThemeSettings = {
   colorActiveIconBg: undefined,
   colorTagSelected: undefined,
   colorSearchBg: undefined,
+  colorAppBg: undefined,
 };
 
 export function normalizeContextMenuExtensions(
@@ -107,9 +112,15 @@ function normalizeDefaultHomePath(raw: string | undefined | null): string {
 }
 
 export function normalizeThemeSettings(settings: Partial<ThemeSettings>): ThemeSettings {
+  // 迁移旧版 terminalScripts: string[] → {script, enabled}[]
+  let terminalScripts = settings.terminalScripts;
+  if (Array.isArray(terminalScripts) && terminalScripts.length > 0 && typeof terminalScripts[0] === 'string') {
+    terminalScripts = (terminalScripts as unknown as string[]).map(s => ({ script: s, enabled: true }));
+  }
   return {
     ...DEFAULT_THEME,
     ...settings,
+    terminalScripts,
     contextMenuExtensions: normalizeContextMenuExtensions(settings.contextMenuExtensions),
     defaultHomePath: normalizeDefaultHomePath(settings.defaultHomePath),
   };

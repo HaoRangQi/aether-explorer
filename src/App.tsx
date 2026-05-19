@@ -330,6 +330,11 @@ export default function App() {
     root.style.setProperty('--primary', theme.accentColor);
     root.style.setProperty('--font-sans', theme.fontFamily || 'Inter');
 
+    // 纯色背景（无壁纸时生效）
+    const resolvedMode = theme.mode === 'auto' ? systemTheme : theme.mode;
+    const defaultBg = resolvedMode === 'dark' ? '#1E1E2E' : '#FCFCFD';
+    root.style.setProperty('--app-bg', theme.colorAppBg || defaultBg);
+
     // 注入或移除颜色细化控制的 CSS 变量
     const colorVars: [string, string | undefined][] = [
       ['--color-icon', theme.colorIcon],
@@ -547,9 +552,11 @@ export default function App() {
 
   const resolvedThemeMode = theme.mode === 'auto' ? systemTheme : theme.mode;
 
-  const backgroundUrl = theme.wallpaperUrl || (resolvedThemeMode === 'light'
-    ? "https://lh3.googleusercontent.com/aida-public/AB6AXuB9XaXmOrvTbEmkcGVQRTeI3kC1xcNNI9hs3iLUfwEmP9n4a8NBlhkuVjFfQQHJDbgc5-Hlu84crRzebo5m19DliX5ipgb9sdBh13reLuJDOlyYlkJo7pdUnYUTQbMfhTdIdErU6myMmdrUcyz1jC1_Zm6gK27RiLNAdjDNeAZHXpMzca9lHZFHKIvWwpSholpGfTPYSn3KLjl5aJg_IW4SpVHMDS7SLG8Vr1mGx7p0OKpvfUnm857Ege-iTZ6Oy3Lw1NgTOyJojb9O"
-    : "https://lh3.googleusercontent.com/aida-public/AB6AXuB5rkbZYEmntgaSGeN7iqlRsjtR3W5ODpJVUMLqhdxav_8_-VdvCsdd4wypghvj96XDWyE48JagMP-B7V0x3U3asu3dsg1n034ddQ0OAmyCVv8dxrRxj95ASkdMKW9KSBHsY_j9nl5KvSSVu38q6ed-TvVStYA2QcFuskTmrbqbz9iT8CxblEDxGz3Xewr4wKDfnoxSxZz-ec7VLicJvF6p8Qpm7UhFoj4uZLTlrQE5-rihCK5xFZ66DT-bf92WmUxbngN82dckzps5");
+  const backgroundUrl = theme.wallpaperUrl || (theme.enableGradient
+    ? (resolvedThemeMode === 'light'
+      ? "https://lh3.googleusercontent.com/aida-public/AB6AXuB9XaXmOrvTbEmkcGVQRTeI3kC1xcNNI9hs3iLUfwEmP9n4a8NBlhkuVjFfQQHJDbgc5-Hlu84crRzebo5m19DliX5ipgb9sdBh13reLuJDOlyYlkJo7pdUnYUTQbMfhTdIdErU6myMmdrUcyz1jC1_Zm6gK27RiLNAdjDNeAZHXpMzca9lHZFHKIvWwpSholpGfTPYSn3KLjl5aJg_IW4SpVHMDS7SLG8Vr1mGx7p0OKpvfUnm857Ege-iTZ6Oy3Lw1NgTOyJojb9O"
+      : "https://lh3.googleusercontent.com/aida-public/AB6AXuB5rkbZYEmntgaSGeN7iqlRsjtR3W5ODpJVUMLqhdxav_8_-VdvCsdd4wypghvj96XDWyE48JagMP-B7V0x3U3asu3dsg1n034ddQ0OAmyCVv8dxrRxj95ASkdMKW9KSBHsY_j9nl5KvSSVu38q6ed-TvVStYA2QcFuskTmrbqbz9iT8CxblEDxGz3Xewr4wKDfnoxSxZz-ec7VLicJvF6p8Qpm7UhFoj4uZLTlrQE5-rihCK5xFZ66DT-bf92WmUxbngN82dckzps5")
+    : undefined);
 
   return (
     <div
@@ -559,7 +566,7 @@ export default function App() {
 
 
       <div className="flex-1 relative overflow-hidden border border-transparent flex">
-        {/* Background layers: wallpaper + blur */}
+        {/* 壁纸层 */}
         {backgroundUrl && (
           <div
             className="absolute inset-0 z-0 transition-all duration-500"
@@ -572,15 +579,11 @@ export default function App() {
             }}
           />
         )}
-        <div
-          className="absolute inset-0 z-[1] pointer-events-none transition-all duration-500"
-          style={{
-            backgroundColor: resolvedThemeMode === 'dark' ? `rgba(20, 19, 23, ${theme.transparency / 100})` : `rgba(253, 248, 253, ${theme.transparency / 100})`,
-            backdropFilter: `blur(${theme.blurIntensity}px)`
-          }}
-        />
 
-        <div className="flex flex-1 relative z-10 overflow-hidden">
+        <div
+          className="flex flex-1 relative z-10 overflow-hidden"
+          style={{ backdropFilter: backgroundUrl && theme.blurIntensity ? `blur(${theme.blurIntensity}px)` : undefined }}
+        >
           <Sidebar currentView={view} currentPath={activeTabPath} onViewChange={setView} onOpenTab={handleOpenTab} theme={theme} tabs={tabs} />
 
           <main className="flex-1 flex flex-col h-full overflow-hidden">

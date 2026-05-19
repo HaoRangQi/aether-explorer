@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -300,7 +301,7 @@ fn format_modified(metadata: &fs::Metadata) -> String {
         .ok()
         .and_then(|t| {
             let dt: chrono::DateTime<chrono::Local> = t.into();
-            Some(dt.format("%Y-%m-%d %H:%M").to_string())
+            Some(dt.format("%Y-%m-%d %H:%M:%S").to_string())
         })
         .unwrap_or_else(|| "未知".into())
 }
@@ -1498,7 +1499,7 @@ fn is_allowed_terminal(name: &str) -> bool {
 }
 
 #[tauri::command]
-fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<String>, custom_command: Option<String>) -> Result<(), String> {
+fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<String>, scripts: Option<Vec<String>>, custom_command: Option<String>) -> Result<(), String> {
     let target_path = Path::new(&path);
     let dir = if target_path.is_dir() {
         target_path.to_path_buf()
@@ -1512,20 +1513,32 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
         return Err(format!("不允许的终端应用: {}", app_name));
     }
     let arg_text = args.unwrap_or_default();
+
+    // scripts 数组逐条验证后拼接
+    let scripts_tail: Option<String> = scripts
+        .map(|ss| ss.into_iter().filter(|s| !s.trim().is_empty()).collect::<Vec<_>>())
+        .filter(|ss| !ss.is_empty())
+        .map(|ss| {
+            ss.into_iter()
+                .map(|s| validate_shell_fragment(&s))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .map(|validated| validated.join(" && "));
+
     let lower = app_name.to_lowercase();
     let raw_tail = custom_command
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty())
+        .map(|c| validate_shell_fragment(c))
+        .transpose()?
+        .or_else(|| scripts_tail.clone())
         .or_else(|| {
             let trimmed_args = arg_text.trim();
-            if trimmed_args.is_empty() { None } else { Some(trimmed_args) }
+            if trimmed_args.is_empty() { None } else { validate_shell_fragment(trimmed_args).ok() }
         });
-    let validated_tail = match raw_tail {
-        Some(raw) => Some(validate_shell_fragment(raw)?),
-        None => None,
-    };
-    let command = match validated_tail.as_deref() {
+    let command = match raw_tail.as_deref() {
         Some(tail) => format!("cd {} && {}", shell_quote(&dir_str), tail),
         None => format!("cd {}", shell_quote(&dir_str)),
     };
@@ -1540,8 +1553,9 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
                 apple_quote(&command),
             )
         } else {
+            // Terminal.app: 始终在新 tab 执行，确保用户能看到命令输出
             format!(
-                "tell application {} to do script {}",
+                "tell application {}\nactivate\ndo script {}\nend tell",
                 apple_quote(&app_name),
                 apple_quote(&command),
             )
@@ -1555,10 +1569,24 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
             return Err(format!("AppleScript 错误: {}", stderr));
         }
     } else {
-        std::process::Command::new("open")
-            .args(["-a", &app_name, &dir_str])
-            .spawn()
-            .map_err(|e| format!("打开终端应用失败: {}", e))?;
+        // 非 Terminal/iTerm 终端：通过临时脚本传递命令
+        if let Some(tail) = raw_tail.as_deref() {
+            let tmp_script = std::env::temp_dir().join(format!("aether-launch-{}.sh", std::process::id()));
+            let script_content = format!("#!/bin/sh\ncd {}\n{}\nexec $SHELL", shell_quote(&dir_str), tail);
+            std::fs::write(&tmp_script, &script_content)
+                .map_err(|e| format!("写入临时脚本失败: {}", e))?;
+            std::fs::set_permissions(&tmp_script, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("设置脚本权限失败: {}", e))?;
+            std::process::Command::new("open")
+                .args(["-a", &app_name, tmp_script.to_string_lossy().as_ref()])
+                .spawn()
+                .map_err(|e| format!("打开终端应用失败: {}", e))?;
+        } else {
+            std::process::Command::new("open")
+                .args(["-a", &app_name, &dir_str])
+                .spawn()
+                .map_err(|e| format!("打开终端应用失败: {}", e))?;
+        }
     }
     Ok(())
 }

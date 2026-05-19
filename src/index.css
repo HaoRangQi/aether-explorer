@@ -83,9 +83,8 @@
 }
 
 @layer base {
-  /* Solid background — temporarily disabled transparency for debugging */
   html, body, #root {
-    background: #fdfdfd !important;
+    background: var(--app-bg, #FCFCFD);
   }
 
   /* 所有可点击的 button / role=button 默认 cursor pointer
@@ -175,7 +174,6 @@ html, body, #root {
 .auto-scrollbar::-webkit-scrollbar {
   width: 6px;
 }
-.auto-scrollbar:hover,
 .group\/sidebar:hover .auto-scrollbar {
   scrollbar-color: color-mix(in srgb, var(--primary) 45%, transparent) transparent;
 }
@@ -188,7 +186,6 @@ html, body, #root {
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-.auto-scrollbar:hover::-webkit-scrollbar-thumb,
 .group\/sidebar:hover .auto-scrollbar::-webkit-scrollbar-thumb {
   background-color: color-mix(in srgb, var(--primary) 45%, transparent);
 }

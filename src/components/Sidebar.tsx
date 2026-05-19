@@ -242,7 +242,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
         { id: 'favorites-list', label: 'sidebar.favoritesList', icon: () => <Circle className="w-3.5 h-3.5 fill-icon text-icon" /> },
         { id: 'applications', label: 'sidebar.applications', icon: Terminal },
         { id: 'desktop', label: 'sidebar.homeDirectory', icon: Home },
-        { id: 'documents', label: 'sidebar.documents', icon: FileText, RightElement: () => <Cloud className="w-3 h-3 text-on-surface/30" /> },
+        { id: 'documents', label: 'sidebar.documents', icon: FileText },
         { id: 'downloads', label: 'sidebar.downloads', icon: Download },
         { id: 'recent', label: 'sidebar.recent', icon: Clock },
       ]

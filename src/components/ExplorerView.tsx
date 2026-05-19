@@ -27,11 +27,31 @@ const TAG_COLORS: Record<string, string> = {
 };
 
 const LIST_COLS = {
-  modified: 'w-36',
+  checkbox: 'w-6',
+  sortNum: 'w-8',
+  modified: 'w-56',
   size: 'w-24',
   type: 'w-24',
   actions: 'w-8',
 };
+
+// 将 "YYYY-MM-DD HH:mm" 转为相对时间标签，超出 7 天返回空字符串
+function getRelativeTimeLabel(modified: string): string {
+  if (!modified || modified === '未知') return '';
+  const date = new Date(modified.replace(' ', 'T'));
+  if (isNaN(date.getTime())) return '';
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return '刚刚';
+  if (diffMin <= 10) return `${diffMin} 分钟前`;
+  if (diffMin < 30) return '半小时内';
+  if (diffMin < 60) return '1 小时内';
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffDays < 1) return '今天';
+  if (diffDays < 2) return '昨天';
+  if (diffDays <= 7) return `${diffDays} 天前`;
+  return '';
+}
 
 const INTERNAL_FILE_DRAG_MIME = 'application/x-aether-file-paths';
 const FILE_DRAG_START_EVENT = 'aether-file-drag-start';
@@ -149,6 +169,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
+  const [showCheckboxCol, setShowCheckboxCol] = useState(false);
+  const [showSortCol, setShowSortCol] = useState(false);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [favoriteFiles, setFavoriteFiles] = useState<FileItem[]>([]);
   const [recentFiles, setRecentFiles] = useState<FileItem[]>([]);
@@ -894,6 +916,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setActiveDropdown(null);
+      }
+      if (contextMenuRef.current && !contextMenuRef.current.contains(event.target as Node)) {
+        setContextMenu(null);
       }
     };
     const handleGlobalMouseUp = (e: MouseEvent) => {
@@ -2109,7 +2134,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     return `${base.substring(0, 25)}...${ext}`;
   };
 
-  const renderFileItem = (file: FileItem, isColumnItem = false) => {
+  const renderFileItem = (file: FileItem, isColumnItem = false, sortIndex?: number) => {
     const isSelected = selectedFileIds.includes(file.id) || (isColumnItem && columnPaths.includes(file.id));
     const isPulsing = pulseFileId === file.id;
     const isDropTarget = dragOverFolderId === file.id && file.type === 'folder';
@@ -2156,6 +2181,28 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             ${isSelected ? 'bg-selected border-custom shadow-custom rounded-xl z-10' : 'bg-panel-custom border-transparent hover:bg-hover-custom hover:border-custom shadow-sm rounded-lg'}
           `}
         >
+          {showCheckboxCol && (
+            <div
+              className={`${LIST_COLS.checkbox} shrink-0 mr-2 flex items-center justify-center`}
+              onMouseDown={e => e.stopPropagation()}
+              onClick={e => e.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={e => {
+                  const next = selectedFileIds.includes(file.id)
+                    ? selectedFileIds.filter(id => id !== file.id)
+                    : [...selectedFileIds, file.id];
+                  onSelectFiles(next);
+                }}
+                className="w-3.5 h-3.5 accent-primary cursor-pointer"
+              />
+            </div>
+          )}
+          {showSortCol && (
+            <div className={`${LIST_COLS.sortNum} shrink-0 text-[10px] font-black text-on-surface/25 tabular-nums pl-1`}>{sortIndex ?? ''}</div>
+          )}
           <div className={`flex items-center flex-1 min-w-0 ${config.gap}`}>
             <div className={`${config.icon} rounded-lg flex items-center justify-center shrink-0 shadow-sm border border-on-surface/5 transition-colors ${isSelected ? 'bg-hover-custom' : 'bg-panel-custom'}`}>
                <div className={`w-full h-full flex items-center justify-center transition-transform ${config.scale}`}>
@@ -2176,7 +2223,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               </div>
             )}
           </div>
-          <div className={`${LIST_COLS.modified} shrink-0 ${config.subText} ${fileMetaClass} font-black truncate pl-2 transition-all duration-300`}>{file.modified}</div>
+          <div className={`${LIST_COLS.modified} shrink-0 pl-2 flex items-center gap-1.5 transition-all duration-300 min-w-0`}>
+            <span className={`${config.subText} ${fileMetaClass} font-black truncate shrink-0`}>{file.modified}</span>
+            {getRelativeTimeLabel(file.modified) && (
+              <span className="text-[10px] font-medium text-on-surface/35 shrink-0">{getRelativeTimeLabel(file.modified)}</span>
+            )}
+          </div>
           <div className={`${LIST_COLS.size} shrink-0 ${config.subText} ${fileMetaClass} font-mono font-black pl-2 text-right tabular-nums transition-all duration-300`}>{file.size || '--'}</div>
           <div className={`${LIST_COLS.type} shrink-0 ${config.subText} ${fileMetaClass} truncate font-black tracking-tight pl-2 text-right opacity-70 transition-all duration-300`}>{getFileTypeLabel(file.type)}</div>
           <div className={`${LIST_COLS.actions} shrink-0 flex justify-end overflow-visible`}>
@@ -2854,13 +2906,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (!path) return;
     try {
       // 合并启动脚本：terminalScripts 优先，否则用 terminalArgs
-      const scriptLines = (theme.terminalScripts || []).filter(s => s.trim()).map(s => s.trim());
-      const scriptsJoined = scriptLines.join(' && ');
-      const args = scriptsJoined || theme.terminalArgs || '';
+      const scriptLines = (theme.terminalScripts || []).filter(s => s.enabled && s.script.trim()).map(s => s.script.trim());
       await invoke('open_terminal_at', {
         path,
         terminalApp: theme.terminalApp || 'Terminal',
-        args,
+        args: theme.terminalArgs || '',
+        scripts: scriptLines.length > 0 ? scriptLines : undefined,
         customCommand: theme.customTerminalCommand || '',
       });
       showFeedback(t('messages.terminalOpened', { app: theme.terminalApp || 'Terminal' }));
@@ -3367,7 +3418,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   </h2>
                 </div>
                   <div className="flex items-center gap-4">
-                  {!isVirtualRoot && view !== 'downloads' && <button className="text-[12px] text-primary font-semibold hover:underline">{t('explorer.viewAll')}</button>}
+                  {!isVirtualRoot && view !== 'downloads' && null}
                   {isRecentRoot && recentItems.length > 0 && (
                     <button
                       onClick={() => {
@@ -3514,6 +3565,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                               <button onClick={() => { handleSort('name'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByName', '按名称排序')}</button>
                               <button onClick={() => { handleSort('modified'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByModified', '按修改时间排序')}</button>
                               <button onClick={() => { setGroupBy(groupBy === 'none' ? 'kind' : 'none'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{groupBy === 'none' ? t('explorer.useGroups', '启用分组') : t('explorer.disableGroups', '取消分组')}</button>
+                              <div className="my-1 h-px bg-primary/10" />
+                              <p className="px-3 py-1 text-[10px] font-black text-on-surface/30 uppercase tracking-widest">显示</p>
+                              <button onClick={() => setShowCheckboxCol(v => !v)} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">
+                                <span>显示勾选框</span>
+                                {showCheckboxCol && <Check className="w-3.5 h-3.5 text-primary" />}
+                              </button>
+                              <button onClick={() => setShowSortCol(v => !v)} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">
+                                <span>显示排序</span>
+                                {showSortCol && <Check className="w-3.5 h-3.5 text-primary" />}
+                              </button>
                             </div>
                           )}
                         </motion.div>
@@ -3675,7 +3736,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                             gridAutoRows: `${Math.max(theme.gridHeight || theme.gridSize || 180, theme.mediaGridLinked === false ? (theme.mediaGridHeight || theme.gridHeight || theme.gridSize || 180) : (theme.gridHeight || theme.gridSize || 180))}px`
                           }}
                         >
-                          {files.map((file) => renderFileItem(file))}
+                          {files.map((file, i) => renderFileItem(file, false, i + 1))}
                         </div>
                       </div>
                     ))}
@@ -3708,6 +3769,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   <div className="min-w-[760px] flex flex-col">
                     {/* Table Header */}
                     <div className="sticky top-0 z-20 shrink-0 flex items-center px-4 py-3 pr-4 text-[12px] font-black text-on-surface select-none uppercase tracking-[0.1em] border-b border-primary/20 mb-2 bg-primary/10 rounded-t-xl backdrop-blur-xl">
+                      {showCheckboxCol && (
+                        <div className={`${LIST_COLS.checkbox} shrink-0 mr-2 flex items-center justify-center`}>
+                          <input
+                            type="checkbox"
+                            checked={currentLevelFiles.length > 0 && currentLevelFiles.every(f => selectedFileIds.includes(f.id))}
+                            ref={el => { if (el) el.indeterminate = selectedFileIds.length > 0 && !currentLevelFiles.every(f => selectedFileIds.includes(f.id)); }}
+                            onChange={e => onSelectFiles(e.target.checked ? currentLevelFiles.map(f => f.id) : [])}
+                            className="w-3.5 h-3.5 accent-primary cursor-pointer"
+                          />
+                        </div>
+                      )}
+                      {showSortCol && <div className={`${LIST_COLS.sortNum} shrink-0 text-on-surface/30 text-[10px] pl-1`}>#</div>}
                       <div
                         className="flex items-center gap-2 cursor-pointer hover:text-primary transition-colors pr-4 flex-1 min-w-0"
                         onClick={() => handleSort('name')}
@@ -3756,11 +3829,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                           {groupBy === 'none' && visibleRange ? (
                             <>
                               <div style={{ height: visibleRange.offsetTop }} />
-                              {files.slice(visibleRange.start, visibleRange.end).map((file) => renderFileItem(file))}
+                              {files.slice(visibleRange.start, visibleRange.end).map((file, i) => renderFileItem(file, false, visibleRange.start + i + 1))}
                               <div style={{ height: Math.max(0, visibleRange.totalHeight - visibleRange.end * listItemHeight) }} />
                             </>
                           ) : (
-                            files.map((file) => renderFileItem(file))
+                            files.map((file, i) => renderFileItem(file, false, i + 1))
                           )}
                         </React.Fragment>
                       ))}

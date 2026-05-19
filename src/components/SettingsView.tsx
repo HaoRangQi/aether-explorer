@@ -11,6 +11,7 @@ import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { ThemeSettings, ContextMenuAction, LanguageOption } from '../types';
 import { ACCENT_COLORS } from '../constants';
+import { DEFAULT_THEME, DEFAULT_LIGHT_ACCENT, DEFAULT_DARK_ACCENT } from '../lib/settings';
 
 interface SettingsViewProps {
   theme: ThemeSettings;
@@ -169,8 +170,7 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
 
   const handleWallpaperUrlChange = (url: string) => {
     const trimmedUrl = url.trim();
-    if (trimmedUrl && !theme.wallpaperUrl) {
-      // 首次设置壁纸，自动将模糊效果调为 0
+    if (trimmedUrl) {
       onThemeChange({
         ...theme,
         wallpaperUrl: url,
@@ -539,7 +539,11 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
               return (
                 <button
                   key={mode.id}
-                  onClick={() => onThemeChange({ ...theme, mode: mode.id as any })}
+                  onClick={() => onThemeChange({
+                    ...theme,
+                    mode: mode.id as any,
+                    accentColor: mode.id === 'light' ? DEFAULT_LIGHT_ACCENT : mode.id === 'dark' ? DEFAULT_DARK_ACCENT : (document.documentElement.classList.contains('dark') ? DEFAULT_DARK_ACCENT : DEFAULT_LIGHT_ACCENT),
+                  })}
                   className={`flex-1 py-4 rounded-xl flex items-center justify-center gap-2 text-[13px] font-bold transition-all relative
                     ${isActive ? 'text-on-primary' : 'text-on-surface/40 hover:text-on-surface/80 hover:bg-primary/10'}
                   `}
@@ -709,6 +713,7 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
             { key: 'colorActiveIconBg', label: '激活图标' },
             { key: 'colorTagSelected', label: '标签选中' },
             { key: 'colorSearchBg', label: '搜索框' },
+            { key: 'colorAppBg', label: '主背景色' },
           ] as { key: keyof ThemeSettings; label: string }[]).map(({ key, label }) => (
             <div key={key} className="flex flex-col items-center gap-2">
               <label className="relative group">
@@ -760,6 +765,7 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
               colorActiveIconBg: undefined,
               colorTagSelected: undefined,
               colorSearchBg: undefined,
+              colorAppBg: undefined,
             })}
             className="px-6 py-3 rounded-2xl bg-primary/10 text-primary text-[13px] font-bold hover:bg-primary/20 transition-colors flex items-center gap-2"
           >
@@ -852,6 +858,20 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
         <h3 className="text-[17px] font-bold text-on-surface flex items-center gap-2">
           <Monitor className="w-4 h-4 text-primary" /> {t('settings.wallpaperHeader', '动态壁纸与视差')}
         </h3>
+
+        {/* 色彩渐变背景开关 */}
+        <div className="flex items-center justify-between py-3 border-b border-primary/10">
+          <div className="space-y-1">
+            <p className="text-[13px] font-bold text-on-surface">{t('settings.enableGradient', '色彩渐变背景')}</p>
+            <p className="text-[11px] text-on-surface/40">{t('settings.enableGradientDesc', '关闭后使用纯色背景（浅色 #FCFCFD / 深色 #1E1E2E）')}</p>
+          </div>
+          <button
+            onClick={() => onThemeChange({ ...theme, enableGradient: !theme.enableGradient })}
+            className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${theme.enableGradient ? 'bg-primary' : 'bg-on-surface/20'}`}
+          >
+            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${theme.enableGradient ? 'translate-x-5' : 'translate-x-0'}`} />
+          </button>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-16">
           <div className="space-y-8">
             <div className="space-y-6">
@@ -1404,7 +1424,7 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
             <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">启动后执行脚本</span>
             <button
               onClick={() => {
-                const scripts = [...(theme.terminalScripts || []), ''];
+                const scripts = [...(theme.terminalScripts || []), { script: '', enabled: true }];
                 onThemeChange({ ...theme, terminalScripts: scripts });
               }}
               className="px-3 py-1.5 bg-primary/10 hover:bg-primary/20 rounded-xl text-[11px] font-bold text-primary transition-colors flex items-center gap-1.5"
@@ -1415,17 +1435,27 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
           {(theme.terminalScripts || []).length === 0 ? (
             <p className="text-[12px] text-on-surface/30 py-3">未配置脚本。点击"添加行"开始。</p>
           ) : (
-            (theme.terminalScripts || []).map((script, idx) => (
+            (theme.terminalScripts || []).map((item, idx) => (
               <div key={idx} className="flex gap-2 items-center">
                 <input
-                  value={script}
+                  type="checkbox"
+                  checked={item.enabled}
+                  onChange={() => {
+                    const scripts = [...(theme.terminalScripts || [])];
+                    scripts[idx] = { ...scripts[idx], enabled: !scripts[idx].enabled };
+                    onThemeChange({ ...theme, terminalScripts: scripts });
+                  }}
+                  className="w-3.5 h-3.5 accent-primary cursor-pointer shrink-0"
+                />
+                <input
+                  value={item.script}
                   onChange={(e) => {
                     const scripts = [...(theme.terminalScripts || [])];
-                    scripts[idx] = e.target.value;
+                    scripts[idx] = { ...scripts[idx], script: e.target.value };
                     onThemeChange({ ...theme, terminalScripts: scripts });
                   }}
                   placeholder={`第 ${idx + 1} 行：例如 npm run dev`}
-                  className="flex-1 bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 text-[13px] text-on-surface font-mono outline-none focus:border-primary"
+                  className={`flex-1 bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 text-[13px] font-mono outline-none focus:border-primary ${item.enabled ? 'text-on-surface' : 'text-on-surface/30 line-through'}`}
                 />
                 <button
                   onClick={async () => {
@@ -1433,7 +1463,7 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
                       const result = await open({ multiple: false, directory: false, filters: [{ name: '脚本', extensions: ['sh', 'bash', 'zsh', 'command', 'py', 'js', 'ts'] }] });
                       if (result && typeof result === 'string') {
                         const scripts = [...(theme.terminalScripts || [])];
-                        scripts[idx] = result;
+                        scripts[idx] = { ...scripts[idx], script: result };
                         onThemeChange({ ...theme, terminalScripts: scripts });
                       }
                     } catch {}
@@ -1457,7 +1487,7 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
             ))
           )}
           {((theme.terminalScripts || []).length > 0) && (
-            <p className="text-[11px] text-on-surface/30">每行按顺序依次执行。可输入命令或选择脚本文件（绝对路径）。</p>
+            <p className="text-[11px] text-on-surface/30">每行按顺序依次执行。勾选框控制启用/禁用。</p>
           )}
         </div>
 
@@ -1475,7 +1505,7 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
   );
 
   const renderAboutCategory = () => (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="-mt-8 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <section className="bg-primary/5 rounded-[32px] p-10 border border-primary/10 space-y-8">
         <div className="flex items-start justify-between gap-8">
           <div className="flex items-center gap-5">
@@ -2155,17 +2185,6 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
                 );
               })}
             </nav>
-        </div>
-        
-        <div className="mt-auto px-6 py-8 bg-primary/5 rounded-[32px] border border-primary/10 space-y-4">
-           <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-primary text-on-primary flex items-center justify-center font-black text-[10px]">OS</div>
-              <div className="space-y-0.5">
-                <p className="text-[11px] font-black text-on-surface tracking-tight">Aether Explorer</p>
-                <p className="text-[9px] font-bold text-on-surface/30">v{appVersion || '0.0.0'}</p>
-              </div>
-           </div>
-           <p className="text-[10px] text-on-surface/40 leading-relaxed font-medium">设置保存在本地应用数据目录中（JSON 格式），重启后自动恢复。</p>
         </div>
       </aside>
 

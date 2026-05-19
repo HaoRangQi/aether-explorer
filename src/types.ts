@@ -82,11 +82,12 @@ export interface ThemeSettings {
   useSystemContextMenu?: boolean;
   wallpaperUrl?: string;
   wallpaperBlur?: number;
+  enableGradient?: boolean;
   listDensity?: 'relaxed' | 'normal' | 'compact' | 'ultra';
   contextMenuExtensions?: ContextMenuAction[];
   terminalApp?: string;
   terminalArgs?: string;
-  terminalScripts?: string[];
+  terminalScripts?: { script: string; enabled: boolean }[];
   customTerminalCommand?: string;
   defaultHomePath?: string;
   /**
@@ -116,6 +117,7 @@ export interface ThemeSettings {
   colorActiveIconBg?: string;      // 激活图标背景
   colorTagSelected?: string;       // 标签选中色
   colorSearchBg?: string;          // 搜索框底色
+  colorAppBg?: string;             // 主背景色（纯色模式下生效）
 }
 
 export interface TabData {
