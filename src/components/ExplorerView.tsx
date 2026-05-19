@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw } from 'lucide-react';
+import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw, History } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { safeShellOpen } from '../lib/url-guard';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -15,6 +15,7 @@ import type { FileTransferPayload, MoveConflict, MoveConflictStrategy } from '..
 import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction } from '../types';
 import { QUICK_ACCESS } from '../constants';
 import AIRenamePanel from './AIRenamePanel';
+import AIOpsHistory from './AIOpsHistory';
 import CrossWindowDropBanner from './CrossWindowDropBanner';
 
 const TAG_COLORS: Record<string, string> = {
@@ -173,6 +174,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [showCheckboxCol, setShowCheckboxCol] = useState(false);
   const [showSortCol, setShowSortCol] = useState(false);
   const [showAIRename, setShowAIRename] = useState(false);
+  const [showAIHistory, setShowAIHistory] = useState(false);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [favoriteFiles, setFavoriteFiles] = useState<FileItem[]>([]);
   const [recentFiles, setRecentFiles] = useState<FileItem[]>([]);
@@ -1415,8 +1417,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       const isTyping = !!target?.closest('input, textarea, select, [contenteditable="true"]');
       if (isTyping) return;
 
-      // Cmd+Shift+R: AI 批量重命名
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'r' && selectedFiles.length > 1) {
+      // Cmd+Shift+R: AI 文件助手
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'r' && selectedFiles.length >= 1) {
         e.preventDefault();
         setShowAIRename(true);
         return;
@@ -2644,9 +2646,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         text: t('explorer.rename', '重命名'),
         action: () => { void handleRenameStart(primary); },
       }));
-      if (selectedFiles.length > 1) {
+      if (selectedFiles.length >= 1) {
         items.push(await MenuItem.new({
-          text: 'AI 批量重命名',
+          text: 'AI 文件助手',
           action: () => { setShowAIRename(true); },
         }));
       }
@@ -3580,7 +3582,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                                 <>
                                   <div className="my-1 h-px bg-primary/10" />
                                   <button onClick={() => { setShowAIRename(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
-                                    <Sparkles className="w-3.5 h-3.5 text-primary" /> AI 批量重命名
+                                    <Sparkles className="w-3.5 h-3.5 text-primary" /> AI 文件助手
+                                  </button>
+                                  <button onClick={() => { setShowAIHistory(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
+                                    <History className="w-3.5 h-3.5 text-on-surface/50" /> AI 操作历史
                                   </button>
                                 </>
                               )}
@@ -4401,12 +4406,20 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         {renderDragPreview()}
       </AnimatePresence>
 
-      {showAIRename && selectedFiles.length > 1 && (
+      {showAIRename && selectedFiles.length >= 1 && (
         <AIRenamePanel
           files={selectedFiles}
+          currentDir={currentPath}
           theme={theme}
           onClose={() => setShowAIRename(false)}
           onComplete={() => { setShowAIRename(false); refreshCurrentDir(); }}
+        />
+      )}
+
+      {showAIHistory && (
+        <AIOpsHistory
+          onClose={() => setShowAIHistory(false)}
+          onRollbackComplete={() => { setShowAIHistory(false); refreshCurrentDir(); }}
         />
       )}
 

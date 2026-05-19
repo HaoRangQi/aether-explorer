@@ -139,6 +139,22 @@ export interface AIProviderConfig {
   enabled: boolean;
 }
 
+export interface AIOpSession {
+  id: string;
+  timestamp: number;
+  instruction: string;
+  summary: string;
+  ops: AIExecutedOp[];
+  canRollback: boolean;
+}
+
+export interface AIExecutedOp {
+  op: import('./lib/ai-service').AIFileOp;
+  status: 'ok' | 'fail' | 'skipped';
+  reverseOp?: import('./lib/ai-service').AIFileOp;
+  note?: string;
+}
+
 export interface TabData {
   id: string;
   labelTranslationKey: string;
