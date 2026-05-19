@@ -155,7 +155,7 @@ jobs:
           NOTES=""
           if [ -f CHANGELOG.md ]; then
             NOTES="$(awk -v ver="$VERSION" '
-              $0 ~ "^## "ver { p=1; next }
+              $0 ~ "^## \\[" ver "\\]" { p=1; next }
               p && /^## / { exit }
               p { print }
             ' CHANGELOG.md)"
