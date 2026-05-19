@@ -119,11 +119,24 @@ export interface ThemeSettings {
   colorSearchBg?: string;          // 搜索框底色
   colorAppBg?: string;             // 主背景色（纯色模式下生效）
 
-  // AI 服务配置
+  // AI 服务配置（兼容旧字段）
   aiProvider?: 'claude' | 'openai' | 'ollama';
   aiApiKey?: string;
   aiModel?: string;
   aiOllamaEndpoint?: string;
+  // 多 provider 配置
+  aiProviders?: AIProviderConfig[];
+  aiActiveProvider?: string;
+}
+
+export interface AIProviderConfig {
+  id: string;
+  name: string;
+  type: 'claude' | 'openai' | 'ollama';
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  enabled: boolean;
 }
 
 export interface TabData {

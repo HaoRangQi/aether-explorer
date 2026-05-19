@@ -1,4 +1,5 @@
-import type { ThemeSettings } from '../types';
+import type { ThemeSettings, AIProviderConfig } from '../types';
+import { fetch } from '@tauri-apps/plugin-http';
 
 interface AIRenameRequest {
   fileNames: string[];
@@ -34,8 +35,10 @@ function buildUserPrompt(req: AIRenameRequest): string {
 意图: "${req.instruction}"`;
 }
 
-async function callClaude(apiKey: string, model: string, req: AIRenameRequest): Promise<string> {
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+async function callClaude(apiKey: string, model: string, req: AIRenameRequest, baseUrl?: string): Promise<string> {
+  const url = baseUrl ? `${baseUrl.replace(/\/$/, '')}/v1/messages` : 'https://api.anthropic.com/v1/messages';
+  try { new URL(url); } catch { throw new Error(`无效的 API URL: ${url}`); }
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -58,8 +61,10 @@ async function callClaude(apiKey: string, model: string, req: AIRenameRequest): 
   return data.content?.[0]?.text || '';
 }
 
-async function callOpenAI(apiKey: string, model: string, req: AIRenameRequest): Promise<string> {
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+async function callOpenAI(apiKey: string, model: string, req: AIRenameRequest, baseUrl?: string): Promise<string> {
+  const url = baseUrl ? `${baseUrl.replace(/\/$/, '')}/v1/chat/completions` : 'https://api.openai.com/v1/chat/completions';
+  try { new URL(url); } catch { throw new Error(`无效的 API URL: ${url}`); }
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -83,7 +88,9 @@ async function callOpenAI(apiKey: string, model: string, req: AIRenameRequest): 
 }
 
 async function callOllama(endpoint: string, model: string, req: AIRenameRequest): Promise<string> {
-  const resp = await fetch(`${endpoint}/api/chat`, {
+  const url = `${endpoint.replace(/\/$/, '')}/api/chat`;
+  try { new URL(url); } catch { throw new Error(`无效的 Ollama URL: ${url}`); }
+  const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -113,23 +120,40 @@ function parseResponse(raw: string, expectedCount: number): string[] {
   return arr.map(String);
 }
 
-export async function generateRenames(theme: ThemeSettings, req: AIRenameRequest): Promise<AIRenameResult> {
-  const { aiProvider, aiApiKey, aiModel, aiOllamaEndpoint } = theme;
+function getActiveProvider(theme: ThemeSettings): { type: string; apiKey?: string; baseUrl?: string; model?: string } | null {
+  // 优先用新的多 provider 配置
+  if (theme.aiProviders?.length && theme.aiActiveProvider) {
+    const p = theme.aiProviders.find(p => p.id === theme.aiActiveProvider && p.enabled);
+    if (p) return { type: p.type, apiKey: p.apiKey, baseUrl: p.baseUrl, model: p.model };
+  }
+  // 兼容旧字段
+  if (theme.aiProvider) {
+    return {
+      type: theme.aiProvider,
+      apiKey: theme.aiApiKey,
+      baseUrl: theme.aiProvider === 'ollama' ? (theme.aiOllamaEndpoint || 'http://localhost:11434') : undefined,
+      model: theme.aiModel,
+    };
+  }
+  return null;
+}
 
-  if (!aiProvider) return { newNames: [], error: '请先在设置中配置 AI 服务' };
-  if (aiProvider !== 'ollama' && !aiApiKey) return { newNames: [], error: '请在设置中填写 API Key' };
+export async function generateRenames(theme: ThemeSettings, req: AIRenameRequest): Promise<AIRenameResult> {
+  const provider = getActiveProvider(theme);
+  if (!provider) return { newNames: [], error: '请先在设置 → AI 服务中配置并启用一个提供商' };
+  if (provider.type !== 'ollama' && !provider.apiKey) return { newNames: [], error: '请填写 API Key' };
 
   try {
     let raw: string;
-    switch (aiProvider) {
+    switch (provider.type) {
       case 'claude':
-        raw = await callClaude(aiApiKey!, aiModel || '', req);
+        raw = await callClaude(provider.apiKey!, provider.model || '', req, provider.baseUrl);
         break;
       case 'openai':
-        raw = await callOpenAI(aiApiKey!, aiModel || '', req);
+        raw = await callOpenAI(provider.apiKey!, provider.model || '', req, provider.baseUrl);
         break;
       case 'ollama':
-        raw = await callOllama(aiOllamaEndpoint || 'http://localhost:11434', aiModel || '', req);
+        raw = await callOllama(provider.baseUrl || 'http://localhost:11434', provider.model || '', req);
         break;
       default:
         return { newNames: [], error: '未知的 AI 提供商' };
@@ -150,4 +174,66 @@ export async function testAIConnection(theme: ThemeSettings): Promise<{ ok: bool
   if (result.error) return { ok: false, error: result.error };
   if (result.newNames.length === 1) return { ok: true };
   return { ok: false, error: '返回结果异常' };
+}
+
+export async function testProviderConnection(provider: AIProviderConfig): Promise<{ ok: boolean; error?: string }> {
+  const fakeTheme = {
+    aiProviders: [provider],
+    aiActiveProvider: provider.id,
+  } as ThemeSettings;
+  return testAIConnection(fakeTheme);
+}
+
+export function getProviderApiUrl(provider: AIProviderConfig): string {
+  const base = (provider.baseUrl || '').replace(/\/$/, '');
+  switch (provider.type) {
+    case 'claude': return `${base || 'https://api.anthropic.com'}/v1/messages`;
+    case 'openai': return `${base || 'https://api.openai.com'}/v1/chat/completions`;
+    case 'ollama': return `${base || 'http://localhost:11434'}/api/chat`;
+  }
+}
+
+export async function fetchModels(provider: AIProviderConfig): Promise<{ models: string[]; error?: string }> {
+  try {
+    const base = (provider.baseUrl || '').replace(/\/$/, '');
+    let url: string;
+
+    if (provider.type === 'claude') {
+      url = `${base || 'https://api.anthropic.com'}/v1/models`;
+      try { new URL(url); } catch { return { models: [], error: `无效的 URL: ${url}` }; }
+      if (!provider.apiKey) return { models: [], error: '请先填写 API Key' };
+      const resp = await fetch(url, {
+        headers: {
+          'x-api-key': provider.apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+      });
+      if (!resp.ok) return { models: [], error: `${resp.status}: ${await resp.text()}` };
+      const data = await resp.json();
+      return { models: (data.data || []).map((m: any) => m.id).sort() };
+    }
+    if (provider.type === 'openai') {
+      url = `${base || 'https://api.openai.com'}/v1/models`;
+      try { new URL(url); } catch { return { models: [], error: `无效的 URL: ${url}` }; }
+      if (!provider.apiKey) return { models: [], error: '请先填写 API Key' };
+      const resp = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${provider.apiKey}` },
+      });
+      if (!resp.ok) return { models: [], error: `${resp.status}: ${await resp.text()}` };
+      const data = await resp.json();
+      return { models: (data.data || []).map((m: any) => m.id).sort() };
+    }
+    if (provider.type === 'ollama') {
+      url = `${base || 'http://localhost:11434'}/api/tags`;
+      try { new URL(url); } catch { return { models: [], error: `无效的 URL: ${url}` }; }
+      const resp = await fetch(url);
+      if (!resp.ok) return { models: [], error: `${resp.status}: ${await resp.text()}` };
+      const data = await resp.json();
+      return { models: (data.models || []).map((m: any) => m.name).sort() };
+    }
+    return { models: [] };
+  } catch (e) {
+    return { models: [], error: String(e instanceof Error ? e.message : e) };
+  }
 }
