@@ -1351,6 +1351,66 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
         </div>
       </section>
 
+      {/* AI 服务配置 */}
+      <section className="bg-primary/5 rounded-[32px] p-10 border border-primary/10 space-y-6">
+        <h3 className="text-[18px] font-black text-on-surface flex items-center gap-3">
+          <Sparkles className="w-5 h-5 text-primary" /> AI 服务配置
+        </h3>
+        <p className="text-[12px] text-on-surface/40">用于 AI 批量重命名等智能功能。选中多个文件后按 Cmd+Shift+R 触发。</p>
+
+        <div className="space-y-5">
+          <label className="space-y-2 block">
+            <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">AI 提供商</span>
+            <select
+              value={theme.aiProvider || ''}
+              onChange={e => onThemeChange({ ...theme, aiProvider: (e.target.value || undefined) as any })}
+              className="w-full bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 text-[13px] outline-none focus:border-primary"
+            >
+              <option value="">未配置</option>
+              <option value="claude">Claude (Anthropic)</option>
+              <option value="openai">OpenAI</option>
+              <option value="ollama">Ollama (本地)</option>
+            </select>
+          </label>
+
+          {theme.aiProvider && theme.aiProvider !== 'ollama' && (
+            <label className="space-y-2 block">
+              <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">API Key</span>
+              <input
+                type="password"
+                value={theme.aiApiKey || ''}
+                onChange={e => onThemeChange({ ...theme, aiApiKey: e.target.value || undefined })}
+                placeholder={theme.aiProvider === 'claude' ? 'sk-ant-...' : 'sk-...'}
+                className="w-full bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 text-[13px] font-mono outline-none focus:border-primary"
+              />
+            </label>
+          )}
+
+          {theme.aiProvider && (
+            <label className="space-y-2 block">
+              <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">模型</span>
+              <input
+                value={theme.aiModel || ''}
+                onChange={e => onThemeChange({ ...theme, aiModel: e.target.value || undefined })}
+                placeholder={theme.aiProvider === 'claude' ? 'claude-sonnet-4-20250514' : theme.aiProvider === 'openai' ? 'gpt-4o' : 'llama3'}
+                className="w-full bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 text-[13px] font-mono outline-none focus:border-primary"
+              />
+            </label>
+          )}
+
+          {theme.aiProvider === 'ollama' && (
+            <label className="space-y-2 block">
+              <span className="text-[12px] font-black text-on-surface/50 uppercase tracking-wider">Ollama 地址</span>
+              <input
+                value={theme.aiOllamaEndpoint || 'http://localhost:11434'}
+                onChange={e => onThemeChange({ ...theme, aiOllamaEndpoint: e.target.value })}
+                className="w-full bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 text-[13px] font-mono outline-none focus:border-primary"
+              />
+            </label>
+          )}
+        </div>
+      </section>
+
       <section className="bg-primary/5 rounded-[32px] p-10 border border-primary/10 space-y-6">
         <h3 className="text-[18px] font-black text-on-surface">快捷键参考</h3>
         <div className="grid grid-cols-2 gap-3 text-[13px]">
@@ -1363,6 +1423,7 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
             ['Enter', '打开文件'],
             ['Space', 'Quick Look'],
             ['Cmd+I', '文件简介'],
+            ['Cmd+Shift+R', 'AI 批量重命名'],
           ].map(([key, desc]) => (
             <div key={key} className="flex items-center gap-3 px-4 py-3 bg-primary/5 rounded-xl">
               <kbd className="px-2 py-1 bg-primary/10 border border-primary/20 rounded-md text-[11px] font-mono font-bold text-primary whitespace-nowrap">{key}</kbd>

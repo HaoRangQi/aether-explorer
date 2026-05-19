@@ -83,6 +83,11 @@ export const DEFAULT_THEME: ThemeSettings = {
   colorTagSelected: undefined,
   colorSearchBg: undefined,
   colorAppBg: undefined,
+
+  aiProvider: undefined,
+  aiApiKey: undefined,
+  aiModel: undefined,
+  aiOllamaEndpoint: 'http://localhost:11434',
 };
 
 export function normalizeContextMenuExtensions(

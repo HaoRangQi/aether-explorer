@@ -118,6 +118,12 @@ export interface ThemeSettings {
   colorTagSelected?: string;       // 标签选中色
   colorSearchBg?: string;          // 搜索框底色
   colorAppBg?: string;             // 主背景色（纯色模式下生效）
+
+  // AI 服务配置
+  aiProvider?: 'claude' | 'openai' | 'ollama';
+  aiApiKey?: string;
+  aiModel?: string;
+  aiOllamaEndpoint?: string;
 }
 
 export interface TabData {
