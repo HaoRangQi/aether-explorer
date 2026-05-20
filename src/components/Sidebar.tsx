@@ -300,7 +300,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
         />
       </div>
 
-      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-3 space-y-6 auto-scrollbar">
+      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-3 space-y-6 scrollbar-hide">
         {sections.map((section, idx) => (
           <div key={idx} className="space-y-1">
             {section.collapsible ? (
