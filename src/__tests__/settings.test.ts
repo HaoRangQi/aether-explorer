@@ -21,15 +21,24 @@ describe('normalizeContextMenuExtensions', () => {
       { id: 'custom-foo', label: '新', enabled: true } as ContextMenuAction,
     ];
     const result = normalizeContextMenuExtensions(input);
-    expect(result.map(e => e.id)).toEqual(['custom-foo']);
+    // deprecated ids 被过滤，系统扩展被补全
+    expect(result.some(e => e.id === 'open')).toBe(false);
+    expect(result.some(e => e.id === 'custom-foo')).toBe(true);
+    expect(result.some(e => e.id === 'ai-assistant')).toBe(true);
+    expect(result.some(e => e.id === 'ai-history')).toBe(true);
   });
 
-  it('removes isSystem entries', () => {
+  it('preserves isSystem entries and injects missing system extensions', () => {
     const input: ContextMenuAction[] = [
-      { id: 'sys-1', label: 'sys', enabled: true, isSystem: true } as ContextMenuAction,
+      { id: 'ai-assistant', label: 'AI 文件助手', enabled: false, isSystem: true } as ContextMenuAction,
       { id: 'user-1', label: 'user', enabled: true } as ContextMenuAction,
     ];
-    expect(normalizeContextMenuExtensions(input).map(e => e.id)).toEqual(['user-1']);
+    const result = normalizeContextMenuExtensions(input);
+    // isSystem 不再被过滤
+    expect(result.some(e => e.id === 'ai-assistant')).toBe(true);
+    expect(result.some(e => e.id === 'user-1')).toBe(true);
+    // 缺失的 ai-history 被补全
+    expect(result.some(e => e.id === 'ai-history')).toBe(true);
   });
 
   it('fills missing fields', () => {
