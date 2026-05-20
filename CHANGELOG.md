@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-05-20
+
+### 修复
+- macOS 每次启动重复弹权限框：添加 `NS*UsageDescription` 到 Info.plist，TCC 授权后不再重复请求
+- 清理 Entitlements.plist 中无效的 `com.apple.security.files.all` key
+
 ## [0.3.6] - 2026-05-20
 
 ### 新增

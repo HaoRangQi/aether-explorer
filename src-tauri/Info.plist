@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Aether Explorer 需要访问桌面文件夹以显示和管理文件。</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Aether Explorer 需要访问文稿文件夹以显示和管理文件。</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Aether Explorer 需要访问下载文件夹以显示和管理文件。</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Aether Explorer 需要访问外部存储设备以显示和管理文件。</string>
+    <key>NSFileProviderDomainUsageDescription</key>
+    <string>Aether Explorer 需要访问文件提供程序以显示和管理文件。</string>
+</dict>
+</plist>
