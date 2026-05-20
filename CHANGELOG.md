@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-05-20
+
+### 新增
+- AI 文件助手：支持 rename / mkdir / move / trash / compress 五种操作，AI 生成操作计划，用户确认后执行
+- AI 操作历史：记录每次 AI 操作，支持一键回滚（rename/move/mkdir 可自动回滚，trash 提示手动恢复）
+- AI 服务支持多 provider 并存（Claude / OpenAI 中转站 / Ollama），独立设置页管理
+- 模型列表从 API 自动拉取，自定义下拉选择，支持搜索过滤
+- AI 文件助手无需选中文件即可触发，未选中时操作当前目录所有文件
+- AI 文件助手 / AI 操作历史作为系统内置扩展，在右键菜单扩展设置中可启用/禁用
+- 配置导出/导入：主题、收藏夹、文件标签、最近使用一键备份恢复
+- 底部状态栏开发环境标识（仅 dev 模式显示）
+
+### 修复
+- 滚动条样式统一：导航栏仅 hover 时显示，设置/存储页使用半透明细滚动条
+- AI 请求加 30s 超时，卡死不再无限转圈
+- AI API Key / Base URL 自动清理不可见字符，修复 `The string did not match the expected pattern` 报错
+- 修复 `Maximum call stack size exceeded`（fetchWithTimeout 递归调用自身）
+
+### 变更
+- AI 批量重命名升级为通用 AI 文件助手，单个文件也可操作
+- 删除 `AI 智能扫描` 占位扩展，替换为真实可用的 AI 文件助手和 AI 操作历史
+- 右键菜单（空白/文件）、工具栏更多菜单均保留 AI 入口
+
 ## [0.3.5] - 2026-05-19
 
 ### 新增

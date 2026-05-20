@@ -2,7 +2,7 @@ import { load } from '@tauri-apps/plugin-store';
 import type { AIOpSession } from '../types';
 import type { AIFileOp } from './ai-service';
 
-const STORE_OPTIONS = { autoSave: true };
+const STORE_OPTIONS = { autoSave: true, defaults: {} };
 const MAX_SESSIONS = 50;
 
 function loadOpStore() {

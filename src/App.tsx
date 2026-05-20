@@ -311,6 +311,15 @@ export default function App() {
     }).catch(() => {});
   }, [recentItems, storeReady]);
 
+  const handleImportConfig = useCallback(({ theme: t, favorites: f, fileTags: ft, recentItems: r }: {
+    theme?: ThemeSettings; favorites?: string[]; fileTags?: Record<string, string[]>; recentItems?: string[];
+  }) => {
+    if (t) setTheme(normalizeThemeSettings(t));
+    if (f) setFavorites(f);
+    if (ft) setFileTags(ft);
+    if (r) setRecentItems(r);
+  }, []);
+
   const handleRecordRecent = useCallback((path: string) => {
     if (!path || path.startsWith('aether://')) return;
     setRecentItems(prev => [path, ...prev.filter(item => item !== path)].slice(0, MAX_RECENT_ITEMS));
@@ -605,6 +614,10 @@ export default function App() {
                   <SettingsView
                     theme={theme}
                     onThemeChange={setTheme}
+                    favorites={favorites}
+                    fileTags={fileTags}
+                    recentItems={recentItems}
+                    onImport={handleImportConfig}
                     onNavigateToHome={() => setView('desktop')}
                   />
                 </Suspense>
@@ -662,6 +675,12 @@ export default function App() {
                </div>
             </div>
             <div className="flex gap-4 items-center">
+              {import.meta.env.DEV && (
+                <span className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-amber-500/70 select-none">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  DEV · {import.meta.env.MODE} · localhost:41873
+                </span>
+              )}
               {theme.enableDevTools && (
                 <button
                   onClick={handleOpenDevTools}

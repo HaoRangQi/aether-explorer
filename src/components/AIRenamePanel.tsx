@@ -148,7 +148,9 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
           <div className="flex items-center gap-3">
             <Sparkles className="w-5 h-5 text-primary" />
             <h2 className="text-[17px] font-black text-on-surface">AI 文件助手</h2>
-            <span className="text-[12px] text-on-surface/40 font-bold">{files.length} 个文件</span>
+            <span className="text-[12px] text-on-surface/40 font-bold">
+              {files.length} 个文件{files.length === 0 ? '' : ''}
+            </span>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-primary/10 rounded-xl transition-colors">
             <X className="w-4 h-4 text-on-surface/50" />

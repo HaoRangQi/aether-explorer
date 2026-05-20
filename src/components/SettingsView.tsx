@@ -17,6 +17,10 @@ import { testProviderConnection, fetchModels, getProviderApiUrl } from '../lib/a
 interface SettingsViewProps {
   theme: ThemeSettings;
   onThemeChange: (theme: ThemeSettings) => void;
+  favorites?: string[];
+  fileTags?: Record<string, string[]>;
+  recentItems?: string[];
+  onImport?: (data: { theme?: ThemeSettings; favorites?: string[]; fileTags?: Record<string, string[]>; recentItems?: string[] }) => void;
   /** 用户在设置内点了"恢复我的收藏"后，App 把 view 切到首页 tab 给即时反馈 */
   onNavigateToHome?: () => void;
 }
@@ -63,6 +67,8 @@ const ACTION_TYPE_META = {
   shell: { label: 'Shell 命令', description: '把命令模板带入终端执行，适合脚本、构建、批处理。', icon: Code2 },
   url: { label: 'URL 动作', description: '按模板生成链接并交给系统浏览器打开。', icon: ExternalLink },
   placeholder: { label: '插件占位', description: '保留菜单入口，等待后续插件或 AI 工作流接入。', icon: Sparkles },
+  'ai-assistant': { label: 'AI 文件助手', description: '打开 AI 文件助手，对选中文件或当前目录执行智能操作。', icon: Sparkles },
+  'ai-history': { label: 'AI 操作历史', description: '查看 AI 操作记录，支持一键回滚。', icon: Sparkles },
 } satisfies Record<NonNullable<ContextMenuAction['actionType']>, { label: string; description: string; icon: React.ComponentType<{ className?: string }> }>;
 
 type UpdateStatus = {
@@ -101,7 +107,7 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-export default function SettingsView({ theme, onThemeChange, onNavigateToHome }: SettingsViewProps) {
+export default function SettingsView({ theme, onThemeChange, favorites = [], fileTags = {}, recentItems = [], onImport, onNavigateToHome }: SettingsViewProps) {
   const { t, i18n } = useTranslation();
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>('appearance');
   const [availableFonts, setAvailableFonts] = useState<string[]>(['Inter', 'System Default', 'Arial', 'Segoe UI', 'Roboto', 'Times New Roman']);
@@ -2040,6 +2046,68 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
           </div>
         </div>
       </section>
+
+      {/* 数据导出/导入 */}
+      <section className="bg-primary/5 rounded-[32px] p-10 border border-primary/10 space-y-8">
+        <h3 className="text-[17px] font-bold text-on-surface flex items-center gap-2">
+          <ArrowRightLeft className="w-4 h-4 text-primary" /> 配置备份与恢复
+        </h3>
+        <p className="text-[13px] text-on-surface/40 leading-relaxed">
+          将所有配置（主题、收藏夹、文件标签、最近使用）导出为 JSON 文件，重装后一键恢复。
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <button
+            onClick={async () => {
+              const data = {
+                version: appVersion || '0.0.0',
+                exportedAt: new Date().toISOString(),
+                theme,
+                favorites,
+                fileTags,
+                recentItems,
+              };
+              const path = await save({
+                defaultPath: `aether-backup-${new Date().toISOString().slice(0,10)}.json`,
+                filters: [{ name: 'JSON', extensions: ['json'] }],
+              });
+              if (path) {
+                await writeTextFile(path, JSON.stringify(data, null, 2));
+              }
+            }}
+            className="flex items-center justify-center gap-3 px-6 py-5 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[14px] font-bold text-primary transition-all"
+          >
+            <FileDown className="w-5 h-5" />
+            导出配置
+          </button>
+          <button
+            onClick={async () => {
+              const path = await open({
+                multiple: false,
+                filters: [{ name: 'JSON', extensions: ['json'] }],
+              });
+              if (!path || typeof path !== 'string') return;
+              try {
+                const raw = await readTextFile(path);
+                const data = JSON.parse(raw);
+                if (!data || typeof data !== 'object') throw new Error('格式无效');
+                onImport?.({
+                  theme: data.theme,
+                  favorites: data.favorites,
+                  fileTags: data.fileTags,
+                  recentItems: data.recentItems,
+                });
+              } catch (e) {
+                alert(`导入失败：${e instanceof Error ? e.message : String(e)}`);
+              }
+            }}
+            className="flex items-center justify-center gap-3 px-6 py-5 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[14px] font-bold text-primary transition-all"
+          >
+            <FileUp className="w-5 h-5" />
+            导入配置
+          </button>
+        </div>
+        <p className="text-[11px] text-on-surface/25">导入会覆盖当前所有配置，操作前建议先导出备份。</p>
+      </section>
     </div>
   );
 
@@ -2216,20 +2284,27 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
                       </div>
 
                       <div className="flex items-center gap-4 shrink-0">
-                        <button
-                          onClick={() => populateActionForm(ext)}
-                          className="p-3 text-on-surface/25 hover:text-primary hover:bg-primary/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                          aria-label={`编辑 ${ext.label}`}
-                        >
-                          <Pencil className="w-5 h-5" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteExtension(ext.id, ext.label)}
-                          className="p-3 text-on-surface/25 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                          aria-label={`删除 ${ext.label}`}
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
+                        {!ext.isSystem && (
+                          <button
+                            onClick={() => populateActionForm(ext)}
+                            className="p-3 text-on-surface/25 hover:text-primary hover:bg-primary/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                            aria-label={`编辑 ${ext.label}`}
+                          >
+                            <Pencil className="w-5 h-5" />
+                          </button>
+                        )}
+                        {!ext.isSystem && (
+                          <button
+                            onClick={() => handleDeleteExtension(ext.id, ext.label)}
+                            className="p-3 text-on-surface/25 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                            aria-label={`删除 ${ext.label}`}
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        )}
+                        {ext.isSystem && (
+                          <span className="text-[9px] font-black text-on-surface/25 uppercase tracking-widest px-2 py-1 bg-on-surface/5 rounded-lg">系统内置</span>
+                        )}
                         <button
                           onClick={() => toggleExtension(ext.id)}
                           className={`w-14 h-8 rounded-full p-1.5 transition-colors duration-300 flex items-center ${ext.enabled ? 'bg-primary' : 'bg-on-surface/[0.2]'}`}
@@ -2275,7 +2350,7 @@ export default function SettingsView({ theme, onThemeChange, onNavigateToHome }:
                   onChange={(e) => setNewActionType(e.target.value as NonNullable<ContextMenuAction['actionType']>)}
                   className="w-full bg-white/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] font-bold text-on-surface outline-none focus:ring-4 focus:ring-primary/10 transition-all"
                 >
-                  {Object.entries(ACTION_TYPE_META).map(([type, meta]) => <option key={type} value={type}>{meta.label}</option>)}
+                  {Object.entries(ACTION_TYPE_META).filter(([type]) => !type.startsWith('ai-')).map(([type, meta]) => <option key={type} value={type}>{meta.label}</option>)}
                 </select>
               </label>
             </div>

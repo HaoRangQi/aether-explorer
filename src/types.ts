@@ -26,7 +26,7 @@ export interface ContextMenuAction {
   label: string;
   enabled: boolean;
   isSystem?: boolean;
-  actionType?: 'terminal' | 'shell' | 'url' | 'placeholder';
+  actionType?: 'terminal' | 'shell' | 'url' | 'placeholder' | 'ai-assistant' | 'ai-history';
   terminalApp?: string;
   terminalArgs?: string;
   command?: string;

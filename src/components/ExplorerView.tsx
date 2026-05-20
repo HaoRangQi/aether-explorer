@@ -1418,7 +1418,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       if (isTyping) return;
 
       // Cmd+Shift+R: AI 文件助手
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'r' && selectedFiles.length >= 1) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'r') {
         e.preventDefault();
         setShowAIRename(true);
         return;
@@ -2623,6 +2623,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         enabled: !isAlreadyHome && !!currentPath,
         action: () => { handleSetCurrentAsHome(); },
       }));
+      await addSeparator();
+      items.push(await MenuItem.new({
+        text: 'AI 文件助手',
+        action: () => { setShowAIRename(true); },
+      }));
+      items.push(await MenuItem.new({
+        text: 'AI 操作历史',
+        action: () => { setShowAIHistory(true); },
+      }));
     } else {
       // 第1分组: 打开 + 重命名
       items.push(await MenuItem.new({
@@ -2646,12 +2655,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         text: t('explorer.rename', '重命名'),
         action: () => { void handleRenameStart(primary); },
       }));
-      if (selectedFiles.length >= 1) {
-        items.push(await MenuItem.new({
-          text: 'AI 文件助手',
-          action: () => { setShowAIRename(true); },
-        }));
-      }
+      items.push(await MenuItem.new({
+        text: 'AI 文件助手',
+        action: () => { setShowAIRename(true); },
+      }));
       await addSeparator();
       // 第2分组: 复制 + 剪切 + 制作替身
       items.push(await MenuItem.new({
@@ -3207,6 +3214,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             showFeedback(`扩展「${extension.label}」链接不安全：${String(err)}`);
           }
         }
+      } else if (actionType === 'ai-assistant') {
+        setContextMenu(null);
+        setShowAIRename(true);
+        return;
+      } else if (actionType === 'ai-history') {
+        setContextMenu(null);
+        setShowAIHistory(true);
+        return;
       } else {
         showFeedback(`扩展「${extension.label}」已预留，等待插件接入。`);
       }
@@ -3578,17 +3593,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                               <button onClick={() => handleQuickLook(lastSelectedFile)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.quickLook', 'Quick Look')}</button>
                               <button onClick={() => handleOpenTerminal(lastSelectedFile)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.openInTerminal', '在终端打开')}</button>
                               <button onClick={() => handleCopyPaths(lastSelectedFile ? getActionFiles(lastSelectedFile) : [])} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.copyPath', '拷贝为路径名')}</button>
-                              {selectedFiles.length > 1 && (
-                                <>
-                                  <div className="my-1 h-px bg-primary/10" />
-                                  <button onClick={() => { setShowAIRename(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
-                                    <Sparkles className="w-3.5 h-3.5 text-primary" /> AI 文件助手
-                                  </button>
-                                  <button onClick={() => { setShowAIHistory(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
-                                    <History className="w-3.5 h-3.5 text-on-surface/50" /> AI 操作历史
-                                  </button>
-                                </>
-                              )}
+                              <div className="my-1 h-px bg-primary/10" />
+                              <button onClick={() => { setShowAIRename(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
+                                <Sparkles className="w-3.5 h-3.5 text-primary" /> AI 文件助手
+                              </button>
+                              <button onClick={() => { setShowAIHistory(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
+                                <History className="w-3.5 h-3.5 text-on-surface/50" /> AI 操作历史
+                              </button>
                               <div className="my-1 h-px bg-primary/10" />
                               <button onClick={() => { handleSort('name'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByName', '按名称排序')}</button>
                               <button onClick={() => { handleSort('modified'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByModified', '按修改时间排序')}</button>
@@ -4167,6 +4178,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                     </button>
                   );
                 })()}
+                <div className="my-1 h-px bg-primary/10" />
+                <button onClick={() => { setShowAIRename(true); setContextMenu(null); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <Sparkles className="w-4 h-4 text-primary" /> AI 文件助手
+                </button>
+                <button onClick={() => { setShowAIHistory(true); setContextMenu(null); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <History className="w-4 h-4 text-on-surface/50" /> AI 操作历史
+                </button>
               </>
             ) : findFileById(contextMenu.fileIds[0]) ? (
               (() => {
@@ -4406,9 +4424,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         {renderDragPreview()}
       </AnimatePresence>
 
-      {showAIRename && selectedFiles.length >= 1 && (
+      {showAIRename && (
         <AIRenamePanel
-          files={selectedFiles}
+          files={selectedFiles.length > 0 ? selectedFiles : currentLevelFiles}
           currentDir={currentPath}
           theme={theme}
           onClose={() => setShowAIRename(false)}

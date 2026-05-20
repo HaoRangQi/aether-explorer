@@ -19,7 +19,7 @@ export const DEFAULT_DARK_ACCENT = '#425066';  // 黛蓝
 
 export const DEPRECATED_CONTEXT_EXTENSION_IDS = new Set([
   'open', 'rename', 'copy', 'move', 'share', 'compress',
-  'terminal', 'delete', 'tag', 'group',
+  'terminal', 'delete', 'tag', 'group', 'ai-scan',
 ]);
 
 export const DEFAULT_THEME: ThemeSettings = {
@@ -59,8 +59,12 @@ export const DEFAULT_THEME: ThemeSettings = {
       terminalArgs: 'ls -la', workingDirectory: 'selection', confirmExecution: false,
     },
     {
-      id: 'ai-scan', label: 'AI 智能扫描', enabled: false,
-      actionType: 'placeholder', confirmExecution: false,
+      id: 'ai-assistant', label: 'AI 文件助手', enabled: true,
+      actionType: 'ai-assistant', confirmExecution: false, isSystem: true,
+    },
+    {
+      id: 'ai-history', label: 'AI 操作历史', enabled: true,
+      actionType: 'ai-history', confirmExecution: false, isSystem: true,
     },
   ],
   terminalApp: 'Terminal',
@@ -93,14 +97,23 @@ export const DEFAULT_THEME: ThemeSettings = {
 export function normalizeContextMenuExtensions(
   extensions?: ContextMenuAction[],
 ): ContextMenuAction[] {
-  return (extensions || DEFAULT_THEME.contextMenuExtensions || [])
-    .filter(ext => !ext.isSystem && !DEPRECATED_CONTEXT_EXTENSION_IDS.has(ext.id))
+  const filtered = (extensions || [])
+    .filter(ext => !DEPRECATED_CONTEXT_EXTENSION_IDS.has(ext.id))
     .map(ext => ({
       ...ext,
       actionType: ext.actionType || 'placeholder',
       workingDirectory: ext.workingDirectory || 'selection',
       confirmExecution: ext.confirmExecution ?? true,
     }));
+
+  // 确保系统扩展始终存在（用户可能是从旧版本升级的）
+  const systemDefaults = DEFAULT_THEME.contextMenuExtensions!.filter(e => e.isSystem);
+  for (const sys of systemDefaults) {
+    if (!filtered.find(e => e.id === sys.id)) {
+      filtered.push({ ...sys, actionType: sys.actionType || 'placeholder', workingDirectory: sys.workingDirectory || 'selection', confirmExecution: sys.confirmExecution ?? false });
+    }
+  }
+  return filtered as ContextMenuAction[];
 }
 
 /**
