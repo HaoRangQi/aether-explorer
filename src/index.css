@@ -41,6 +41,9 @@
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in srgb, var(--primary) 55%, transparent);
 }
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--primary) 30%, transparent) transparent;
@@ -92,6 +95,9 @@
 @layer base {
   html, body, #root {
     background: var(--app-bg, #FCFCFD);
+  }
+  html.dark, html.dark body, html.dark #root {
+    background: var(--app-bg, #1E1E2E);
   }
 
   /* 所有可点击的 button / role=button 默认 cursor pointer

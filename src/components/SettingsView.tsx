@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle, File as FileIcon, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -2113,9 +2113,11 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
 
   const [permChecks, setPermChecks] = useState<{path: string; label: string; ok: boolean | null}[]>([]);
 
-  useEffect(() => {
-    let cancelled = false;
-    invoke<string>('get_home_dir').then(home => {
+  const [permChecksLoaded, setPermChecksLoaded] = useState(false);
+
+  const checkPermissions = useCallback(async () => {
+    try {
+      const home = await invoke<string>('get_home_dir');
       const dirs = [
         { path: `${home}/Documents`, label: '文稿' },
         { path: `${home}/Desktop`, label: '桌面' },
@@ -2123,20 +2125,20 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
         { path: `${home}/.Trash`, label: '废纸篓' },
         { path: '/Applications', label: '应用程序' },
       ];
-      Promise.all(dirs.map(async d => {
+      const results = await Promise.all(dirs.map(async d => {
         try {
           await invoke('list_directory', { dirPath: d.path, showHidden: false });
           return { ...d, ok: true };
         } catch {
           return { ...d, ok: false };
         }
-      })).then(results => {
-        if (!cancelled) setPermChecks(results);
-      });
-    }).catch(() => {
-      if (!cancelled) setPermChecks([]);
-    });
-    return () => { cancelled = true; };
+      }));
+      setPermChecks(results);
+      setPermChecksLoaded(true);
+    } catch {
+      setPermChecks([]);
+      setPermChecksLoaded(true);
+    }
   }, []);
 
   const renderPermissionsCategory = () => (
@@ -2162,9 +2164,17 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
 
         {/* Permission check results */}
         <div className="space-y-3">
-          <h4 className="text-[13px] font-bold text-on-surface/40 uppercase tracking-wider px-2">目录访问状态</h4>
-          {permChecks.length === 0 ? (
-            <p className="text-[13px] text-on-surface/30 px-2">正在检查权限...</p>
+          <div className="flex items-center justify-between px-2">
+            <h4 className="text-[13px] font-bold text-on-surface/40 uppercase tracking-wider">目录访问状态</h4>
+            <button
+              onClick={checkPermissions}
+              className="px-4 py-2 bg-primary/10 hover:bg-primary/20 rounded-xl text-[12px] font-bold text-primary transition-colors"
+            >
+              {permChecksLoaded ? '重新检查' : '检查权限'}
+            </button>
+          </div>
+          {!permChecksLoaded ? (
+            <p className="text-[13px] text-on-surface/30 px-2">点击「检查权限」查看各目录访问状态</p>
           ) : (
             permChecks.map(p => (
               <div key={p.path} className="flex items-center justify-between px-6 py-4 bg-primary/5 rounded-2xl border border-transparent">
