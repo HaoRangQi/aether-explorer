@@ -53,7 +53,14 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "entitlements": "Entitlements.plist"
+      "entitlements": "Entitlements.plist",
+      "infoPlist": {
+        "NSDesktopFolderUsageDescription": "Aether Explorer 需要访问桌面文件夹以显示和管理文件。",
+        "NSDocumentsFolderUsageDescription": "Aether Explorer 需要访问文稿文件夹以显示和管理文件。",
+        "NSDownloadsFolderUsageDescription": "Aether Explorer 需要访问下载文件夹以显示和管理文件。",
+        "NSRemovableVolumesUsageDescription": "Aether Explorer 需要访问外部存储设备以显示和管理文件。",
+        "NSFileProviderDomainUsageDescription": "Aether Explorer 需要访问文件提供程序以显示和管理文件。"
+      }
     }
   },
   "plugins": {
