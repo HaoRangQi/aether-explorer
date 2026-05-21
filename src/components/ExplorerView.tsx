@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw, History, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -70,9 +70,20 @@ const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 const RECENT_VIRTUAL_PATH = 'aether://recent';
 const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
 const OPEN_WITH_APPS = ['Finder', 'Preview', 'TextEdit', 'Safari', 'Google Chrome', 'Visual Studio Code'];
+const PROTECTED_ROOT_APPROVALS_KEY = 'aether-protected-root-approvals';
 const logDragDebug = (message: string) => {
   invoke('debug_log', { message }).catch(() => {});
 };
+
+function loadProtectedRootApprovals(): string[] {
+  try {
+    const raw = sessionStorage.getItem(PROTECTED_ROOT_APPROVALS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 interface InternalDragState {
   id: string;
@@ -115,6 +126,13 @@ interface FileDropAcceptedPayload {
   paths: string[];
   op: 'copy' | 'move';
   targetWindow: string;
+}
+
+type DirectoryErrorKind = 'permission' | 'notFound' | 'generic';
+
+interface ProtectedRootInfo {
+  path: string;
+  label: string;
 }
 
 interface FileDragEndAtPayload {
@@ -184,7 +202,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [columnFilesCache, setColumnFilesCache] = useState<Record<string, FileItem[]>>({});
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
-  const [showPermissionDialog, setShowPermissionDialog] = useState(false);
+  const [directoryErrorKind, setDirectoryErrorKind] = useState<DirectoryErrorKind | null>(null);
+  const [approvedProtectedRoots, setApprovedProtectedRoots] = useState<string[]>(loadProtectedRootApprovals);
+  const [blockedProtectedRoots, setBlockedProtectedRoots] = useState<string[]>([]);
   const [homeDir, setHomeDir] = useState('');
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
   const [renameInput, setRenameInput] = useState('');
@@ -296,6 +316,52 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const getTagVirtualPath = (tagId: string) => `${TAGS_VIRTUAL_PREFIX}${tagId}`;
+
+  const classifyDirectoryError = (message: string): DirectoryErrorKind => {
+    if (message.includes('PermissionDenied')) return 'permission';
+    if (message.includes('NotFound')) return 'notFound';
+    return 'generic';
+  };
+
+  const protectedRoots = useMemo<ProtectedRootInfo[]>(() => {
+    if (!homeDir) return [];
+    return [
+      { path: `${homeDir}/Downloads`, label: '下载' },
+      { path: `${homeDir}/Documents`, label: '文稿' },
+      { path: `${homeDir}/Desktop`, label: '桌面' },
+      { path: `${homeDir}/Library/Mobile Documents`, label: 'iCloud Drive' },
+      { path: `${homeDir}/.Trash`, label: '废纸篓' },
+    ];
+  }, [homeDir]);
+
+  const protectedRoot = useMemo(() => {
+    if (!currentPath) return null;
+    return protectedRoots.find(root => currentPath === root.path || currentPath.startsWith(`${root.path}/`)) || null;
+  }, [currentPath, protectedRoots]);
+
+  const isProtectedPathApproved = protectedRoot
+    ? approvedProtectedRoots.includes(protectedRoot.path)
+    : true;
+  const isProtectedPathBlocked = protectedRoot
+    ? blockedProtectedRoots.includes(protectedRoot.path)
+    : false;
+  const needsProtectedPathConsent = Boolean(protectedRoot && !isProtectedPathApproved && !isProtectedPathBlocked);
+
+  const approveProtectedRoot = useCallback(() => {
+    if (!protectedRoot) return;
+    setApprovedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
+    setBlockedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
+    setDirectoryErrorKind(null);
+    setLoadError('');
+  }, [protectedRoot]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(PROTECTED_ROOT_APPROVALS_KEY, JSON.stringify(approvedProtectedRoots));
+    } catch {
+      // sessionStorage can be unavailable in unusual WebView states; in-memory approval still works.
+    }
+  }, [approvedProtectedRoots]);
 
   const resolveTaggedItems = async (tagId: string, tagMap: Record<string, string[]>) => {
     const paths = Object.entries(tagMap)
@@ -816,31 +882,58 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   useEffect(() => {
     let cancelled = false;
     if (!currentPath || isVirtualRoot) return;
+    if (needsProtectedPathConsent) {
+      setFiles([]);
+      setLoading(false);
+      setLoadError('');
+      setDirectoryErrorKind(null);
+      return () => { cancelled = true; };
+    }
+    if (isProtectedPathBlocked) {
+      setFiles([]);
+      setLoading(false);
+      setDirectoryErrorKind('permission');
+      setLoadError('PermissionDenied: 当前会话中已拦截重复权限请求，请先在系统设置确认授权后重试。');
+      return () => { cancelled = true; };
+    }
     const requestId = ++loadRequestSeqRef.current;
     setLoading(true);
     setLoadError('');
-    setShowPermissionDialog(false);
+    setDirectoryErrorKind(null);
     listDirectory(currentPath, theme.showHiddenFiles)
       .then(f => {
         if (cancelled || requestId !== loadRequestSeqRef.current) return;
         setFiles(f);
         setLoadError('');
+        if (protectedRoot) {
+          setApprovedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
+          setBlockedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
+        }
       })
       .catch(err => {
         if (cancelled || requestId !== loadRequestSeqRef.current) return;
         const msg = String(err);
         setFiles([]);
         setLoadError(msg);
-        // Permission denied → show dialog
-        if (msg.includes('PermissionDenied') || msg.includes('NotSupported') || msg.includes('无法读取')) {
-          setShowPermissionDialog(true);
+        const kind = classifyDirectoryError(msg);
+        setDirectoryErrorKind(kind);
+        if (kind === 'permission' && protectedRoot) {
+          setBlockedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
+          setApprovedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
         }
       })
       .finally(() => {
         if (!cancelled && requestId === loadRequestSeqRef.current) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [currentPath, theme.showHiddenFiles, isVirtualRoot]);
+  }, [
+    currentPath,
+    theme.showHiddenFiles,
+    isVirtualRoot,
+    needsProtectedPathConsent,
+    isProtectedPathBlocked,
+    protectedRoot,
+  ]);
 
   useEffect(() => {
     if (!isFavoritesRoot) return;
@@ -848,7 +941,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     let cancelled = false;
     setLoading(true);
     setLoadError('');
-    setShowPermissionDialog(false);
+    setDirectoryErrorKind(null);
 
     resolveFavoriteItems(favorites)
       .then(items => {
@@ -873,7 +966,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     let cancelled = false;
     setLoading(true);
     setLoadError('');
-    setShowPermissionDialog(false);
+    setDirectoryErrorKind(null);
 
     resolveFavoriteItems(recentItems)
       .then(items => {
@@ -898,7 +991,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     let cancelled = false;
     setLoading(true);
     setLoadError('');
-    setShowPermissionDialog(false);
+    setDirectoryErrorKind(null);
 
     resolveTaggedItems(baseView, fileTags)
       .then(items => {
@@ -2789,6 +2882,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const refreshCurrentDir = async (fullRefresh = false) => {
     const requestId = ++loadRequestSeqRef.current;
+    if (protectedRoot) {
+      setBlockedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
+      setApprovedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
+    }
     if (fullRefresh) {
       setLoading(true);
       resetTabTransientState();
@@ -2837,6 +2934,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return [] as FileItem[];
     }
   };
+
+  const retryProtectedPath = useCallback(() => {
+    void refreshCurrentDir();
+  }, [refreshCurrentDir]);
 
   const handleOpenFile = (file: FileItem) => {
     onRecordRecent(file.path);
@@ -3768,31 +3869,73 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               {loading && (
                 <div className="flex-1 min-h-0 flex items-center justify-center text-on-surface/40 text-sm">{t('explorer.loading')}</div>
               )}
+              {!loading && !loadError && needsProtectedPathConsent && protectedRoot && (
+                <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6">
+                  <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                    <Shield className="w-8 h-8 text-primary" />
+                  </div>
+                  <p className="text-on-surface/60 text-sm font-bold">这个位置可能触发 macOS 权限弹框</p>
+                  <p className="text-on-surface/35 text-xs max-w-md text-center px-4 leading-relaxed">
+                    当前目录位于“{protectedRoot.label}”下。为了避免应用一启动就连续弹系统权限框，Aether 会先等你明确继续，再去请求系统访问。
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={approveProtectedRoot}
+                      className="px-6 py-3 bg-primary text-on-primary font-black rounded-2xl text-[13px] shadow-lg shadow-primary/20 hover:scale-[1.02] transition-all"
+                    >
+                      继续访问
+                    </button>
+                    <button
+                      onClick={() => navigateToPath(FAVORITES_VIRTUAL_PATH, { replace: true })}
+                      className="px-6 py-3 bg-primary/10 text-on-surface font-bold rounded-2xl text-[13px] hover:bg-primary/20 transition-all"
+                    >
+                      先回首页
+                    </button>
+                  </div>
+                </div>
+              )}
               {!loading && loadError && (
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6">
                   <div className="w-16 h-16 rounded-full bg-red-400/10 flex items-center justify-center">
                     <Shield className="w-8 h-8 text-red-400" />
                   </div>
-                  <p className="text-on-surface/50 text-sm font-bold">无权访问此目录</p>
-                  <p className="text-on-surface/30 text-xs max-w-md text-center px-4">
-                    此目录受 macOS 保护。需要授予 Aether Explorer "完全磁盘访问权限"后才能读取。
+                  <p className="text-on-surface/50 text-sm font-bold">
+                    {directoryErrorKind === 'permission'
+                      ? '无权访问此目录'
+                      : directoryErrorKind === 'notFound'
+                        ? '目录不存在或暂不可用'
+                        : '目录读取失败'}
+                  </p>
+                  <p className="text-on-surface/30 text-xs max-w-md text-center px-4 whitespace-pre-line">
+                    {directoryErrorKind === 'permission'
+                      ? '此目录被 macOS 隐私策略保护，或当前运行实例没有继承到已授权的稳定应用身份。若你明明在系统设置里开过权限，但每次启动还是反复弹框，通常不是你不会配，而是当前构建没有用稳定签名身份启动，系统把它当成了新的 app。'
+                      : directoryErrorKind === 'notFound'
+                        ? '这个路径当前不存在，或者对应位置还没挂载完成。先确认目录、磁盘或 iCloud 位置还在。'
+                        : '这次读取没成功，但不一定是权限问题。可以先重试；如果只有受保护目录失败，再去系统设置里检查授权。'}
                   </p>
                   <div className="flex gap-3">
+                    {directoryErrorKind === 'permission' && (
+                      <button
+                        onClick={() => invoke('open_system_settings').catch(() => {})}
+                        className="px-6 py-3 bg-primary text-on-primary font-black rounded-2xl text-[13px] shadow-lg shadow-primary/20 hover:scale-[1.02] transition-all"
+                      >
+                        打开系统设置
+                      </button>
+                    )}
                     <button
-                      onClick={() => invoke('open_system_settings').catch(() => {})}
-                      className="px-6 py-3 bg-primary text-on-primary font-black rounded-2xl text-[13px] shadow-lg shadow-primary/20 hover:scale-[1.02] transition-all"
-                    >
-                      打开系统设置
-                    </button>
-                    <button
-                      onClick={refreshCurrentDir}
+                      onClick={retryProtectedPath}
                       className="px-6 py-3 bg-primary/10 text-on-surface font-bold rounded-2xl text-[13px] hover:bg-primary/20 transition-all"
                     >
                       重试
                     </button>
                   </div>
-                  <p className="text-on-surface/20 text-[11px] max-w-sm text-center leading-relaxed">
-                    操作步骤：点击"打开系统设置" → 隐私与安全性 → 完全磁盘访问权限 → 打开 Aether Explorer 开关 → 回到此页面点击"重试"
+                  {directoryErrorKind === 'permission' && (
+                    <p className="text-on-surface/20 text-[11px] max-w-sm text-center leading-relaxed">
+                      操作步骤：点击“打开系统设置” → 隐私与安全性 → 完全磁盘访问权限 → 打开 Aether Explorer 开关 → 回到此页面点击“重试”。
+                    </p>
+                  )}
+                  <p className="text-on-surface/15 text-[11px] max-w-lg text-center break-all px-4">
+                    {loadError}
                   </p>
                 </div>
               )}

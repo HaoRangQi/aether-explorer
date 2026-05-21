@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::ErrorKind;
 use std::hash::{Hash, Hasher};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -8,7 +9,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(target_os = "macos")]
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+#[cfg(target_os = "macos")]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+#[cfg(target_os = "macos")]
+use tauri_plugin_dialog::DialogExt;
+#[cfg(target_os = "macos")]
+use tauri_plugin_updater::UpdaterExt;
 
 #[derive(Debug, Serialize, Clone)]
 struct FileEntry {
@@ -334,16 +341,24 @@ fn read_mdls_date(_path: &Path, _attr: &str) -> String {
     String::new()
 }
 
+fn classify_directory_read_error(err: &std::io::Error, dir_path: &str) -> String {
+    match err.kind() {
+        ErrorKind::PermissionDenied => format!("PermissionDenied: 无法读取目录 {}", dir_path),
+        ErrorKind::NotFound => format!("NotFound: 目录不存在 {}", dir_path),
+        _ => {
+            let msg = err.to_string();
+            if msg.contains("permission") || msg.contains("denied") || msg.contains("not allowed") {
+                format!("PermissionDenied: 无法读取目录 {}", dir_path)
+            } else {
+                format!("ReadDirFailed: 无法读取目录 {}: {}", dir_path, err)
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
-    let entries = fs::read_dir(&dir_path).map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("permission") || msg.contains("denied") || msg.contains("not allowed") {
-            format!("PermissionDenied: 无法读取目录 {}", dir_path)
-        } else {
-            format!("无法读取目录: {}", e)
-        }
-    })?;
+    let entries = fs::read_dir(&dir_path).map_err(|e| classify_directory_read_error(&e, &dir_path))?;
 
     let mut files: Vec<FileEntry> = Vec::new();
     let mut dirs: Vec<FileEntry> = Vec::new();
@@ -1599,6 +1614,178 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+#[cfg(target_os = "macos")]
+fn reveal_any_window(app: &tauri::AppHandle) {
+    let windows = app.webview_windows();
+    if let Some((_, window)) = windows.iter().next() {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return;
+    }
+
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = create_app_window(handle, None, None).await;
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn check_updates_message(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let message = match app.updater() {
+            Ok(updater) => match updater.check().await {
+                Ok(Some(update)) => format!(
+                    "发现新版本 {}。请在应用内“设置 → 关于”里下载安装。",
+                    update.version
+                ),
+                Ok(None) => "当前已经是最新版本。".to_string(),
+                Err(err) => format!("检查更新失败：{}", err),
+            },
+            Err(err) => format!("初始化更新器失败：{}", err),
+        };
+        app.dialog()
+            .message(message)
+            .title("Aether Explorer 更新")
+            .show(|_| {});
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn build_native_app_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let app_name = app.package_info().name.clone();
+    let new_window = MenuItem::with_id(app, "new-window", "新建窗口", true, Some("CmdOrCtrl+N"))?;
+    let reload_window = MenuItem::with_id(app, "reload-window", "重新加载窗口", true, Some("CmdOrCtrl+R"))?;
+    let check_updates = MenuItem::with_id(app, "check-updates", "检查更新…", true, None::<&str>)?;
+    let show_all_windows = MenuItem::with_id(app, "show-all-windows", "显示主窗口", true, None::<&str>)?;
+    let force_quit = MenuItem::with_id(app, "force-quit-app", "退出 Aether Explorer", true, Some("CmdOrCtrl+Q"))?;
+
+    let app_menu = Submenu::with_items(
+        app,
+        app_name,
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &check_updates,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &show_all_windows,
+            &PredefinedMenuItem::separator(app)?,
+            &force_quit,
+        ],
+    )?;
+
+    let file_menu = Submenu::with_items(
+        app,
+        "文件",
+        true,
+        &[
+            &new_window,
+            &reload_window,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?,
+        ],
+    )?;
+
+    let edit_menu = Submenu::with_items(
+        app,
+        "编辑",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    let window_menu = Submenu::with_items(
+        app,
+        "窗口",
+        true,
+        &[
+            &show_all_windows,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::fullscreen(app, None)?,
+            &PredefinedMenuItem::bring_all_to_front(app, None)?,
+        ],
+    )?;
+
+    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])
+}
+
+#[cfg(target_os = "macos")]
+fn install_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let show_window = MenuItem::with_id(app, "tray-show-window", "显示主窗口", true, None::<&str>)?;
+    let new_window = MenuItem::with_id(app, "tray-new-window", "新建窗口", true, Some("CmdOrCtrl+N"))?;
+    let reload_window = MenuItem::with_id(app, "tray-reload-window", "重新加载窗口", true, Some("CmdOrCtrl+R"))?;
+    let check_updates = MenuItem::with_id(app, "tray-check-updates", "检查更新…", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "tray-quit", "退出 Aether Explorer", true, Some("CmdOrCtrl+Q"))?;
+    let tray_menu = Menu::with_items(
+        app,
+        &[
+            &show_window,
+            &new_window,
+            &reload_window,
+            &PredefinedMenuItem::separator(app)?,
+            &check_updates,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
+
+    let mut builder = TrayIconBuilder::with_id("aether-status")
+        .menu(&tray_menu)
+        .tooltip("Aether Explorer")
+        .show_menu_on_left_click(false)
+        .icon_as_template(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "tray-show-window" => reveal_any_window(app),
+            "tray-new-window" => {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = create_app_window(handle, None, None).await;
+                });
+            }
+            "tray-reload-window" => {
+                if let Some((_, window)) = app.webview_windows().iter().next() {
+                    let _ = window.reload();
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+            "tray-check-updates" => check_updates_message(app.clone()),
+            "tray-quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                reveal_any_window(&tray.app_handle());
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+
+    builder.build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -1620,25 +1807,34 @@ pub fn run() {
                 )?;
             }
 
-            // 设置 macOS Dock 菜单
+            // 设置 macOS 原生应用菜单与状态栏菜单
             #[cfg(target_os = "macos")]
             {
-                use tauri::menu::MenuEvent;
-
-                let new_window_item = MenuItem::with_id(app, "new-window", "新建窗口", true, Some("CmdOrCtrl+N"))?;
-                let dock_menu = Menu::with_items(app, &[&new_window_item])?;
-
-                // 使用 app.set_menu 而不是 set_dock_menu
-                app.set_menu(dock_menu)?;
-
-                // 监听菜单事件
                 let app_handle = app.handle().clone();
+                let app_menu = build_native_app_menu(&app_handle)?;
+                app.set_menu(app_menu)?;
+                install_tray(&app_handle)?;
+
                 app.on_menu_event(move |_app, event: MenuEvent| {
-                    if event.id() == "new-window" {
-                        let handle = app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let _ = create_app_window(handle, None, None).await;
-                        });
+                    match event.id().as_ref() {
+                        "new-window" => {
+                            let handle = app_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = create_app_window(handle, None, None).await;
+                            });
+                        }
+                        "show-all-windows" => reveal_any_window(&app_handle),
+                        "reload-window" => {
+                            if let Some((_, window)) = app_handle.webview_windows().iter().next() {
+                                let _ = window.reload();
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "check-updates" => check_updates_message(app_handle.clone()),
+                        "force-quit-app" => app_handle.exit(0),
+                        _ => {}
                     }
                 });
             }
@@ -2008,4 +2204,3 @@ mod tests {
         assert!(!is_sensitive_for_preview(Path::new("/Users/x/script.sh")));
     }
 }
-

@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { Terminal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { emitTo, listen } from '@tauri-apps/api/event';
-import { Menu, MenuItem, PredefinedMenuItem, Submenu } from '@tauri-apps/api/menu';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { load } from '@tauri-apps/plugin-store';
 import Sidebar from './components/Sidebar';
@@ -459,63 +458,6 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [tabs.length, view]); // 需要感知 tabs 变化
-
-  useEffect(() => {
-    let disposed = false;
-
-    async function setupAppMenu() {
-      try {
-        const appMenu = await Menu.new({
-          items: [
-            await Submenu.new({
-              text: '文件',
-              items: [
-                await MenuItem.new({
-                  text: '新建窗口',
-                  accelerator: 'CmdOrCtrl+N',
-                  action: () => createNewWindow(),
-                }),
-                await MenuItem.new({
-                  text: '关闭标签页',
-                  accelerator: 'CmdOrCtrl+W',
-                  action: () => { handleCloseTab(view); },
-                }),
-                await PredefinedMenuItem.new({ item: 'Separator' }),
-                await PredefinedMenuItem.new({ text: '关闭窗口', item: 'CloseWindow' }),
-              ],
-            }),
-            await Submenu.new({
-              text: '编辑',
-              items: [
-                await PredefinedMenuItem.new({ item: 'Undo' }),
-                await PredefinedMenuItem.new({ item: 'Redo' }),
-                await PredefinedMenuItem.new({ item: 'Separator' }),
-                await PredefinedMenuItem.new({ item: 'Cut' }),
-                await PredefinedMenuItem.new({ item: 'Copy' }),
-                await PredefinedMenuItem.new({ item: 'Paste' }),
-                await PredefinedMenuItem.new({ item: 'SelectAll' }),
-              ],
-            }),
-            await Submenu.new({
-              text: '窗口',
-              items: [
-                await PredefinedMenuItem.new({ item: 'Minimize' }),
-                await PredefinedMenuItem.new({ item: 'Fullscreen' }),
-                await PredefinedMenuItem.new({ item: 'BringAllToFront' }),
-              ],
-            }),
-          ],
-        });
-
-        if (!disposed) await appMenu.setAsAppMenu();
-      } catch {
-        // Browser/dev-server preview does not expose the native menu API.
-      }
-    }
-
-    setupAppMenu();
-    return () => { disposed = true; };
-  }, []); // createNewWindow 是稳定的，不需要作为依赖
 
   const handleCloseTab = (id: string) => {
     if (tabs.length === 1) {

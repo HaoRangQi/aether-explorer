@@ -1,6 +1,6 @@
 # 07 桌面壳与文件展示体验 (Desktop-Shell-File-Experience)
 
-**状态**: ✅  **首次落地**: [2026-05-15]  **最近更新**: [2026-05-15]  **域**: 桌面 app 启动、系统目录语义、真实文件图标、网格展示与文件状态细节
+**状态**: ✅  **首次落地**: [2026-05-15]  **最近更新**: [2026-05-21]  **域**: 桌面 app 启动、系统目录语义、真实文件图标、网格展示与文件状态细节
 
 ← 返回 [索引](./README.md)
 
@@ -19,6 +19,8 @@
 | 多媒体网格 | 图片 / 视频卡片尺寸固定偏大 | 默认跟随普通网格，“更多”里可独立调宽高 | 默认不破坏密度，高级需求保留控制权 |
 | 隐藏文件 | 显示隐藏文件时与普通文件完全同色 | `.` 开头文件名与元信息置灰 | 用户能快速区分系统/隐藏项 |
 | 外置磁盘弹出 | 点击弹出图标会冒泡进入目录 | 弹出按钮隔离 pointer/mouse/click/doubleClick 事件 | 图标按钮应执行弹出，不应触发行导航 |
+| 原生菜单兜底 | 顶部菜单由前端设置，页面卡死时不可用，状态栏菜单缺失 | Rust 原生层安装 app menu + status item，提供显示窗口/新建/重载/检查更新/退出 | 救场能力必须脱离 React 生命周期 |
+| 受保护目录访问 | 进入 `Downloads/Documents/Desktop` 直接读目录，开发/未签名环境容易连环触发 TCC 弹框 | 先显示应用内继续访问门禁；成功读取后在 session 内记住根目录；权限失败后阻断同根目录重复撞系统 | 文件管理器需要尊重 macOS 权限模型，但不能把用户困在重复弹框里 |
 
 **不变量：**
 
@@ -26,6 +28,8 @@
 2. `.app` 图标缓存是性能优化，不是文件数据源；缓存失败时仍应展示基础文件项。
 3. `npm run dev` 必须启动桌面 app 壳，并保证 Tauri `devUrl` 与 Vite 实际监听端口一致。
 4. 隐藏文件只是视觉弱化，不改变选择、右键、打开、拖拽等文件操作语义。
+5. 状态栏/应用菜单的救场动作必须在 Rust 原生层完成，不能依赖前端能正常响应。
+6. 受保护目录的用户确认是会话级体验策略，不是权限真相；真正的权限结果仍以 `list_directory` 返回为准。
 
 ## 07.3 实现拓扑
 
@@ -47,7 +51,17 @@ Rust backend
    ├─ find_app_icon_path(.app/Contents/Info.plist)
    ├─ convert_icns_to_png()
    ├─ export_workspace_app_icon()
+   ├─ build_native_app_menu()
+   ├─ install_tray()
    └─ ~/Library/Caches/Aether Explorer/AppIcons/*.png
+
+Protected directory flow
+   currentPath
+      ↓ match protectedRoots
+   consent gate (sessionStorage)
+      ├─ not approved → app-level "继续访问"
+      ├─ approved     → listDirectory()
+      └─ blocked      → local PermissionDenied panel, no repeated system hit
 ```
 
 ## 07.4 关键文件 & 行号
@@ -65,8 +79,16 @@ Rust backend
 | `src-tauri/src/lib.rs` | `:241` | `convert_icns_to_png()` 将 `.icns` 转为前端可用 PNG |
 | `src-tauri/src/lib.rs` | `:257` | `resolve_app_icon_png()` 统一 icon 解析、缓存和 fallback |
 | `src-tauri/src/lib.rs` | `:285` | Tauri command `get_app_icon` |
+| `src-tauri/src/lib.rs` | `:344` | `classify_directory_read_error()` 将目录读取错误分型给前端 |
+| `src-tauri/src/lib.rs` | `:1655` | `build_native_app_menu()` 安装 macOS 原生应用菜单 |
+| `src-tauri/src/lib.rs` | `:1726` | `install_tray()` 安装状态栏菜单与左键显示窗口行为 |
+| `src-tauri/src/lib.rs` | `:1810` | Tauri setup 中设置原生 app menu + status item |
 | `src/api/filesystem.ts` | `:51` | 前端 `getAppIcon(path)` API |
 | `src/components/ExplorerView.tsx` | `:211` | `hydrateAppIcons()` 异步补齐 app 图标 |
+| `src/components/ExplorerView.tsx` | `:73` | `PROTECTED_ROOT_APPROVALS_KEY` 定义会话级受保护目录确认缓存 |
+| `src/components/ExplorerView.tsx` | `:326` | `protectedRoots` 枚举下载、文稿、桌面、iCloud Drive、废纸篓 |
+| `src/components/ExplorerView.tsx` | `:882` | 目录加载前执行受保护目录门禁和 blocked 去抖 |
+| `src/components/ExplorerView.tsx` | `:3872` | 受保护目录继续访问提示 UI |
 | `src/components/ExplorerView.tsx` | `:473` | `desktop/home` 视图固定映射到系统 `homeDir` |
 | `src/components/ExplorerView.tsx` | `:1697` | 隐藏文件识别与置灰 class |
 | `src/components/ExplorerView.tsx` | `:1828` | 多媒体网格尺寸默认跟随普通网格，支持独立配置 |
@@ -93,6 +115,9 @@ Rust backend
 | 启动桌面壳时端口冲突 | Tauri 静态 devUrl 与 Vite 实际端口可能不一致 | dev 脚本先探测端口，再生成临时 config 同步两边 |
 | 点击外置磁盘弹出图标却进入磁盘目录 | 按钮事件冒泡到整行 `onClick` | 弹出按钮吞掉 pointer/mouse/click/doubleClick 事件 |
 | 显示隐藏文件后视觉上无法区分 | 隐藏文件和普通文件共用名称 class | `.` 开头项目名称与元信息置灰 |
+| 页面卡死后无法退出或刷新 | 菜单由前端安装，React 卡住时菜单动作也失效 | 将 app menu / status item 移到 Rust 原生层，保留重新加载与退出 |
+| 每进受保护目录一层都弹权限 | 进入目录即调用 `listDirectory()`，失败后没有会话级去抖 | 受保护根目录先应用内确认；成功读取写入 sessionStorage；权限失败加入 blocked 列表 |
+| 路径不存在也提示完全磁盘访问 | 后端错误字符串只有“无法读取目录”，前端按模糊文本判断 | 后端返回 `PermissionDenied` / `NotFound` / `ReadDirFailed` 前缀，前端分型渲染 |
 
 ## 07.8 SOP
 
@@ -122,6 +147,18 @@ npm run dev
 2. 重启 app，首个标签应进入默认主页。
 3. 点击侧栏“主目录”，必须进入系统用户目录，而不是 app 默认主页。
 
+### 验证状态栏菜单兜底
+
+1. 启动 app 后查看 macOS 状态栏中的 Aether Explorer 图标。
+2. 使用菜单项“显示主窗口 / 新建窗口 / 重新加载窗口 / 检查更新 / 退出 Aether Explorer”。
+3. 页面无响应时优先用“重新加载窗口”；无法恢复时用状态栏“退出 Aether Explorer”。
+
+### 验证受保护目录门禁
+
+1. 首次进入“下载 / 文稿 / 桌面”等目录时，应先看到应用内“继续访问”提示，不应启动时自动弹系统权限。
+2. 点“继续访问”并成功读取后，同一 app 会话再次进入该根目录或其子目录，不应重复提示。
+3. 如果返回 `PermissionDenied`，同一根目录后续导航应显示本地 blocked 提示，而不是每层继续撞系统权限。
+
 ## 07.9 经验教训
 
 1. 桌面文件管理器不能用“网页列表”的心态做文件展示。应用程序、隐藏文件、外置磁盘这些系统语义，如果 UI 不跟随，会直接显得不可信。
@@ -129,6 +166,8 @@ npm run dev
 3. “主页”这个词同时指 app 首屏和系统 home 时会制造长期歧义。产品文案要把导航目标和启动策略拆开命名。
 4. Tauri dev 不是纯前端 dev server。端口自动避让必须同步写入 Tauri `devUrl`，只让 Vite 自动换端口会让桌面壳连错目标。
 5. 小图标按钮嵌在可点击行内时，要把 pointer/mouse/click/doubleClick 都按交互意图隔离；只处理 `onClick` 不足以覆盖双击和按下态。
+6. macOS TCC 弹框不能用“多试几次”解决。开发/未签名环境尤其容易出现身份不稳定，产品层面至少要做到启动不主动撞受保护目录、失败后不重复撞同一根目录。
+7. 状态栏菜单属于桌面壳保命通道，不该在 React 里安装；前端挂死时能用 Rust 原生菜单退出，比任何页面内按钮都重要。
 
 ## 07.10 未来扩展
 
