@@ -1,6 +1,6 @@
 [package]
 name = "aether-explorer"
-version = "0.3.9"
+version = "0.3.10"
 description = "A premium macOS file manager with glassmorphic UI"
 authors = ["Aether Team"]
 license = "MIT"
@@ -19,7 +19,7 @@ tauri-build = { version = "2", features = [] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "devtools"] }
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "devtools", "tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-store = "2"
 tauri-plugin-dialog = "2"
