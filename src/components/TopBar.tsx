@@ -292,15 +292,6 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
               </div>
             );
           })}
-          <button
-            type="button"
-            onClick={onCreateWindow}
-            className="shrink-0 p-1.5 rounded-full text-on-surface/45 hover:text-primary hover:bg-primary/15 transition-colors"
-            title={t('tooltips.createWindow')}
-            data-no-drag
-          >
-            <Plus className="w-4 h-4" />
-          </button>
         </div>
         <div
           className="w-6 self-stretch shrink-0 cursor-grab active:cursor-grabbing"

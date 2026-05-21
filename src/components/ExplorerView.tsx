@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw, History } from 'lucide-react';
+import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw, History, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { safeShellOpen } from '../lib/url-guard';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -16,6 +16,7 @@ import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAct
 import { QUICK_ACCESS } from '../constants';
 import AIRenamePanel from './AIRenamePanel';
 import AIOpsHistory from './AIOpsHistory';
+import Tooltip from './Tooltip';
 import CrossWindowDropBanner from './CrossWindowDropBanner';
 
 const TAG_COLORS: Record<string, string> = {
@@ -2036,6 +2037,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleDoubleClick = (file: FileItem) => {
+    if (renamingFile?.id === file.id) return;
     setLastActivatedFileId(file.id);
     setPulseFileId(file.id);
     if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
@@ -2172,9 +2174,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable
-          onMouseDown={(e) => handleFileMouseDown(e, file)}
-          onDragStart={(e) => handleDragStart(e, file)}
+          draggable={renamingFile?.id !== file.id}
+          onMouseDown={(e) => { if (renamingFile?.id === file.id) return; handleFileMouseDown(e, file); }}
+          onDragStart={(e) => { if (renamingFile?.id === file.id) { e.preventDefault(); return; } handleDragStart(e, file); }}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
           onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
           onDragEnd={handleDragEnd}
@@ -2223,7 +2225,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             {renamingFile?.id === file.id ? (
               <input value={renameInput} onChange={e => setRenameInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') handleRenameSubmit(); if (e.key === 'Escape') handleRenameCancel(); }}
-                onBlur={handleRenameSubmit} autoFocus onClick={e => e.stopPropagation()}
+                onBlur={handleRenameSubmit}
+                onFocus={e => e.target.select()}
+                onMouseDown={e => e.stopPropagation()}
+                onClick={e => e.stopPropagation()}
+                autoFocus
                 className={`${config.text} font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none min-w-0 flex-1`} />
             ) : (
             <span className={`${config.text} select-none font-black ${fileNameClass} truncate pr-4 transition-all duration-300`}>{formattedName}</span>
@@ -2260,9 +2266,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable
-          onMouseDown={(e) => handleFileMouseDown(e, file)}
-          onDragStart={(e) => handleDragStart(e, file)}
+          draggable={renamingFile?.id !== file.id}
+          onMouseDown={(e) => { if (renamingFile?.id === file.id) return; handleFileMouseDown(e, file); }}
+          onDragStart={(e) => { if (renamingFile?.id === file.id) { e.preventDefault(); return; } handleDragStart(e, file); }}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
           onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
           onDragEnd={handleDragEnd}
@@ -2316,9 +2322,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable
-          onMouseDown={(e) => handleFileMouseDown(e, file)}
-          onDragStart={(e) => handleDragStart(e, file)}
+          draggable={renamingFile?.id !== file.id}
+          onMouseDown={(e) => { if (renamingFile?.id === file.id) return; handleFileMouseDown(e, file); }}
+          onDragStart={(e) => { if (renamingFile?.id === file.id) { e.preventDefault(); return; } handleDragStart(e, file); }}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
           onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
           onDragEnd={handleDragEnd}
@@ -3047,6 +3053,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleNewFile = async () => {
+    setActiveDropdown(null);
     const baseName = '新建文件.txt';
     const existing = new Set(files.map(file => file.name));
     let name = baseName;
@@ -3064,6 +3071,27 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         onSelectFiles([created.id]);
         setRenamingFile(created);
         setRenameInput(created.name);
+        // 精确定位：等 DOM 更新后找到元素滚动，虚拟滚动时可能需要多次尝试
+        const scrollToCreated = (attempts = 0) => {
+          const el = document.querySelector(`[data-id="${created.id}"]`);
+          if (el) {
+            el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            return;
+          }
+          // 虚拟滚动时元素可能不在 DOM 里，用 index 计算偏移直接滚
+          if (scrollContainerRef.current && attempts === 0) {
+            // 找新文件在当前文件列表中的位置（files 已更新）
+            const idx = entries.findIndex(f => f.path === createdPath);
+            if (idx >= 0) {
+              const offset = idx * listItemHeight;
+              scrollContainerRef.current.scrollTo({ top: offset, behavior: 'auto' });
+            }
+          }
+          if (attempts < 5) {
+            requestAnimationFrame(() => scrollToCreated(attempts + 1));
+          }
+        };
+        requestAnimationFrame(() => scrollToCreated());
       }
       showFeedback(`已创建文件：${name}`);
     } catch (e) {
@@ -3084,6 +3112,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleNewFolder = async () => {
+    setActiveDropdown(null);
     const baseName = '新建文件夹';
     const existing = new Set(files.map(file => file.name));
     let name = baseName;
@@ -3101,6 +3130,23 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         onSelectFiles([created.id]);
         setRenamingFile(created);
         setRenameInput(created.name);
+        const scrollToCreated = (attempts = 0) => {
+          const el = document.querySelector(`[data-id="${created.id}"]`);
+          if (el) {
+            el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            return;
+          }
+          if (scrollContainerRef.current && attempts === 0) {
+            const idx = entries.findIndex(f => f.path === createdPath);
+            if (idx >= 0) {
+              scrollContainerRef.current.scrollTo({ top: idx * listItemHeight, behavior: 'auto' });
+            }
+          }
+          if (attempts < 5) {
+            requestAnimationFrame(() => scrollToCreated(attempts + 1));
+          }
+        };
+        requestAnimationFrame(() => scrollToCreated());
       }
       showFeedback(`已创建文件夹：${name}`);
     } catch (e) {
@@ -3465,68 +3511,86 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   
                   {/* Action Capsule */}
           <div className="flex items-center bg-panel-custom p-1 rounded-xl border border-transparent mr-2 relative" ref={dropdownRef} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => setActiveDropdown(activeDropdown === 'upload' ? null : 'upload')}
-                      className={`p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'upload' ? 'bg-hover-custom text-icon' : 'text-on-surface/60'}`}
-                      title={t('tooltips.import')}
-                    >
-                      <Upload className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={onStartTransfer}
-                      className="p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
-                      title={t('tooltips.transferManager')}
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleOpenTerminal(lastSelectedFile)}
-                      className="p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
-                      title={t('tooltips.openInTerminal')}
-                    >
-                      <Terminal className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setActiveDropdown(activeDropdown === 'tag' ? null : 'tag')}
-                      className={`p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'tag' ? 'bg-hover-custom text-icon' : 'text-on-surface/60'}`}
-                      title={t('tooltips.tags')}
-                    >
-                      <Tag className="w-4 h-4" />
-                    </button>
-                    <button 
-                      onClick={() => setActiveDropdown(activeDropdown === 'group' ? null : 'group')}
-                      className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'group' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
-                      title={t('explorer.groupBy', '分组')}
-                    >
-                      <Layers3 className="w-4 h-4" />
-                    </button>
-                    <button 
-                      onClick={() => onThemeChange({ ...theme, showPreviewPanel: !theme.showPreviewPanel })}
-                      className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${theme.showPreviewPanel ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
-                      title={theme.showPreviewPanel ? t('tooltips.hideInspector', '隐藏简介') : t('tooltips.showInspector', '显示简介')}
-                    >
-                      {theme.showPreviewPanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
-                    </button>
-                    <button 
-                      onClick={() => onThemeChange({ ...theme, showHiddenFiles: !theme.showHiddenFiles })}
-                      className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${theme.showHiddenFiles ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
-                      title={theme.showHiddenFiles ? t('tooltips.hideHiddenFiles', '隐藏隐藏文件') : t('tooltips.showHiddenFiles', '显示隐藏文件')}
-                    >
-                      {theme.showHiddenFiles ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                    <button
-                      onClick={() => refreshCurrentDir(true)}
-                      className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
-                      title={t('tooltips.refresh')}
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setActiveDropdown(activeDropdown === 'more' ? null : 'more')}
-                      className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'more' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
-                    >
-                      <MoreHorizontal className="w-4 h-4" />
-                    </button>
+                    <Tooltip label={t('tooltips.import', '导入文件')}>
+                      <button
+                        onClick={() => setActiveDropdown(activeDropdown === 'upload' ? null : 'upload')}
+                        className={`p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'upload' ? 'bg-hover-custom text-icon' : 'text-on-surface/60'}`}
+                      >
+                        <Upload className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label={t('tooltips.transferManager', '传输管理器')}>
+                      <button
+                        onClick={onStartTransfer}
+                        className="p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label={t('tooltips.openInTerminal', '在终端打开')}>
+                      <button
+                        onClick={() => handleOpenTerminal(lastSelectedFile)}
+                        className="p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
+                      >
+                        <Terminal className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label={t('tooltips.tags', '标签')}>
+                      <button
+                        onClick={() => setActiveDropdown(activeDropdown === 'tag' ? null : 'tag')}
+                        className={`p-1.5 hover:bg-hover-custom rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'tag' ? 'bg-hover-custom text-icon' : 'text-on-surface/60'}`}
+                      >
+                        <Tag className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label={t('explorer.groupBy', '分组')}>
+                      <button
+                        onClick={() => setActiveDropdown(activeDropdown === 'group' ? null : 'group')}
+                        className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'group' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
+                      >
+                        <Layers3 className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label={theme.showPreviewPanel ? t('tooltips.hideInspector', '隐藏简介') : t('tooltips.showInspector', '显示简介')}>
+                      <button
+                        onClick={() => onThemeChange({ ...theme, showPreviewPanel: !theme.showPreviewPanel })}
+                        className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${theme.showPreviewPanel ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
+                      >
+                        {theme.showPreviewPanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
+                      </button>
+                    </Tooltip>
+                    <Tooltip label={theme.showHiddenFiles ? t('tooltips.hideHiddenFiles', '隐藏隐藏文件') : t('tooltips.showHiddenFiles', '显示隐藏文件')}>
+                      <button
+                        onClick={() => onThemeChange({ ...theme, showHiddenFiles: !theme.showHiddenFiles })}
+                        className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${theme.showHiddenFiles ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
+                      >
+                        {theme.showHiddenFiles ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </Tooltip>
+                    <Tooltip label="新建窗口 (⌘N)">
+                      <button
+                        onClick={() => invoke('create_app_window', { initialPath: currentPath || undefined, tabLabel: undefined }).catch(() => {})}
+                        className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label={t('tooltips.refresh', '刷新')}>
+                      <button
+                        onClick={() => refreshCurrentDir(true)}
+                        className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label="更多">
+                      <button
+                        onClick={() => setActiveDropdown(activeDropdown === 'more' ? null : 'more')}
+                        className={`p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 ${activeDropdown === 'more' ? 'bg-primary/20 text-primary' : 'text-on-surface/60'}`}
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
 
                     {/* Simple Dropdown Placeholders */}
                     <AnimatePresence>
@@ -3758,7 +3822,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 />
               )}
               {displayMode === 'grid' && currentLevelFiles.length > 0 && (
-                <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-32 auto-scrollbar">
+                <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-32 custom-scrollbar">
                   <div className="space-y-8">
                     {(Object.entries(groupedFiles) as [string, FileItem[]][]).map(([groupName, files]) => (
                       <div key={groupName} className="space-y-4">
@@ -3804,7 +3868,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               )}
 
               {displayMode === 'list' && currentLevelFiles.length > 0 && (
-                <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-32 auto-scrollbar">
+                <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-32 custom-scrollbar">
                   <div className="min-w-[760px] flex flex-col">
                     {/* Table Header */}
                     <div className="sticky top-0 z-20 shrink-0 flex items-center px-4 py-3 pr-4 text-[12px] font-black text-on-surface select-none uppercase tracking-[0.1em] border-b border-primary/20 mb-2 bg-primary/10 rounded-t-xl backdrop-blur-xl">
@@ -4021,7 +4085,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               <p className="text-[11px] text-primary font-bold mt-1 opacity-80">{lastSelectedFile ? getFileTypeLabel(lastSelectedFile.type) : '文件夹'}</p>
             </div>
 
-            <div className="flex-1 p-5 space-y-5 overflow-y-auto auto-scrollbar">
+            <div className="flex-1 p-5 space-y-5 overflow-y-auto custom-scrollbar">
                {selectedFileIds.length > 1 && (
                  <div className="p-4 bg-primary/10 rounded-2xl border border-primary/20 text-center">
                     <p className="text-[14px] font-bold text-primary">{selectedFileIds.length} {t('explorer.itemsSelectedLabel', '个项目已选中')}</p>
