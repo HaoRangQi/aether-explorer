@@ -334,10 +334,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     ];
   }, [homeDir]);
 
+  const getProtectedRootForPath = useCallback((path: string) => {
+    if (!path) return null;
+    return protectedRoots.find(root => path === root.path || path.startsWith(`${root.path}/`)) || null;
+  }, [protectedRoots]);
+
   const protectedRoot = useMemo(() => {
-    if (!currentPath) return null;
-    return protectedRoots.find(root => currentPath === root.path || currentPath.startsWith(`${root.path}/`)) || null;
-  }, [currentPath, protectedRoots]);
+    return getProtectedRootForPath(currentPath);
+  }, [currentPath, getProtectedRootForPath]);
 
   const isProtectedPathApproved = protectedRoot
     ? approvedProtectedRoots.includes(protectedRoot.path)
@@ -1100,18 +1104,28 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   }, [view]);
   
   const displayedFiles = isFavoritesRoot ? favoriteFiles : isRecentRoot ? recentFiles : isTagRoot ? taggedFiles : files;
-  const filesWithAppIcons = useMemo(() => displayedFiles.map(file => (
-    file.type === 'application' && appIconMap[file.path]
+  const filesWithDeferredProtectedPreviews = useMemo(() => displayedFiles.map(file => {
+    if (!getProtectedRootForPath(file.path)) return file;
+    if (file.type === 'image' || file.type === 'application') {
+      return { ...file, thumbnail: undefined };
+    }
+    return file;
+  }), [displayedFiles, getProtectedRootForPath]);
+  const filesWithAppIcons = useMemo(() => filesWithDeferredProtectedPreviews.map(file => (
+    file.type === 'application' && !getProtectedRootForPath(file.path) && appIconMap[file.path]
       ? { ...file, thumbnail: appIconMap[file.path] }
       : file
-  )), [displayedFiles, appIconMap]);
+  )), [filesWithDeferredProtectedPreviews, appIconMap, getProtectedRootForPath]);
 
   useEffect(() => {
-    hydrateAppIcons(displayedFiles);
-  }, [displayedFiles, appIconMap]);
+    hydrateAppIcons(filesWithDeferredProtectedPreviews.filter(file => !getProtectedRootForPath(file.path)));
+  }, [filesWithDeferredProtectedPreviews, appIconMap, getProtectedRootForPath]);
 
   const selectedFiles = useMemo(() => filesWithAppIcons.filter(f => selectedFileIds.includes(f.id)), [selectedFileIds, filesWithAppIcons]);
   const lastSelectedFile = useMemo(() => filesWithAppIcons.find(f => f.id === selectedFileIds[selectedFileIds.length - 1]), [selectedFileIds, filesWithAppIcons]);
+  const selectedFileAutoPreviewDeferred = useMemo(() => (
+    lastSelectedFile ? Boolean(getProtectedRootForPath(lastSelectedFile.path)) : false
+  ), [lastSelectedFile, getProtectedRootForPath]);
   const isAdminContextMenuEmpty = useMemo(() => !(theme.contextMenuExtensions || []).some(ext => ext.enabled), [theme.contextMenuExtensions]);
   const enabledContextExtensions = useMemo(() => (theme.contextMenuExtensions || []).filter(ext => ext.enabled), [theme.contextMenuExtensions]);
 
@@ -2623,6 +2637,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     let cancelled = false;
     setImagePreviewFailed(false);
     setPdfPreviewFailed(false);
+    if (f && getProtectedRootForPath(f.path)) {
+      setTextPreview('');
+      setTextPreviewLoading(false);
+      return () => { cancelled = true; };
+    }
     if (f && (f.type === 'text' || f.type === 'code')) {
       setTextPreviewLoading(true);
       invoke<string>('read_text_preview', { path: f.path })
@@ -2640,7 +2659,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       setTextPreviewLoading(false);
     }
     return () => { cancelled = true; };
-  }, [lastSelectedFile]);
+  }, [lastSelectedFile, getProtectedRootForPath]);
 
   const pathSegments = useMemo(() => {
     if (!currentPath) return [];
@@ -4175,6 +4194,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 {!lastSelectedFile ? (
                   <div className="w-full h-full flex items-center justify-center">
                     {getFileIcon('folder')}
+                  </div>
+                ) : selectedFileAutoPreviewDeferred ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-[12px] text-on-surface/35 font-bold leading-relaxed">
+                    {getFileIcon(lastSelectedFile.type, lastSelectedFile.thumbnail)}
+                    受保护目录中已关闭自动预览，避免重复触发 macOS 权限请求
                   </div>
                 ) : lastSelectedFile.type === 'image' && lastSelectedFile.thumbnail && !imagePreviewFailed ? (
                   <img

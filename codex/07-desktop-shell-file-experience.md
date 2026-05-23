@@ -1,6 +1,6 @@
 # 07 桌面壳与文件展示体验 (Desktop-Shell-File-Experience)
 
-**状态**: ✅  **首次落地**: [2026-05-15]  **最近更新**: [2026-05-21]  **域**: 桌面 app 启动、系统目录语义、真实文件图标、网格展示与文件状态细节
+**状态**: ✅  **首次落地**: [2026-05-15]  **最近更新**: [2026-05-23]  **域**: 桌面 app 启动、系统目录语义、真实文件图标、网格展示与文件状态细节
 
 ← 返回 [索引](./README.md)
 
@@ -21,6 +21,7 @@
 | 外置磁盘弹出 | 点击弹出图标会冒泡进入目录 | 弹出按钮隔离 pointer/mouse/click/doubleClick 事件 | 图标按钮应执行弹出，不应触发行导航 |
 | 原生菜单兜底 | 顶部菜单由前端设置，页面卡死时不可用，状态栏菜单缺失 | Rust 原生层安装 app menu + status item，提供显示窗口/新建/重载/检查更新/退出 | 救场能力必须脱离 React 生命周期 |
 | 受保护目录访问 | 进入 `Downloads/Documents/Desktop` 直接读目录，开发/未签名环境容易连环触发 TCC 弹框 | 先显示应用内继续访问门禁；成功读取后在 session 内记住根目录；权限失败后阻断同根目录重复撞系统 | 文件管理器需要尊重 macOS 权限模型，但不能把用户困在重复弹框里 |
+| 受保护目录自动预览 | 已通过目录门禁进入根目录后，图片缩略图、应用图标和预览面板仍会继续读子路径 | 受保护目录中关闭自动缩略图 / 自动预览，仅保留显式打开与 Quick Look | 降低 WebView 和附加 I/O 对 TCC 的重复命中，优先保证“能稳定浏览目录” |
 
 **不变量：**
 
@@ -30,6 +31,7 @@
 4. 隐藏文件只是视觉弱化，不改变选择、右键、打开、拖拽等文件操作语义。
 5. 状态栏/应用菜单的救场动作必须在 Rust 原生层完成，不能依赖前端能正常响应。
 6. 受保护目录的用户确认是会话级体验策略，不是权限真相；真正的权限结果仍以 `list_directory` 返回为准。
+7. 受保护目录里禁止自动内容预览；所有额外文件读取都必须视为可能再次触发 TCC。
 
 ## 07.3 实现拓扑
 
@@ -62,6 +64,12 @@ Protected directory flow
       ├─ not approved → app-level "继续访问"
       ├─ approved     → listDirectory()
       └─ blocked      → local PermissionDenied panel, no repeated system hit
+
+Auto preview guard
+   displayedFiles / lastSelectedFile
+      ↓ match protectedRoots by item path
+   disable auto thumbnail / app icon / text+pdf preview
+      └─ keep explicit open / Quick Look available
 ```
 
 ## 07.4 关键文件 & 行号
@@ -87,8 +95,12 @@ Protected directory flow
 | `src/components/ExplorerView.tsx` | `:211` | `hydrateAppIcons()` 异步补齐 app 图标 |
 | `src/components/ExplorerView.tsx` | `:73` | `PROTECTED_ROOT_APPROVALS_KEY` 定义会话级受保护目录确认缓存 |
 | `src/components/ExplorerView.tsx` | `:326` | `protectedRoots` 枚举下载、文稿、桌面、iCloud Drive、废纸篓 |
+| `src/components/ExplorerView.tsx` | `:337` | `getProtectedRootForPath()` 统一按文件路径判断是否属于受保护根目录 |
 | `src/components/ExplorerView.tsx` | `:882` | 目录加载前执行受保护目录门禁和 blocked 去抖 |
+| `src/components/ExplorerView.tsx` | `:1107` | 受保护目录文件项关闭自动缩略图与 app 图标补齐 |
+| `src/components/ExplorerView.tsx` | `:2637` | 受保护目录选中文件时跳过自动文本预览读取 |
 | `src/components/ExplorerView.tsx` | `:3872` | 受保护目录继续访问提示 UI |
+| `src/components/ExplorerView.tsx` | `:4195` | 预览面板显示“自动预览已关闭”的占位说明 |
 | `src/components/ExplorerView.tsx` | `:473` | `desktop/home` 视图固定映射到系统 `homeDir` |
 | `src/components/ExplorerView.tsx` | `:1697` | 隐藏文件识别与置灰 class |
 | `src/components/ExplorerView.tsx` | `:1828` | 多媒体网格尺寸默认跟随普通网格，支持独立配置 |
@@ -117,6 +129,7 @@ Protected directory flow
 | 显示隐藏文件后视觉上无法区分 | 隐藏文件和普通文件共用名称 class | `.` 开头项目名称与元信息置灰 |
 | 页面卡死后无法退出或刷新 | 菜单由前端安装，React 卡住时菜单动作也失效 | 将 app menu / status item 移到 Rust 原生层，保留重新加载与退出 |
 | 每进受保护目录一层都弹权限 | 进入目录即调用 `listDirectory()`，失败后没有会话级去抖 | 受保护根目录先应用内确认；成功读取写入 sessionStorage；权限失败加入 blocked 列表 |
+| 已进入受保护目录后仍逐层弹权限 | 自动缩略图、应用图标或预览面板继续按子路径读文件，绕过了目录门禁 | 受保护目录中禁用自动图片 / app / 文本 / PDF 预览，只保留用户显式触发的读取 |
 | 路径不存在也提示完全磁盘访问 | 后端错误字符串只有“无法读取目录”，前端按模糊文本判断 | 后端返回 `PermissionDenied` / `NotFound` / `ReadDirFailed` 前缀，前端分型渲染 |
 
 ## 07.8 SOP
@@ -158,6 +171,7 @@ npm run dev
 1. 首次进入“下载 / 文稿 / 桌面”等目录时，应先看到应用内“继续访问”提示，不应启动时自动弹系统权限。
 2. 点“继续访问”并成功读取后，同一 app 会话再次进入该根目录或其子目录，不应重复提示。
 3. 如果返回 `PermissionDenied`，同一根目录后续导航应显示本地 blocked 提示，而不是每层继续撞系统权限。
+4. 在这些目录中选中图片、文本、PDF 或 `.app` 时，右侧面板应显示“自动预览已关闭”的说明，而不是再次触发系统权限弹框。
 
 ## 07.9 经验教训
 
@@ -168,6 +182,7 @@ npm run dev
 5. 小图标按钮嵌在可点击行内时，要把 pointer/mouse/click/doubleClick 都按交互意图隔离；只处理 `onClick` 不足以覆盖双击和按下态。
 6. macOS TCC 弹框不能用“多试几次”解决。开发/未签名环境尤其容易出现身份不稳定，产品层面至少要做到启动不主动撞受保护目录、失败后不重复撞同一根目录。
 7. 状态栏菜单属于桌面壳保命通道，不该在 React 里安装；前端挂死时能用 Rust 原生菜单退出，比任何页面内按钮都重要。
+8. “目录可读”不等于“目录里的每个文件都能随便预览”。文件管理器只要做了自动缩略图、自动 iframe、自动文本读取，就等于额外引入一层权限触发面。
 
 ## 07.10 未来扩展
 
