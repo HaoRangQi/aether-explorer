@@ -1,358 +1,187 @@
-# Aether Explorer 待办与路线
+# Aether Explorer 路线图
 
-> 最后整理：2026-05-17
-> 维护规则：每完成一项划 `[x]`；新增按优先级插入对应区块；引用文档用 `→ docs/X.md`。
-> 优先级标签：🔴 阻塞 / 🟠 必修 / 🟡 改善 / 🟣 长线
+> 最后整理：2026-05-23
+> 定位：macOS 本地优先文件工作台，公益分发，不做商业化，不把 Developer ID 签名 / 公证作为当前路线阻塞项。
+> 维护规则：完成后划 `[x]`；新增任务按阶段插入；涉及设计背景时引用 `docs/`。
 
----
+## 一、当前分支目标
 
-## 一、当前进行中（feat/cross-window-drag）
+当前分支：`codex-fix-review-findings`
 
-| 状态 | 项 | 备注 |
-|------|----|------|
-| ✅ | Aether ↔ Aether 跨窗口拖拽（松手即复制） | commit `71c95b6` |
-| ✅ | 跨窗口拖拽默认动作设置项（复制 / 移动 / 每次询问） | commit `0a65435` |
-| ✅ | Finder → Aether 系统拖入兜底 + overlay 提示 | commit `55d52ad` |
-| ✅ | banner 可见时长加长 + 倒计时进度条（修"一闪就没"） | commit `0a65435` |
-| ✅ | 空格预览改为真开关（默认开） | commit `ae5a46d` |
-| ⚠️ | **底层窗口自动置顶 — 部分有效** | commit `ae5a46d`；详见下条 |
-| ✅ | 默认首页全链路统一为「我的收藏」+ 文案厘清「首页/用户主页」 | commits `29dab7c` `6a9e2d1` `e007d2f` `7b91400` |
-| ✅ | 空白右键「设为首页」一键设当前目录 | commit `83b9ce9` |
-| ✅ | 分栏视图多列横向滚动 + 子文件夹真正展开 | commits `4ebe106` `d0ff36a` |
-| ✅ | 列表视图虚拟滚动修复（两套 list 视图共存陷阱） | commits `4ebe106` `d0ff36a` |
-| ⚠️ | 打开方式子菜单背景跟父菜单不完全统一 | commit `7d969c2`，详见 `codex/scratch.md` |
+- [x] 文件操作安全补强：`replace` 失败恢复、后端文件名校验、解压不覆盖已有文件
+- [x] AI API Key 不再写入 `localStorage`
+- [x] 收窄 `shell` capability，保留实际需要的 `shell.open`
+- [x] 结构化错误基础：Rust 端错误分类，前端统一规范化显示
+- [x] 路线图和功能文档状态对齐
 
-### 🟠 跨窗口拖拽 — 底层窗口置顶仍不可靠
-**现状**：源端 `document.addEventListener('drag')` 节流广播屏幕坐标到 Rust `raise_window_at`，目标端 `onDragEnter` 兜底 `setFocus`。
-**问题**：macOS WebKit 在鼠标离开源窗口的可视区后 **`drag` 事件停止派发**，跨窗口边界恰好失效；目标 `onDragEnter` 在 HTML5 拖拽跨窗口场景下也不稳定。
-**根本修法**（1-2 天）：
-- Rust 端用 `core-graphics` 的 `CGEventTap` 全局监听 mouseMoved，30Hz 轮询坐标，仍调 `raise_window_at`
-- macOS Sequoia 起需要"输入监控"权限 → 首次启用时弹授权框 + 引导
-- 仅在 dragStart→dragEnd 期间开启 EventTap，结束立即停止，避免持久权限占用
-**决策点**：是否引入"输入监控"权限值得**权衡产品定位**；当前实现在"窗口不重叠"场景已能用
+## 二、近期原则
 
----
+1. **不污染主分支**：所有实验和修复都在功能分支完成，验证后再合并。
+2. **用户信任优先**：不丢文件、失败可解释、操作可撤销，比新功能更重要。
+3. **Finder 增强而非替代**：补齐重度用户高频工作流，但不承诺成为默认文件管理器。
+4. **公益分发**：不规划付费墙、订阅、企业版；优先让更多人能安全使用。
+5. **先深后宽**：继续加功能前，先把 `ExplorerView.tsx`、`SettingsView.tsx`、`src-tauri/src/lib.rs` 的浅 Module 拆深。
 
-## 二、🔴 阻塞发版（来自 `docs/RELEASE_AUDIT.md`）
+## 三、P0：信任与安全
 
-- [x] **P0-1** AppleScript / shell 命令注入修复（commit `5388fe5`）
-- [x] **P0-2** `shell.open` 协议白名单（commit `5388fe5`）
-- [x] **P0-3** CSP 配置 + 敏感文件预览黑名单（commit `5388fe5`）
-- [x] **P0-4** `prompt()` 替换为 dialog + 路径 canonicalize（commit `5388fe5`）
-- [x] **P0-5** Updater endpoint 改稳定 URL + 真实 release notes（commit `5388fe5`）
-- [ ] **P0-6** Developer ID 签名 + notarytool；删 README 的 `sudo xattr` 教程（需要 Apple 开发者账号）
-- [ ] **P0-7** 完全磁盘访问真实检测（TCC 状态探针）— 需 P0-6 完成才有意义
+- [x] AppleScript / shell 命令注入修复
+- [x] `shell.open` 协议白名单
+- [x] CSP 配置 + 敏感文件预览黑名单
+- [x] `prompt()` 替换为 dialog + 路径 canonicalize
+- [x] Updater endpoint 加固 + release notes
+- [x] 隐私与外发请求说明：`docs/PRIVACY.md`
+- [x] 文件传输写入临时路径并原子提交；失败 / 取消清理半成品，替换失败可恢复旧目标
+- [x] 解压前检测输出冲突，避免静默覆盖
+- [x] 后端拒绝路径穿透式文件名
+- [x] `prefers-reduced-motion` 第一轮收口：CSS 动画降级、motion/react 遵从系统设置、Loader / 进度动画静态化
+- [x] 结构化错误基础：`PermissionDenied` / `NotFound` / `DiskFull` / `Busy` / `InvalidPath` / `Conflict` / `Cancelled` / `TrashUnsupported` / `Internal`
+- [x] 将剩余 Tauri commands 逐步迁移到结构化错误返回
+- [x] Rust panic hook + 本地日志落盘到 `~/Library/Logs/Aether Explorer/`
+- [x] 设置页诊断入口：复制脱敏诊断信息、打开日志目录、读取最近崩溃日志
+- [x] 设置页诊断入口可打开 Tauri `settings.json` 所在配置文件夹
+- [x] 启动后发现新的崩溃日志时提示查看诊断页
+- [x] 设置导入前 schema 校验，拒绝危险扩展配置
+- [x] 设置备份恢复本轮收口：导出 schema 版本、页面内导入错误、二次确认重置全部配置
 
-P0-1 到 P0-5 已完成。P0-6/7 依赖外部条件（Apple Developer Program $99/年），路线图保留。
+暂不纳入当前阻塞项：
 
-详细方案见 `docs/RELEASE_AUDIT.md`。
+- Developer ID 签名 / notarization
+- App Store 发布
+- 商业化、订阅、企业团队功能
 
----
+## 四、P1：重度用户核心体验
 
-## 三、🟠 必修（v0.3 之前）
+### Finder 级基础工作流
 
-### 性能（来自 `docs/PERF_PLAN.md`）
-- [x] **L1** 重新启用虚拟滚动（commit `d3c0e35`）
-- [x] **L2-B** 去掉 `list_directory` 的 N+1 `child_count`（commit `d3c0e35`）
-- [x] **L3-A** `hydrateAppIcons` 批量 `setAppIconMap`（commit `d3c0e35`）
-- [x] **L4** file-item 去 motion `whileHover`，CSS 接管 + 加 prefers-reduced-motion（commit `d3c0e35`）
-- [x] **L6-C** 默认 `blurIntensity = 0`（DEFAULT_THEME 已改，commit `5f55ea3`）
-- [ ] **L2-A** `list_directory` 异步化 + 取消令牌（仍同步阻塞，下一步）
-- [ ] **L2-C** 分批流式返回（超大目录 > 1000 项时）
-- [ ] **L3-B** `fileById` Map 索引（selectedFiles / lastSelectedFile O(1) 查找）
-- [ ] **L3-C** 搜索 debounce 150ms
-- [ ] **L5** tab inactive 时 unmount + state 提升到 App
-- [ ] **L6-A** 应用图标只对可见区域加载 + LRU（结合 L1 虚拟滚动）
-
-### 跨窗口拖拽剩余事项
-- [ ] 底层窗口置顶根治（CGEventTap 方案，详见第一节）
-- [ ] 大文件复制时 TransferModal 真接进度（已有 UI 骨架）
-- [ ] 跨设备拖拽时弹"复制 vs 移动"对话框（同卷默认 move、跨卷默认 copy）
-- [ ] 单次拖拽 paths > 5000 时弹确认（防止 UI 卡死）
-
-### 用户教育 / 错误处理
-- [ ] 设置导入 / 导出 / 重置
-- [ ] Rust panic hook + 崩溃日志落盘 `~/Library/Logs/Aether Explorer/`
-- [ ] 结构化错误类型（`AppError` 枚举），前端按 kind 分支处理
-- [ ] 首次启动 onboarding（3 屏）
-- [ ] 按 `?` 弹快捷键 cheatsheet
-
-详见 `docs/IMPROVEMENT_PROPOSALS.md`。
-
----
-
-## 四、🟢 已建立的测试与防回归基础（commit `5f55ea3` / `149cd85`）
-
-- [x] vitest + jsdom 配置（`src/__tests__/`）
-- [x] Rust `#[cfg(test)] mod tests`（src-tauri/src/lib.rs 末尾）
-- [x] **76 个测试通过**：TS 41 + Rust 35
-- [x] CI 加 `test.yml` workflow，push / PR 都跑
-- [x] release.yml 加 `needs: test-gate`
-- [x] 本地 `scripts/release.sh` 也加测试门槛
-- [x] DevTools 控制台 `window.__aether.smoke()` 一键自检 15 项断言
-- [x] `docs/SMOKE_TEST.md` 5 分钟人工 + console 混合 checklist
-- [x] 生产构建经 esbuild drop console / debugger（PERF P1-8）
-
-测试相关命令：
-```bash
-npm test            # vitest 41 个
-npm run test:rust   # cargo test --lib 35 个
-npm run test:all    # 两层都跑
-```
-
-详见 `docs/TEST_PLAN.md`。
-
----
-
-## 五、🟡 改善（v0.3 内随机做）
-
-### 基础功能缺口
-- [x] 复制 / 粘贴 / 剪切（内部剪贴板）
-- [x] 键盘导航（上下键选择文件）
-- [x] 查看简介（预览面板显示文件夹大小统计）
-- [x] 右键菜单重构（统一分组、删除复制到/移动到）
+- [x] 复制 / 剪切 / 粘贴（内部剪贴板）
+- [x] 键盘上下选择文件
+- [x] `?` 快捷键 cheatsheet：窗口 / 导航 / 选择 / 文件 / 视图 / 工具快捷键集中展示
 - [x] Cmd+W 关闭当前标签页
-- [x] 开发者控制台开关 + 状态栏图标
-- [x] 标签区域扩展至窗口右边界 + 滚轮横向滚动
-- [x] 工具栏刷新按钮 + 右键刷新
-- [x] 文件拖入文件夹 — 已实现（同窗口）；跨窗口见第一节
-- [x] 跨窗口拖拽复制 — 见第一节
-- [x] 空格键预览开关（默认开）
-- [x] 右键"复制到 / 移动到"用 dialog（不再 prompt）
-- [ ] 应用图标 — 当前使用占位图标，需要专业设计
+- [x] Quick Look 空格预览开关
+- [x] 文件拖入文件夹（同窗口）
+- [x] 原生菜单栏：文件 / 编辑 / 显示 / 帮助
+- [x] 完整快捷键：`Cmd+C/V/X/Delete/I/N/W/R`、方向键、Enter、Escape
+- [x] Finder → Aether 拖入稳定化
+- [x] Aether → Finder 拖出方案验证
+- [x] 外部文件变更自动刷新
 
-### 收藏 / 标签系统升级
-- [ ] **收藏系统结构化**（FavoriteItem with color / type / addedAt）
-- [ ] **路径颜色标签** — 10 预设色按 hash 自动分配
-- [ ] **侧边栏动态收藏列表** — 颜色圆点 + 图标 + 名称
-- [ ] **标签页颜色显示** — TopBar 标签页左侧 8px 圆点
+### 文件传输
 
-### 侧边栏 / 导航
-- [ ] **快速访问** — 常用目录 / 最近文件（基于访问频率）
-- [ ] **外接磁盘检测** — Rust 监听 `/Volumes` 推事件给前端
-- [ ] **存储空间** — 加外接卷
+- [x] 真实传输管理器基础：后端异步任务队列、轮询快照、Finder 拖入复制任务接入
+- [x] 大文件复制 / 移动进度回调：后台传输任务使用分块复制并持续更新字节进度
+- [x] 取消传输任务：支持单任务 / 全部取消的 cooperative cancellation，取消复制时清理临时文件 / 目录
+- [x] 将粘贴复制、复制到、冲突弹窗后的复制、移动到菜单迁移到传输任务
+- [x] 将剪切粘贴、拖拽移动、跨窗口移动等高风险移动入口迁移到传输任务
+- [x] 冲突策略统一：跳过 / 替换 / 保留两者
+- [x] 传输任务结果区分 `skippedSameDir` 与 `skippedConflicts`，并纳入 smoke test 验收
+- [x] 复制目录时符号链接按链接本身复制，不递归跟随目标
+- [x] 跨设备移动时默认复制，并清晰提示
+- [x] 单次操作 paths > 5000 时二次确认
 
-### 预览面板增强
-- [ ] 视频缩略图 + 时长
-- [ ] PDF 首页预览
-- [ ] 文件属性详情面板
+### 预览与信息
 
-### macOS 原生集成
-- [ ] 菜单栏完善
-- [ ] Dock 图标菜单（当前误用 `app.set_menu`，详见 `docs/RELEASE_AUDIT.md` DEF-30）
-- [ ] 全局快捷键系统
-- [ ] 拖入 / 拖出 Finder（Aether→Finder 见 `docs/CROSS_WINDOW_DRAG.md` 方案 B）
+- [x] 文本预览敏感文件保护
+- [x] 文件夹大小统计
+- [x] PDF 首页预览
+- [x] 视频缩略图 + 时长
+- [x] 文件属性详情面板
+- [x] 标签与收藏信息统一展示
 
-### 打磨
-- [ ] 错误处理（权限不足、磁盘满、路径不存在、文件被占用）
-- [ ] 加载状态（大目录异步加载 Material 3 Loader）
-- [ ] 空状态（"此文件夹为空"+ 快捷操作）
-- [ ] 无障碍（aria-label + 键盘 Tab / 方向键）
-- [ ] 崩溃报告（Sentry 或本地日志）
+## 五、P2：性能与架构
 
----
+### 性能
 
-## 六、🟣 长线（v0.5+）
-
-### 差异化卖点（产品力）
-- [ ] **命令面板（Cmd+K）** — 详见 `docs/IMPROVEMENT_PROPOSALS.md` 第七节
-- [ ] **暂存夹板（Stack）** — 跨窗口暂存 + 任意位置粘贴
-- [ ] **智能文件夹** — 保存搜索（基于 `mdfind`）
-- [ ] **双窗格视图** — 左右分屏同时显示两个目录
+- [x] 列表虚拟滚动恢复
+- [x] `list_directory` 去掉 N+1 `child_count`
+- [x] 应用图标批量更新
+- [x] file item 去掉高成本 hover motion
+- [x] `list_directory` 改 `spawn_blocking` 异步执行
+- [x] 目录加载前端取消令牌，快速切目录时阻止旧请求回写
+- [x] 后端目录扫描可中断，避免旧 `spawn_blocking` 任务继续占用线程
+- [ ] 超大目录分批返回或分批渲染
+- [x] `fileById` Map，避免 `selectedFiles` / `lastSelectedFile` O(n) 查找
+- [x] 搜索 debounce 150ms
+- [ ] inactive tab unmount 或状态提升
+- [x] 缩略图 / app icon LRU 缓存
 
 ### 架构
-- [ ] `ExplorerView.tsx` 拆分（4000 行 → 单文件 < 800 行）
-- [ ] Rust `lib.rs` 拆模块（`commands/fs.rs` `commands/terminal.rs` 等）
-- [ ] FS 监听（`notify-debouncer-mini`）解决"刷新滞后"
-- [ ] 测试覆盖扩张（组件级测试、Tauri 命令集成测试）
-- [ ] ESLint + clippy 接入 CI
 
-### 工程
-- [ ] Bundle 拆包（主 chunk 574KB → 多 chunk）
-- [ ] i18n 按语言动态加载
-- [ ] CHANGELOG / SECURITY / CONTRIBUTING 三件套
-- [ ] PR / Issue / CODEOWNERS / commitlint
-- [ ] SBOM + SHA256 + 第三方 license 清单
+- [ ] 拆 `ExplorerView.tsx`：
+  - `ExplorerShell`
+  - `FileListView`
+  - `GridView`
+  - `ColumnView`
+  - `ContextMenu`
+  - `PreviewPanel`
+  - `useExplorerState`
+- [ ] 拆 `SettingsView.tsx`：
+  - 外观
+  - 文件行为
+  - 右键扩展
+  - AI provider
+  - 权限与诊断
+- [ ] 拆 `src-tauri/src/lib.rs`：
+  - `commands/fs.rs`
+  - `commands/window.rs`
+  - `commands/terminal.rs`
+  - `commands/disk.rs`
+  - `error.rs`
+- [ ] 建立 `filesystem-core` 深 Module：文件操作、冲突策略、结构化错误、传输任务统一封装
+- [ ] 建立 `settings-store` Module：schema、迁移、脱敏、导入导出
 
-### 扩展生态
-- [ ] 插件机制（沙箱 iframe + postMessage）
-- [ ] SFTP / WebDAV 协议支持
-- [ ] 工作区配置（每目录独立设置）
-- [ ] 文件夹比较
+## 六、P3：差异化公益功能
 
-详见 `docs/IMPROVEMENT_PROPOSALS.md`。
+- [ ] `Cmd+K` 命令面板：打开路径、切换视图、触发文件操作
+- [ ] 暂存夹板 Stack：跨目录收集文件后统一操作
+- [ ] 智能文件夹：保存搜索条件，优先基于 `mdfind`
+- [ ] 双窗格视图：左右目录比较、复制、移动
+- [ ] AI 文件助手升级：
+  - dry-run
+  - 风险分级
+  - 操作范围限制
+  - 批量撤销
+  - 审计日志
 
----
+## 七、测试与发布卫生
 
-## 七、🟣 在线更新（Tauri Updater）
+- [x] Vitest + jsdom：当前 14 个测试文件、129 个用例通过
+- [x] Rust `cargo test --lib`：当前 81 个单元测试通过
+- [x] `window.__aether.smoke()` 自检
+- [x] release/test gate：lint / README sync / i18n / CI gate / Vitest / Rust test / clippy / build，并覆盖声明的 push 分支与 PR 到 `main`
+- [x] release 前清理旧构建产物，并为 versioned release 上传 / 验收 `SHA256SUMS`
+- [x] Vite manualChunks 拆包：主入口 chunk 约 683 KB → 约 258 KB
+- [ ] 组件级测试覆盖 Explorer 关键工作流
+- [ ] Tauri command 集成测试
+- [x] ESLint 接入 CI：`lint:eslint` + `npm run lint` 串联 TypeScript / ESLint + `lint:ci-gates`
+- [x] ExplorerView `react-hooks/exhaustive-deps` warning 清零，并将规则升级为 error 防回退
+- [x] clippy 接入 CI：`lint:rust` + test / release workflow + `lint:ci-gates`
+- [x] `SECURITY.md` / `CONTRIBUTING.md` / GitHub issue templates
+- [x] README 中英文自动同步检查
+- [x] 第一批 i18n 收口：ExplorerView 高风险路径 + `lint:i18n`
+- [x] AI 文件助手面板 i18n 收口：`aiRename.*` + `lint:i18n`
+- [x] SettingsView i18n 后续收口：分类 / 页头 / 权限 / 扩展 / 清理缓存高风险文案 + `lint:i18n`
+- [ ] `CHANGELOG.md` / `SECURITY.md` / `CONTRIBUTING.md` 定期维护
 
-**状态**：已实现，发版流水线见 `scripts/release.sh` 与 `.github/workflows/release.yml`。
-**已加固**：双 endpoint 兜底 + CHANGELOG release notes（commit `5388fe5`）。
-**未做**：见 `RELEASE_AUDIT.md` P0-6（签名）— 需 Apple Developer 账号。
+## 八、暂缓或不做
 
----
+- 不做默认文件管理器
+- 不做 App Store
+- 不做商业化订阅
+- 暂不做 Developer ID 签名 / 公证
+- 暂不做云同步
+- 暂不做团队协作
+- 暂不做完整插件市场；先做受限扩展和命令模板
 
 ## 文档索引
 
 | 文档 | 内容 |
 |------|------|
-| `docs/RELEASE_AUDIT.md` | 发版前破坏性审计，34 项 P0~P3 风险 + 修复方案 |
-| `docs/PERF_PLAN.md` | 性能六链路诊断 + 三周治理计划 |
-| `docs/IMPROVEMENT_PROPOSALS.md` | 16 维度持续提升建议 |
-| `docs/CROSS_WINDOW_DRAG.md` | 跨窗口拖拽完整设计方案 |
-| `docs/TEST_PLAN.md` | 三层测试与回归保障计划 |
-| `docs/SMOKE_TEST.md` | 5 分钟人工 + console 混合 checklist |
-| `BUG.md` | 已知 Bug |
-| `FEATURES.md` | 完整功能清单（84 项分 12 层） |
-| `PROJECT.md` | 项目总览 + 里程碑进度 |
-
----
-
-## 二、🔴 阻塞发版（来自 `docs/RELEASE_AUDIT.md`）
-
-未启动，按 P0 红线清单做：
-
-- [ ] **P0-1** AppleScript / shell 命令注入修复（`open_terminal_at` + `apple_quote` 死代码清理）
-- [ ] **P0-2** `shell.open` 协议白名单 + `urlTemplate` 校验
-- [ ] **P0-3** CSP 配置（`tauri.conf.json` 当前 `"csp": null`）+ 敏感文件预览黑名单（.env / id_rsa 等）
-- [ ] **P0-4** `prompt('复制到...')` 替换为 dialog + 路径 canonicalize
-- [ ] **P0-5** Updater endpoint 改稳定 URL（不用 `/latest/download/`）+ prerelease 守卫 + 真实 release notes
-- [ ] **P0-6** Developer ID 签名 + notarytool；删 README 的 `sudo xattr` 教程
-- [ ] **P0-7** 完全磁盘访问真实检测（TCC 状态探针）
-
-详细修复方案见 `docs/RELEASE_AUDIT.md`。
-
----
-
-## 三、🟠 必修（v0.3 之前）
-
-### 性能（来自 `docs/PERF_PLAN.md`）
-- [ ] **L1** 重新启用虚拟滚动（当前 `< 999999` 等效禁用）
-- [ ] **L2-B** 去掉 `list_directory` 的 N+1 `child_count`，改按需懒查
-- [ ] **L3-A** `hydrateAppIcons` 批量 `setAppIconMap`（80ms 节流）
-- [ ] **L4** file-item 拆 `FileItemAnimWrapper`，普通项移除 motion
-- [ ] **L6-C** 默认 `blurIntensity = 0`，去掉 `transition-all`
-
-### 跨窗口拖拽剩余事项
-- [ ] 底层窗口置顶根治（CGEventTap 方案，详见第一节）
-- [ ] 大文件复制时 TransferModal 真接进度（已有 UI 骨架）
-- [ ] 跨设备拖拽时弹"复制 vs 移动"对话框（同卷默认 move、跨卷默认 copy）
-- [ ] 单次拖拽 paths > 5000 时弹确认（防止 UI 卡死）
-
-### 用户教育 / 错误处理
-- [ ] 设置导入 / 导出 / 重置
-- [ ] Rust panic hook + 崩溃日志落盘 `~/Library/Logs/Aether Explorer/`
-- [ ] 结构化错误类型（`AppError` 枚举），前端按 kind 分支处理
-- [ ] 首次启动 onboarding（3 屏）
-- [ ] 按 `?` 弹快捷键 cheatsheet
-
-详见 `docs/IMPROVEMENT_PROPOSALS.md`。
-
----
-
-## 四、🟡 改善（v0.3 内随机做）
-
-### 基础功能缺口
-- [x] 复制 / 粘贴 / 剪切（内部剪贴板）
-- [x] 键盘导航（上下键选择文件）
-- [x] 查看简介（预览面板显示文件夹大小统计）
-- [x] 右键菜单重构（统一分组、删除复制到/移动到）
-- [x] Cmd+W 关闭当前标签页
-- [x] 开发者控制台开关 + 状态栏图标
-- [x] 标签区域扩展至窗口右边界 + 滚轮横向滚动
-- [x] 工具栏刷新按钮 + 右键刷新
-- [x] 文件拖入文件夹 — 已实现（同窗口）；跨窗口见第一节
-- [x] 跨窗口拖拽复制 — 见第一节
-- [x] 空格键预览开关（默认开）
-- [ ] 应用图标 — 当前使用占位图标，需要专业设计
-
-### 收藏 / 标签系统升级
-- [ ] **收藏系统结构化** — 将 `favorites: string[]` 升级为：
-  ```typescript
-  interface FavoriteItem {
-    id: string; path: string; label: string;
-    type: 'file' | 'folder';
-    color: string;        // 关联颜色标签
-    addedAt: number;
-  }
-  ```
-  存 localStorage + Tauri Store，侧边栏动态列出，文件视图顶栏 ⭐ 添加，自动分配颜色
-- [ ] **路径颜色标签** — `PathColorMap = Record<string, string>`，10 种预设色按 hash 自动分配，右键标签页手动改色
-- [ ] **侧边栏动态收藏列表** — 颜色圆点 + 图标 + 名称，点击新标签页打开，hover 显示完整路径
-- [ ] **标签页颜色显示** — TopBar 标签页左侧 8px 圆点
-
-### 侧边栏 / 导航
-- [ ] **快速访问** — 显示常用目录和最近文件（基于访问频率）
-- [ ] **外接磁盘检测** — Rust 后端监听 `/Volumes`，事件推送前端
-- [ ] **存储空间** — 已有根卷信息，待加外接卷
-
-### 预览面板增强
-- [ ] 视频缩略图 + 时长
-- [ ] PDF 首页预览
-- [ ] 文件属性详情面板（已有骨架，待补字段）
-
-### macOS 原生集成
-- [ ] 菜单栏完善（File / Edit / View / Window / Help）
-- [ ] Dock 图标菜单（当前误用 `app.set_menu`，详见 `docs/RELEASE_AUDIT.md` DEF-30）
-- [ ] 全局快捷键系统（Cmd+N/W/Q/I/Delete 等）
-- [ ] 拖入 / 拖出 Finder（Aether→Finder 见 `docs/CROSS_WINDOW_DRAG.md` 方案 B，长线）
-
-### 打磨
-- [ ] 错误处理（权限不足、磁盘满、路径不存在、文件被占用）
-- [ ] 加载状态（大目录异步加载 Material 3 Loader）
-- [ ] 空状态（"此文件夹为空"+ 快捷操作）
-- [ ] 无障碍（aria-label + 键盘 Tab / 方向键）
-- [ ] 崩溃报告（Sentry 或本地日志）
-
----
-
-## 五、🟣 长线（v0.5+）
-
-### 差异化卖点（产品力）
-- [ ] **命令面板（Cmd+K）** — 详见 `docs/IMPROVEMENT_PROPOSALS.md` 第七节
-- [ ] **暂存夹板（Stack）** — 跨窗口暂存 + 任意位置粘贴
-- [ ] **智能文件夹** — 保存搜索（基于 `mdfind`）
-- [ ] **双窗格视图** — 左右分屏同时显示两个目录
-
-### 架构
-- [ ] `ExplorerView.tsx` 拆分（4000 行 → 单文件 < 800 行）
-- [ ] Rust `lib.rs` 拆模块（`commands/fs.rs` `commands/terminal.rs` 等）
-- [ ] FS 监听（`notify-debouncer-mini`）解决"刷新滞后"
-- [ ] 单元测试覆盖（`vitest` + `cargo test`）
-- [ ] ESLint + clippy 接入 CI
-
-### 工程
-- [ ] Bundle 拆包（主 chunk 568KB → 多 chunk）
-- [ ] i18n 按语言动态加载
-- [ ] CHANGELOG / SECURITY / CONTRIBUTING 三件套
-- [ ] PR / Issue / CODEOWNERS / commitlint
-- [ ] SBOM + SHA256 + 第三方 license 清单
-
-### 扩展生态
-- [ ] 插件机制（沙箱 iframe + postMessage）
-- [ ] SFTP / WebDAV 协议支持
-- [ ] 工作区配置（每目录独立设置）
-- [ ] 文件夹比较
-
-详见 `docs/IMPROVEMENT_PROPOSALS.md`。
-
----
-
-## 六、🟣 在线更新（Tauri Updater）
-
-**状态**：已实现，发版流水线见 `scripts/release.sh` 与 `.github/workflows/release.yml`。
-**未做**：见 `RELEASE_AUDIT.md` P0-5（endpoint 不稳定 / 无 prerelease 守卫 / notes 硬编码）。
-
----
-
-## 文档索引
-
-| 文档 | 内容 |
-|------|------|
-| `docs/RELEASE_AUDIT.md` | 发版前破坏性审计，34 项 P0~P3 风险 + 修复方案 |
-| `docs/PERF_PLAN.md` | 性能六链路诊断 + 三周治理计划 |
-| `docs/IMPROVEMENT_PROPOSALS.md` | 16 维度持续提升建议（状态机、错误处理、a11y、命令面板等） |
-| `docs/CROSS_WINDOW_DRAG.md` | 跨窗口拖拽完整设计方案（含 Aether→Finder 长线方案） |
-| `BUG.md` | 已知 Bug |
-| `FEATURES.md` | 完整功能清单（84 项分 12 层） |
-| `PROJECT.md` | 项目总览 + 里程碑进度 |
+| `docs/RELEASE_AUDIT.md` | 安全与发版风险审计 |
+| `docs/PERF_PLAN.md` | 性能瓶颈与治理计划 |
+| `docs/PRIVACY.md` | 隐私与外发请求说明 |
+| `docs/IMPROVEMENT_PROPOSALS.md` | 架构、产品和长期体验建议 |
+| `docs/CROSS_WINDOW_DRAG.md` | 跨窗口拖拽设计 |
+| `docs/TEST_PLAN.md` | 测试策略 |
+| `docs/SMOKE_TEST.md` | 手工和控制台自检 |
+| `FEATURES.md` | 功能规格 |
+| `PROJECT.md` | 项目总览 |

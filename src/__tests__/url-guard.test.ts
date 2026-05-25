@@ -1,16 +1,30 @@
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   isSafeShellOpenUrl,
   isValidWallpaperUrl,
+  interpolateFileActionTemplate,
+  safeShellOpen,
   shellEscape,
   validateShellFragment,
 } from '../lib/url-guard';
+
+const shellOpenMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+
+vi.mock('@tauri-apps/plugin-shell', () => ({
+  open: shellOpenMock,
+}));
+
+beforeEach(() => {
+  shellOpenMock.mockClear();
+});
 
 describe('isSafeShellOpenUrl', () => {
   it('accepts http/https/mailto', () => {
     expect(isSafeShellOpenUrl('http://example.com')).toBe(true);
     expect(isSafeShellOpenUrl('https://github.com/a/b')).toBe(true);
     expect(isSafeShellOpenUrl('mailto:user@example.com')).toBe(true);
+    expect(isSafeShellOpenUrl('HTTPS://example.com')).toBe(true);
+    expect(isSafeShellOpenUrl('MAILTO:user@example.com')).toBe(true);
   });
 
   it('rejects dangerous schemes', () => {
@@ -24,12 +38,33 @@ describe('isSafeShellOpenUrl', () => {
   it('rejects malformed inputs', () => {
     expect(isSafeShellOpenUrl('')).toBe(false);
     expect(isSafeShellOpenUrl('not a url')).toBe(false);
+    expect(isSafeShellOpenUrl(' https://example.com')).toBe(false);
+    expect(isSafeShellOpenUrl('https://example.com ')).toBe(false);
+    expect(isSafeShellOpenUrl('https://example.com/a b')).toBe(false);
+    expect(isSafeShellOpenUrl('https://example.com\n')).toBe(false);
+    expect(isSafeShellOpenUrl('java\nscript:alert(1)')).toBe(false);
     expect(isSafeShellOpenUrl(null as unknown as string)).toBe(false);
     expect(isSafeShellOpenUrl(undefined as unknown as string)).toBe(false);
   });
 
   it('rejects macOS private schemes', () => {
     expect(isSafeShellOpenUrl('x-apple-systempreferences:com.apple.preference.security')).toBe(false);
+    expect(isSafeShellOpenUrl('custom-protocol://open/something')).toBe(false);
+  });
+});
+
+describe('safeShellOpen', () => {
+  it('opens only allowlisted URLs through Tauri shell.open', async () => {
+    await expect(safeShellOpen('https://example.com/release')).resolves.toBeUndefined();
+    expect(shellOpenMock).toHaveBeenCalledWith('https://example.com/release');
+
+    shellOpenMock.mockClear();
+
+    await expect(safeShellOpen('javascript:alert(1)')).rejects.toThrow('不允许的链接协议');
+    expect(shellOpenMock).not.toHaveBeenCalled();
+
+    await expect(safeShellOpen(' https://example.com/release')).rejects.toThrow('不允许的链接协议');
+    expect(shellOpenMock).not.toHaveBeenCalled();
   });
 });
 
@@ -47,6 +82,12 @@ describe('isValidWallpaperUrl', () => {
   it('rejects javascript / data URLs', () => {
     expect(isValidWallpaperUrl('javascript:alert(1)')).toBe(false);
     expect(isValidWallpaperUrl('data:image/png;base64,xxx')).toBe(false);
+    expect(isValidWallpaperUrl(' https://cdn.example.com/wp.jpg')).toBe(false);
+    expect(isValidWallpaperUrl('https://cdn.example.com/wp.jpg ')).toBe(false);
+    expect(isValidWallpaperUrl('https://cdn.example.com/my wallpaper.jpg')).toBe(false);
+    expect(isValidWallpaperUrl('https://cdn.example.com/wp.jpg\t')).toBe(false);
+    expect(isValidWallpaperUrl(null as unknown as string)).toBe(false);
+    expect(isValidWallpaperUrl(undefined as unknown as string)).toBe(false);
   });
 
   it('rejects css-injection attempts', () => {
@@ -84,16 +125,44 @@ describe('validateShellFragment', () => {
   it('returns null for forbidden tokens', () => {
     expect(validateShellFragment('rm -rf /; echo ok')).toBeNull();
     expect(validateShellFragment('cat file | grep x')).toBeNull();
+    expect(validateShellFragment('cmd1 && cmd2')).toBeNull();
+    expect(validateShellFragment('cmd1 || cmd2')).toBeNull();
+    expect(validateShellFragment('cmd1 & cmd2')).toBeNull();
     expect(validateShellFragment('curl `evil`')).toBeNull();
     expect(validateShellFragment('echo $(whoami)')).toBeNull();
     expect(validateShellFragment('x > /etc/passwd')).toBeNull();
     expect(validateShellFragment('x < /etc/passwd')).toBeNull();
     expect(validateShellFragment('cmd1\ncmd2')).toBeNull();
+    expect(validateShellFragment('cmd1\rcmd2')).toBeNull();
   });
 
   it('returns null for empty / invalid input', () => {
     expect(validateShellFragment('')).toBeNull();
     expect(validateShellFragment('   ')).toBeNull();
     expect(validateShellFragment(null as unknown as string)).toBeNull();
+  });
+});
+
+describe('interpolateFileActionTemplate', () => {
+  const values = {
+    path: "/Users/jane/My Files/it's $(secret);.txt",
+    dir: '/Users/jane/My Files',
+    name: "it's $(secret);.txt",
+    currentPath: '/Users/jane/Downloads',
+  };
+
+  it('interpolates raw values for display-only contexts', () => {
+    expect(interpolateFileActionTemplate('open {path}', values, 'raw')).toBe(`open ${values.path}`);
+  });
+
+  it('shell-escapes file-controlled placeholders for terminal commands', () => {
+    expect(interpolateFileActionTemplate('code {path}', values, 'shell')).toBe(`code ${shellEscape(values.path)}`);
+    expect(interpolateFileActionTemplate('cd {dir}', values, 'shell')).toBe(`cd ${shellEscape(values.dir)}`);
+  });
+
+  it('URL-encodes placeholders for URL templates', () => {
+    expect(interpolateFileActionTemplate('https://example.com?q={name}', values, 'url')).toBe(
+      `https://example.com?q=${encodeURIComponent(values.name)}`,
+    );
   });
 });

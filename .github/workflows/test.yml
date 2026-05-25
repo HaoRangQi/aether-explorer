@@ -2,7 +2,7 @@ name: test
 
 on:
   push:
-    branches: [main, 'feat/**', 'fix/**', 'test/**']
+    branches: [main, 'feat/**', 'fix/**', 'test/**', 'codex/**', 'codex-*']
   pull_request:
     branches: [main]
 
@@ -19,6 +19,8 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -30,11 +32,23 @@ jobs:
       - name: TypeScript check
         run: npm run lint
 
+      - name: README sync check
+        run: npm run lint:readme
+
+      - name: i18n coverage check
+        run: npm run lint:i18n
+
+      - name: CI gate coverage check
+        run: npm run lint:ci-gates
+
       - name: Frontend tests (vitest)
         run: npm test
 
       - name: Rust tests (cargo test --lib)
         run: npm run test:rust
+
+      - name: Rust lint (clippy)
+        run: npm run lint:rust
 
       - name: Production build smoke
         run: npm run build

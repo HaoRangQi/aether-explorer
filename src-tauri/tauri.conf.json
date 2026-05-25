@@ -61,9 +61,11 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM0RUZFQThDNDczMTk4RDAKUldUUW1ERkhqT3J2TkVtMWU2S0gyZ2hqWXY4Ty9GWkxNY0g2UmY0Y3JEMEpBN2dNYWM5ME0xRjgK",
       "endpoints": [
-        "https://github.com/HaoRangQi/aether-explorer/releases/download/stable/latest.json",
-        "https://github.com/HaoRangQi/aether-explorer/releases/latest/download/latest.json"
+        "https://github.com/HaoRangQi/aether-explorer/releases/download/stable/latest.json"
       ]
+    },
+    "shell": {
+      "open": "^(https?://|mailto:).+"
     }
   }
 }

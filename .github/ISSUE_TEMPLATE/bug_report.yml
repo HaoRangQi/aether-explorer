@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a reproducible problem in Aether Explorer.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Aether Explorer version
+      placeholder: "0.3.11"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and hardware
+      placeholder: "macOS 15.x, Apple Silicon"
+    validations:
+      required: true
+  - type: dropdown
+    id: install-source
+    attributes:
+      label: Install source
+      options:
+        - GitHub Release
+        - Local build
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use a disposable test directory when the issue involves file operations.
+      placeholder: "1. Open...\n2. Select...\n3. Click..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: context
+    attributes:
+      label: Context
+      options:
+        - label: Involves a protected macOS directory.
+        - label: Involves an external or network volume.
+        - label: Involves symlinks or aliases.
+        - label: Involves file move/copy/delete.
+        - label: Involves terminal actions or extension templates.
+        - label: Involves AI provider settings or requests.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Remove private paths, tokens, and file contents before sharing.

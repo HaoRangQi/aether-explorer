@@ -11,8 +11,15 @@
 
 import type { ContextMenuAction, ThemeSettings } from '../types';
 import { ACCENT_COLORS } from '../constants';
+import { isSafeShellOpenUrl } from './url-guard';
+import {
+  AI_OP_HISTORY_DEFAULT_RETENTION_DAYS,
+  normalizeOpHistoryRetentionDays,
+} from './ai-ops-log';
 
 export const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
+export const CURRENT_SETTINGS_VERSION = 3;
+export const CURRENT_SETTINGS_BACKUP_SCHEMA_VERSION = 1;
 
 export const DEFAULT_LIGHT_ACCENT = '#789262'; // 竹青
 export const DEFAULT_DARK_ACCENT = '#425066';  // 黛蓝
@@ -21,6 +28,25 @@ export const DEPRECATED_CONTEXT_EXTENSION_IDS = new Set([
   'open', 'rename', 'copy', 'move', 'share', 'compress',
   'terminal', 'delete', 'tag', 'group', 'ai-scan',
 ]);
+
+const CONTEXT_ACTION_TYPES = new Set([
+  'terminal',
+  'shell',
+  'url',
+  'placeholder',
+  'ai-assistant',
+  'ai-history',
+]);
+
+function normalizeContextActionType(actionType: unknown): NonNullable<ContextMenuAction['actionType']> {
+  return typeof actionType === 'string' && CONTEXT_ACTION_TYPES.has(actionType)
+    ? actionType as NonNullable<ContextMenuAction['actionType']>
+    : 'placeholder';
+}
+
+function normalizeWorkingDirectory(workingDirectory: unknown): NonNullable<ContextMenuAction['workingDirectory']> {
+  return workingDirectory === 'current' ? 'current' : 'selection';
+}
 
 export const DEFAULT_THEME: ThemeSettings = {
   mode: 'auto',
@@ -43,8 +69,10 @@ export const DEFAULT_THEME: ThemeSettings = {
   showHiddenFiles: false,
   showPreviewPanel: false,
   enableDevTools: false,
+  enableMultiWindow: false,
   enableSpacePreview: true,
   crossWindowDropDefault: 'copy',
+  aiOpsHistoryRetentionDays: AI_OP_HISTORY_DEFAULT_RETENTION_DAYS,
   wallpaperBlur: 0,
   enableGradient: false,
   contextMenuExtensions: [
@@ -97,12 +125,14 @@ export const DEFAULT_THEME: ThemeSettings = {
 export function normalizeContextMenuExtensions(
   extensions?: ContextMenuAction[],
 ): ContextMenuAction[] {
-  const filtered = (extensions || [])
+  const source = Array.isArray(extensions) ? extensions : [];
+  const filtered = source
+    .filter((ext): ext is ContextMenuAction => Boolean(ext) && typeof ext === 'object' && !Array.isArray(ext))
     .filter(ext => !DEPRECATED_CONTEXT_EXTENSION_IDS.has(ext.id))
     .map(ext => ({
       ...ext,
-      actionType: ext.actionType || 'placeholder',
-      workingDirectory: ext.workingDirectory || 'selection',
+      actionType: normalizeContextActionType(ext.actionType),
+      workingDirectory: normalizeWorkingDirectory(ext.workingDirectory),
       confirmExecution: ext.confirmExecution ?? true,
     }));
 
@@ -110,7 +140,7 @@ export function normalizeContextMenuExtensions(
   const systemDefaults = DEFAULT_THEME.contextMenuExtensions!.filter(e => e.isSystem);
   for (const sys of systemDefaults) {
     if (!filtered.find(e => e.id === sys.id)) {
-      filtered.push({ ...sys, actionType: sys.actionType || 'placeholder', workingDirectory: sys.workingDirectory || 'selection', confirmExecution: sys.confirmExecution ?? false });
+      filtered.push({ ...sys, actionType: sys.actionType || 'placeholder', workingDirectory: normalizeWorkingDirectory(sys.workingDirectory), confirmExecution: sys.confirmExecution ?? false });
     }
   }
   return filtered as ContextMenuAction[];
@@ -129,7 +159,11 @@ function normalizeDefaultHomePath(raw: string | undefined | null): string {
   return trimmed;
 }
 
-export function normalizeThemeSettings(settings: Partial<ThemeSettings>): ThemeSettings {
+export interface PersistedThemeSettings extends Partial<ThemeSettings> {
+  __version?: number;
+}
+
+export function migrateThemeSettings(settings: PersistedThemeSettings): ThemeSettings {
   // 迁移旧版 terminalScripts: string[] → {script, enabled}[]
   let terminalScripts = settings.terminalScripts;
   if (Array.isArray(terminalScripts) && terminalScripts.length > 0 && typeof terminalScripts[0] === 'string') {
@@ -141,13 +175,305 @@ export function normalizeThemeSettings(settings: Partial<ThemeSettings>): ThemeS
     terminalScripts,
     contextMenuExtensions: normalizeContextMenuExtensions(settings.contextMenuExtensions),
     defaultHomePath: normalizeDefaultHomePath(settings.defaultHomePath),
+    aiOpsHistoryRetentionDays: normalizeOpHistoryRetentionDays(settings.aiOpsHistoryRetentionDays),
+  };
+}
+
+export function normalizeThemeSettings(settings: Partial<ThemeSettings>): ThemeSettings {
+  return migrateThemeSettings(settings);
+}
+
+export function redactThemeSecrets(settings: ThemeSettings): ThemeSettings {
+  return {
+    ...settings,
+    aiApiKey: undefined,
+    aiProviders: settings.aiProviders?.map(provider => ({
+      ...provider,
+      apiKey: undefined,
+    })),
+  };
+}
+
+export interface ImportedSettingsBackup {
+  schemaVersion?: number;
+  exportedAt?: string;
+  appVersion?: string;
+  theme?: ThemeSettings;
+  favorites?: string[];
+  fileTags?: Record<string, string[]>;
+  recentItems?: string[];
+}
+
+export interface ExportedSettingsBackup extends ImportedSettingsBackup {
+  schemaVersion: typeof CURRENT_SETTINGS_BACKUP_SCHEMA_VERSION;
+  exportedAt: string;
+  appVersion: string;
+}
+
+const THEME_IMPORT_KEYS = new Set<keyof ThemeSettings>([
+  'mode',
+  'accentColor',
+  'blurIntensity',
+  'transparency',
+  'enableMica',
+  'fontFamily',
+  'gridSize',
+  'gridWidth',
+  'gridHeight',
+  'gridGap',
+  'mediaGridWidth',
+  'mediaGridHeight',
+  'mediaGridLinked',
+  'columnWidth',
+  'columnHeight',
+  'showHiddenFiles',
+  'showPreviewPanel',
+  'enableSpacePreview',
+  'enableDevTools',
+  'enableMultiWindow',
+  'useSystemContextMenu',
+  'wallpaperUrl',
+  'wallpaperBlur',
+  'enableGradient',
+  'listDensity',
+  'contextMenuExtensions',
+  'terminalApp',
+  'terminalArgs',
+  'terminalScripts',
+  'customTerminalCommand',
+  'defaultHomePath',
+  'crossWindowDropDefault',
+  'aiOpsHistoryRetentionDays',
+  'language',
+  'followSystemLanguage',
+  'languageOptions',
+  'colorIcon',
+  'colorSelectedFg',
+  'colorSelectedBg',
+  'colorHoverFg',
+  'colorHoverBg',
+  'colorPanelBg',
+  'colorTextPrimary',
+  'colorTextSecondary',
+  'colorBorder',
+  'colorDivider',
+  'colorShadow',
+  'colorActiveIconBg',
+  'colorTagSelected',
+  'colorSearchBg',
+  'colorAppBg',
+  'aiProvider',
+  'aiApiKey',
+  'aiModel',
+  'aiOllamaEndpoint',
+  'aiProviders',
+  'aiActiveProvider',
+]);
+
+const THEME_MODES = new Set(['light', 'dark', 'auto']);
+const LIST_DENSITIES = new Set(['relaxed', 'normal', 'compact', 'ultra']);
+const CROSS_WINDOW_DROP_DEFAULTS = new Set(['copy', 'move', 'ask']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function pickThemeImportFields(value: Record<string, unknown>): Partial<ThemeSettings> {
+  const picked: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (THEME_IMPORT_KEYS.has(key as keyof ThemeSettings)) {
+      picked[key] = item;
+    }
+  }
+  return picked as Partial<ThemeSettings>;
+}
+
+function sanitizeThemeEnums(settings: Partial<ThemeSettings>): Partial<ThemeSettings> {
+  const sanitized = { ...settings };
+  if (sanitized.mode !== undefined && !THEME_MODES.has(sanitized.mode)) {
+    delete sanitized.mode;
+  }
+  if (sanitized.listDensity !== undefined && !LIST_DENSITIES.has(sanitized.listDensity)) {
+    delete sanitized.listDensity;
+  }
+  if (
+    sanitized.crossWindowDropDefault !== undefined
+    && !CROSS_WINDOW_DROP_DEFAULTS.has(sanitized.crossWindowDropDefault)
+  ) {
+    delete sanitized.crossWindowDropDefault;
+  }
+  if (sanitized.aiOpsHistoryRetentionDays !== undefined) {
+    const raw = Number(sanitized.aiOpsHistoryRetentionDays);
+    if (!Number.isFinite(raw)) {
+      delete sanitized.aiOpsHistoryRetentionDays;
+    } else {
+      sanitized.aiOpsHistoryRetentionDays = normalizeOpHistoryRetentionDays(raw);
+    }
+  }
+  return sanitized;
+}
+
+function sanitizePathList(value: unknown, limit: number): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const path = item.trim();
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    result.push(path);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+function sanitizeFileTags(value: unknown): Record<string, string[]> | undefined {
+  if (!isRecord(value)) return undefined;
+  const result: Record<string, string[]> = {};
+  for (const [path, tags] of Object.entries(value)) {
+    if (typeof path !== 'string' || !Array.isArray(tags)) continue;
+    const cleanPath = path.trim();
+    if (!cleanPath) continue;
+    const cleanTags = sanitizePathList(tags, 32);
+    if (cleanTags && cleanTags.length > 0) {
+      result[cleanPath] = cleanTags;
+    }
+  }
+  return result;
+}
+
+function sanitizeContextMenuExtension(ext: ContextMenuAction): ContextMenuAction | null {
+  if (typeof ext.id !== 'string' || typeof ext.label !== 'string') return null;
+  const id = ext.id.trim();
+  const label = ext.label.trim();
+  if (!id || !label) return null;
+  if (DEPRECATED_CONTEXT_EXTENSION_IDS.has(id)) return null;
+  const normalized = { ...ext, id, label };
+  if (ext.actionType === 'url') {
+    const urlTemplate = typeof ext.urlTemplate === 'string' ? ext.urlTemplate.trim() : '';
+    if (!urlTemplate || !isSafeShellOpenUrl(urlTemplate)) return null;
+    return { ...normalized, urlTemplate };
+  }
+  if ((ext.actionType === 'terminal' || ext.actionType === 'shell') && ext.confirmExecution === false) {
+    return { ...normalized, confirmExecution: true };
+  }
+  return normalized;
+}
+
+function uniqueContextMenuExtensions(extensions: ContextMenuAction[]): ContextMenuAction[] {
+  const seen = new Set<string>();
+  return extensions.filter(ext => {
+    if (seen.has(ext.id)) return false;
+    seen.add(ext.id);
+    return true;
+  });
+}
+
+function sanitizeImportedTheme(value: unknown): ThemeSettings | undefined {
+  if (!isRecord(value)) return undefined;
+  const normalized = redactThemeSecrets(migrateThemeSettings(sanitizeThemeEnums(pickThemeImportFields(value))));
+  return {
+    ...normalized,
+    contextMenuExtensions: uniqueContextMenuExtensions(
+      normalizeContextMenuExtensions(normalized.contextMenuExtensions)
+        .map(sanitizeContextMenuExtension)
+        .filter((ext): ext is ContextMenuAction => Boolean(ext)),
+    ),
+  };
+}
+
+export function sanitizeImportedContextMenuExtensions(
+  value: unknown,
+  now = Date.now(),
+): ContextMenuAction[] {
+  if (!Array.isArray(value)) {
+    throw new Error('文件格式不正确');
+  }
+
+  const prepared = value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map((item, index) => ({
+      ...item,
+      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `imported-${now}-${index}`,
+      enabled: item.enabled !== false,
+    })) as ContextMenuAction[];
+
+  return uniqueContextMenuExtensions(
+    normalizeContextMenuExtensions(prepared)
+      .map(sanitizeContextMenuExtension)
+      .filter((ext): ext is ContextMenuAction => Boolean(ext)),
+  );
+}
+
+export function sanitizeImportedSettingsBackup(value: unknown): ImportedSettingsBackup {
+  if (!isRecord(value)) {
+    throw new Error('配置文件格式无效');
+  }
+
+  const rawSchemaVersion = value.schemaVersion;
+  if (
+    rawSchemaVersion !== undefined
+    && rawSchemaVersion !== CURRENT_SETTINGS_BACKUP_SCHEMA_VERSION
+  ) {
+    throw new Error(`不支持的配置备份版本：${String(rawSchemaVersion)}`);
+  }
+
+  const backup: ImportedSettingsBackup = {};
+  backup.schemaVersion = CURRENT_SETTINGS_BACKUP_SCHEMA_VERSION;
+  if (typeof value.exportedAt === 'string') backup.exportedAt = value.exportedAt;
+  if (typeof value.appVersion === 'string') {
+    backup.appVersion = value.appVersion;
+  } else if (typeof value.version === 'string') {
+    backup.appVersion = value.version;
+  }
+  const theme = sanitizeImportedTheme(value.theme);
+  const favorites = sanitizePathList(value.favorites, 5000);
+  const fileTags = sanitizeFileTags(value.fileTags);
+  const recentItems = sanitizePathList(value.recentItems, 500);
+
+  if (theme) backup.theme = theme;
+  if (favorites) backup.favorites = favorites;
+  if (fileTags) backup.fileTags = fileTags;
+  if (recentItems) backup.recentItems = recentItems;
+
+  if (!backup.theme && !backup.favorites && !backup.fileTags && !backup.recentItems) {
+    throw new Error('配置文件不包含可导入的数据');
+  }
+
+  return backup;
+}
+
+export function buildSettingsBackup({
+  theme,
+  favorites,
+  fileTags,
+  recentItems,
+  appVersion,
+  now = new Date(),
+}: {
+  theme: ThemeSettings;
+  favorites: string[];
+  fileTags: Record<string, string[]>;
+  recentItems: string[];
+  appVersion: string;
+  now?: Date;
+}): ExportedSettingsBackup {
+  return {
+    schemaVersion: CURRENT_SETTINGS_BACKUP_SCHEMA_VERSION,
+    exportedAt: now.toISOString(),
+    appVersion,
+    theme: redactThemeSecrets(theme),
+    favorites,
+    fileTags,
+    recentItems,
   };
 }
 
 export function loadThemeFromLocalStorage(): ThemeSettings {
   try {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('theme-settings') : null;
-    return saved ? normalizeThemeSettings(JSON.parse(saved)) : DEFAULT_THEME;
+    return saved ? migrateThemeSettings(JSON.parse(saved)) : DEFAULT_THEME;
   } catch {
     return DEFAULT_THEME;
   }

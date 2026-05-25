@@ -25,6 +25,7 @@ const SAFE_SHELL_OPEN_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
  */
 export function isSafeShellOpenUrl(raw: string): boolean {
   if (!raw || typeof raw !== 'string') return false;
+  if (/\s|[\u0000-\u001F\u007F]/u.test(raw)) return false;
   let url: URL;
   try {
     url = new URL(raw);
@@ -41,8 +42,9 @@ export function isSafeShellOpenUrl(raw: string): boolean {
  * 拒绝：`javascript:` / `data:` / 含 `url()` 注入字符
  */
 export function isValidWallpaperUrl(raw: string): boolean {
-  if (!raw) return true; // 空字符串 = 清除壁纸
   if (typeof raw !== 'string') return false;
+  if (!raw) return true; // 空字符串 = 清除壁纸
+  if (/\s|[\u0000-\u001F\u007F]/u.test(raw)) return false;
   // 阻止 CSS url() 闭合注入（`)`、换行）
   if (/[)\n\r;]/.test(raw)) return false;
   try {
@@ -66,11 +68,45 @@ export function shellEscape(value: string): string {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+export type TemplateInterpolationMode = 'raw' | 'shell' | 'url';
+
+export interface FileActionTemplateValues {
+  path: string;
+  dir: string;
+  name: string;
+  currentPath: string;
+}
+
+const TEMPLATE_TOKENS: Record<keyof FileActionTemplateValues, string> = {
+  path: '{path}',
+  dir: '{dir}',
+  name: '{name}',
+  currentPath: '{currentPath}',
+};
+
+function encodeTemplateValue(value: string, mode: TemplateInterpolationMode): string {
+  if (mode === 'shell') return shellEscape(value);
+  if (mode === 'url') return encodeURIComponent(value);
+  return value;
+}
+
+export function interpolateFileActionTemplate(
+  template: string,
+  values: FileActionTemplateValues,
+  mode: TemplateInterpolationMode,
+): string {
+  let result = String(template);
+  for (const key of Object.keys(TEMPLATE_TOKENS) as Array<keyof FileActionTemplateValues>) {
+    result = result.replaceAll(TEMPLATE_TOKENS[key], encodeTemplateValue(values[key], mode));
+  }
+  return result;
+}
+
 /**
  * 用户命令片段安全校验。
  *
  * 拒绝列表（必须返 null）：
- * - 命令分隔符：`;` `|` `&&` `||` `\n` `\r`
+ * - 命令分隔符：`;` `|` `&` `&&` `||` `\n` `\r`
  * - 命令替换：`$(` `` ` ``
  * - 重定向：`>` `<`（保守起见）
  *
@@ -83,7 +119,7 @@ export function validateShellFragment(raw: string): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  const forbidden = ['$(', '`', '&&', '||', ';', '|', '>', '<', '\n', '\r'];
+  const forbidden = ['$(', '`', '&&', '||', ';', '|', '&', '>', '<', '\n', '\r'];
   for (const token of forbidden) {
     if (trimmed.includes(token)) return null;
   }

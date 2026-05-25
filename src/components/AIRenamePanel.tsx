@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { motion } from 'motion/react';
 import { Sparkles, X, Loader2, Check, AlertCircle, FolderPlus, Move, Trash2, Archive, Pencil } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { ThemeSettings, FileItem, AIExecutedOp } from '../types';
 import { generateFileOps, AIFileOp } from '../lib/ai-service';
 import { renameFile, createFolder, moveFile, deleteToTrash, compressFiles } from '../api/filesystem';
@@ -25,28 +26,25 @@ const OP_ICONS: Record<string, React.ReactNode> = {
 };
 
 const OP_LABELS: Record<string, string> = {
-  rename: '重命名', mkdir: '新建文件夹', move: '移动', trash: '移至废纸篓', compress: '压缩',
+  rename: 'aiRename.operations.rename',
+  mkdir: 'aiRename.operations.mkdir',
+  move: 'aiRename.operations.move',
+  trash: 'aiRename.operations.trash',
+  compress: 'aiRename.operations.compress',
 };
 
-function describeOp(op: AIFileOp): string {
+function describeOp(op: AIFileOp, t: (key: string, options?: Record<string, unknown>) => string): string {
   switch (op.type) {
     case 'rename':   return `${op.path.split('/').pop()} → ${op.newName}`;
-    case 'mkdir':    return `新建 ${op.parentDir.split('/').pop()}/${op.name}`;
+    case 'mkdir':    return t('aiRename.descriptions.mkdir', { parent: op.parentDir.split('/').pop(), name: op.name });
     case 'move':     return `${op.path.split('/').pop()} → ${op.targetDir.split('/').pop()}/`;
-    case 'trash':    return `${op.path.split('/').pop() || op.path}（可从废纸篓恢复）`;
-    case 'compress': return `${op.paths.length} 个文件 → ${op.outputName}`;
+    case 'trash':    return t('aiRename.descriptions.trash', { name: op.path.split('/').pop() || op.path });
+    case 'compress': return t('aiRename.descriptions.compress', { count: op.paths.length, outputName: op.outputName });
   }
 }
 
-const PRESETS = [
-  '按类型整理到子文件夹',
-  '重命名并加序号前缀',
-  '去掉文件名里的空格和特殊字符',
-  '把选中文件压缩打包',
-  '移至废纸篓',
-];
-
 export default function AIRenamePanel({ files, currentDir, theme, onClose, onComplete }: AIRenamePanelProps) {
+  const { t } = useTranslation();
   const [instruction, setInstruction] = useState('');
   const [ops, setOps] = useState<AIFileOp[]>([]);
   const [summary, setSummary] = useState('');
@@ -54,6 +52,13 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
   const [error, setError] = useState('');
   const [progress, setProgress] = useState(0);
   const [opResults, setOpResults] = useState<('pending' | 'ok' | 'fail')[]>([]);
+  const presets = [
+    t('aiRename.presets.organizeByType'),
+    t('aiRename.presets.numberedPrefix'),
+    t('aiRename.presets.cleanNames'),
+    t('aiRename.presets.compressSelection'),
+    t('aiRename.presets.moveToTrash'),
+  ];
 
   const handleGenerate = useCallback(async () => {
     if (!instruction.trim()) return;
@@ -126,11 +131,13 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
       summary,
       ops: executedOps,
       canRollback: executedOps.some(e => e.status === 'ok' && e.reverseOp) && !hasTrash,
+    }, {
+      retentionDays: theme.aiOpsHistoryRetentionDays,
     });
 
     setStatus('done');
     setTimeout(onComplete, 1000);
-  }, [ops, currentDir, instruction, summary, onComplete]);
+  }, [ops, currentDir, instruction, summary, onComplete, theme.aiOpsHistoryRetentionDays]);
 
   return (
     <motion.div
@@ -147,9 +154,9 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
         <div className="flex items-center justify-between px-8 py-5 border-b border-primary/10">
           <div className="flex items-center gap-3">
             <Sparkles className="w-5 h-5 text-primary" />
-            <h2 className="text-[17px] font-black text-on-surface">AI 文件助手</h2>
+            <h2 className="text-[17px] font-black text-on-surface">{t('aiRename.title')}</h2>
             <span className="text-[12px] text-on-surface/40 font-bold">
-              {files.length} 个文件{files.length === 0 ? '' : ''}
+              {t('aiRename.fileCount', { count: files.length })}
             </span>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-primary/10 rounded-xl transition-colors">
@@ -163,12 +170,12 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
             value={instruction}
             onChange={e => setInstruction(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleGenerate(); } }}
-            placeholder="描述你想做什么，例如：按类型整理到子文件夹、把图片重命名为日期格式、压缩这些文件..."
+            placeholder={t('aiRename.placeholder')}
             className="w-full bg-primary/5 border border-primary/20 rounded-2xl px-5 py-4 text-[14px] text-on-surface outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 resize-none h-20 transition-all"
             disabled={status === 'generating' || status === 'executing'}
           />
           <div className="flex items-center gap-2 flex-wrap">
-            {PRESETS.map(p => (
+            {presets.map(p => (
               <button key={p} onClick={() => setInstruction(p)}
                 className="px-3 py-1.5 text-[11px] font-bold text-on-surface/50 bg-primary/5 hover:bg-primary/10 hover:text-primary rounded-lg transition-colors">
                 {p}
@@ -179,7 +186,7 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
               disabled={!instruction.trim() || status === 'generating' || status === 'executing'}
               className="px-5 py-2.5 bg-primary text-on-primary rounded-xl text-[13px] font-bold flex items-center gap-2 disabled:opacity-40 shadow-lg shadow-primary/20 transition-all">
               {status === 'generating' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              {status === 'generating' ? '生成中...' : '生成计划'}
+              {status === 'generating' ? t('aiRename.generating') : t('aiRename.generatePlan')}
             </button>
           </div>
         </div>
@@ -192,7 +199,7 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
                 <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
                 <p className="text-[13px] text-red-500 font-medium break-all leading-relaxed">{error}</p>
               </div>
-              <p className="text-[11px] text-red-400/70 pl-7">修改描述或检查 AI 配置后，可直接点「生成计划」重试</p>
+              <p className="text-[11px] text-red-400/70 pl-7">{t('aiRename.retryHint')}</p>
             </div>
           )}
 
@@ -205,8 +212,8 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
               {ops.map((op, i) => (
                 <div key={i} className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-primary/5 border border-primary/10">
                   <span className="shrink-0">{OP_ICONS[op.type]}</span>
-                  <span className="text-[11px] font-bold text-on-surface/40 shrink-0 w-16">{OP_LABELS[op.type]}</span>
-                  <span className="text-[12px] font-mono text-on-surface/70 flex-1 truncate">{describeOp(op)}</span>
+                  <span className="text-[11px] font-bold text-on-surface/40 shrink-0 w-16">{t(OP_LABELS[op.type])}</span>
+                  <span className="text-[12px] font-mono text-on-surface/70 flex-1 truncate">{describeOp(op, t)}</span>
                   {opResults[i] === 'ok' && <Check className="w-3.5 h-3.5 text-green-500 shrink-0" />}
                   {opResults[i] === 'fail' && <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />}
                   {status === 'executing' && opResults[i] === 'pending' && i === progress && <Loader2 className="w-3.5 h-3.5 text-primary animate-spin shrink-0" />}
@@ -217,7 +224,7 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
 
           {status === 'idle' && (
             <div className="flex items-center justify-center h-full text-on-surface/25 text-[14px] font-medium">
-              描述你想做什么，AI 会生成操作计划供你确认
+              {t('aiRename.emptyState')}
             </div>
           )}
         </div>
@@ -228,14 +235,14 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
             {ops.some(op => op.type === 'trash') && (
               <p className="text-[11px] text-amber-500/80 font-medium flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                包含移至废纸篓操作，文件不会被永久删除，可随时从废纸篓恢复
+                {t('aiRename.trashWarning')}
               </p>
             )}
             <div className="flex items-center justify-between">
-              <p className="text-[12px] text-on-surface/40">共 {ops.length} 步操作，确认后依次执行</p>
+              <p className="text-[12px] text-on-surface/40">{t('aiRename.stepsSummary', { count: ops.length })}</p>
               <button onClick={handleExecute}
                 className="px-6 py-3 bg-primary text-on-primary rounded-xl text-[13px] font-bold shadow-lg shadow-primary/20 hover:shadow-xl transition-all flex items-center gap-2">
-                <Check className="w-4 h-4" /> 执行
+                <Check className="w-4 h-4" /> {t('aiRename.execute')}
               </button>
             </div>
           </div>
@@ -243,7 +250,7 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
         {status === 'executing' && (
           <div className="px-8 py-5 border-t border-primary/10 flex items-center gap-3">
             <Loader2 className="w-4 h-4 animate-spin text-primary" />
-            <span className="text-[13px] font-bold text-on-surface/60">执行中 {progress}/{ops.length}</span>
+            <span className="text-[13px] font-bold text-on-surface/60">{t('aiRename.executing', { progress, total: ops.length })}</span>
             <div className="flex-1 h-1.5 bg-primary/10 rounded-full overflow-hidden">
               <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${(progress / ops.length) * 100}%` }} />
             </div>

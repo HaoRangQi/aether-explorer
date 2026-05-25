@@ -21,7 +21,6 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "shell:allow-open",
-    "shell:default",
     "fs:default",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",

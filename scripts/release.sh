@@ -19,10 +19,14 @@ REPO="${GITHUB_REPO:-HaoRangQi/aether-explorer}"
 PRIVATE_KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/aether-updater.key}"
 CONF_FILE="src-tauri/tauri.conf.json"
 CARGO_FILE="src-tauri/Cargo.toml"
+PACKAGE_FILE="package.json"
+LOCK_FILE="package-lock.json"
 
 # ─── 前置校验 ────────────────────────────────────────────────────
 [ -f "$CONF_FILE" ] || { echo "❌ 必须在仓库根目录运行：找不到 $CONF_FILE"; exit 1; }
 [ -f "$CARGO_FILE" ] || { echo "❌ 必须在仓库根目录运行：找不到 $CARGO_FILE"; exit 1; }
+[ -f "$PACKAGE_FILE" ] || { echo "❌ 必须在仓库根目录运行：找不到 $PACKAGE_FILE"; exit 1; }
+[ -f "$LOCK_FILE" ] || { echo "❌ 必须在仓库根目录运行：找不到 $LOCK_FILE"; exit 1; }
 [ -f "$PRIVATE_KEY_PATH" ] || { echo "❌ 私钥不存在：$PRIVATE_KEY_PATH"; exit 1; }
 command -v jq >/dev/null || { echo "❌ 需要安装 jq"; exit 1; }
 command -v gh >/dev/null || { echo "❌ 需要安装 gh CLI 并完成 gh auth login"; exit 1; }
@@ -31,15 +35,24 @@ gh auth status >/dev/null 2>&1 || { echo "❌ gh 未登录，请运行 gh auth l
 # ─── 版本与 tag ──────────────────────────────────────────────────
 VERSION="$(jq -r '.version' "$CONF_FILE")"
 [ -n "$VERSION" ] && [ "$VERSION" != "null" ] || { echo "❌ 无法从 $CONF_FILE 读取 version"; exit 1; }
+PACKAGE_VERSION="$(jq -r '.version' "$PACKAGE_FILE")"
+LOCK_VERSION="$(jq -r '.version' "$LOCK_FILE")"
 CARGO_VERSION="$(awk -F ' *= *' '/^version = / { gsub(/\"/, "", $2); print $2; exit }' "$CARGO_FILE")"
+[ "$PACKAGE_VERSION" = "$VERSION" ] || { echo "❌ $PACKAGE_FILE version $PACKAGE_VERSION 与 $CONF_FILE version $VERSION 不一致"; exit 1; }
+[ "$LOCK_VERSION" = "$VERSION" ] || { echo "❌ $LOCK_FILE version $LOCK_VERSION 与 $CONF_FILE version $VERSION 不一致"; exit 1; }
 [ "$CARGO_VERSION" = "$VERSION" ] || { echo "❌ $CARGO_FILE version $CARGO_VERSION 与 $CONF_FILE version $VERSION 不一致"; exit 1; }
 TAG="v$VERSION"
 echo "📦 准备发布 $TAG"
 
-# ─── 测试门槛（test 不过不允许发版） ────────────────────────────────
-echo "🧪 跑前端 + Rust 测试..."
+# ─── 测试门槛（本地发版与 CI test-gate 使用同一口径） ────────────────
+echo "🧪 跑本地 release gate..."
+npm run lint
+npm run lint:readme
+npm run lint:i18n
+npm run lint:ci-gates
 npm test
-(cd src-tauri && cargo test --lib)
+npm run test:rust
+npm run lint:rust
 
 # ─── 注入签名密钥环境变量 ────────────────────────────────────────
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$PRIVATE_KEY_PATH")"
@@ -47,6 +60,7 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
 
 # ─── 构建 ────────────────────────────────────────────────────────
 echo "🔨 构建前端 + Tauri bundle..."
+npm run clean:release
 npm run build
 npx @tauri-apps/cli build --target universal-apple-darwin
 
@@ -75,6 +89,7 @@ DMG_NAME="Aether.Explorer_${VERSION}_universal.dmg"
 APP_TAR_NAME="Aether.Explorer_universal.app.tar.gz"
 APP_SIG_NAME="Aether.Explorer_universal.app.tar.gz.sig"
 LATEST_JSON="$STAGING_DIR/latest.json"
+CHECKSUMS="$STAGING_DIR/SHA256SUMS"
 
 cp "$DMG" "$STAGING_DIR/$DMG_NAME"
 cp "$APP_TAR" "$STAGING_DIR/$APP_TAR_NAME"
@@ -84,9 +99,19 @@ APP_TAR_URL="https://github.com/$REPO/releases/download/$TAG/$APP_TAR_NAME"
 SIG_CONTENT="$(cat "$STAGING_DIR/$APP_SIG_NAME")"
 PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+NOTES=""
+if [ -f CHANGELOG.md ]; then
+  NOTES="$(awk -v ver="$VERSION" '
+    $0 ~ "^## \\[" ver "\\]" { p=1; next }
+    p && /^## / { exit }
+    p { print }
+  ' CHANGELOG.md)"
+fi
+[ -n "$NOTES" ] || NOTES="Aether Explorer $TAG"
+
 jq -n \
   --arg version "$VERSION" \
-  --arg notes "Aether Explorer $VERSION" \
+  --arg notes "$NOTES" \
   --arg pub_date "$PUB_DATE" \
   --arg sig "$SIG_CONTENT" \
   --arg url "$APP_TAR_URL" \
@@ -102,6 +127,14 @@ jq -n \
 
 echo "📄 latest.json 已生成：$LATEST_JSON"
 
+(
+  cd "$STAGING_DIR"
+  shasum -a 256 "$DMG_NAME" "$APP_TAR_NAME" "$APP_SIG_NAME" latest.json > SHA256SUMS
+  shasum -a 256 -c SHA256SUMS
+)
+
+echo "🔐 SHA256SUMS 已生成：$CHECKSUMS"
+
 cleanup_asset() {
   local name="$1"
   gh release delete-asset "$TAG" -R "$REPO" "$name" -y >/dev/null 2>&1 || true
@@ -110,6 +143,7 @@ cleanup_asset() {
 cleanup_asset "Aether.Explorer.app.tar.gz"
 cleanup_asset "Aether.Explorer.app.tar.gz.sig"
 cleanup_asset "latest-json.y2Bv5nM25Z.json"
+cleanup_asset "SHA256SUMS"
 
 # ─── 上传到 GitHub Release ───────────────────────────────────────
 if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
@@ -119,21 +153,40 @@ if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
     "$STAGING_DIR/$APP_TAR_NAME" \
     "$STAGING_DIR/$APP_SIG_NAME" \
     "$LATEST_JSON" \
+    "$CHECKSUMS" \
     --clobber
 else
   echo "✨ 创建新 Release $TAG..."
   gh release create "$TAG" -R "$REPO" \
     --title "$TAG" \
-    --notes "Aether Explorer $VERSION" \
+    --notes "$NOTES" \
     "$STAGING_DIR/$DMG_NAME" \
     "$STAGING_DIR/$APP_TAR_NAME" \
     "$STAGING_DIR/$APP_SIG_NAME" \
-    "$LATEST_JSON"
+    "$LATEST_JSON" \
+    "$CHECKSUMS"
 fi
 
 echo "📤 Release 资产已上传：$TAG"
 echo "   下载页：https://github.com/$REPO/releases/tag/$TAG"
-echo "   manifest：https://github.com/$REPO/releases/latest/download/latest.json"
+echo "   manifest：https://github.com/$REPO/releases/download/$TAG/latest.json"
+echo "   checksums：https://github.com/$REPO/releases/download/$TAG/SHA256SUMS"
+
+echo "📡 更新 stable updater manifest..."
+if gh release view stable -R "$REPO" >/dev/null 2>&1; then
+  gh release upload stable -R "$REPO" "$LATEST_JSON" --clobber
+  gh release view stable -R "$REPO" --json assets -q '.assets[].name' \
+    | while IFS= read -r asset; do
+        [ "$asset" = "latest.json" ] && continue
+        gh release delete-asset stable "$asset" -R "$REPO" -y
+      done
+else
+  gh release create stable -R "$REPO" \
+    --title "Stable updater manifest" \
+    --notes "Mutable updater channel manifest. Versioned assets remain on $TAG." \
+    "$LATEST_JSON"
+fi
+echo "   stable manifest：https://github.com/$REPO/releases/download/stable/latest.json"
 
 # ─── 上传后验收 ──────────────────────────────────────────────────
 echo "🔎 验收远程 Release 资产..."
@@ -148,10 +201,32 @@ for attempt in 1 2 3 4 5; do
         and ($names | index($app))
         and ($names | index($sig))
         and ($names | index("latest.json"))
+        and ($names | index("SHA256SUMS"))
       ' >/dev/null; then
     break
   fi
   [ "$attempt" -lt 5 ] || { echo "❌ Release 资产校验失败"; exit 1; }
+  sleep 2
+done
+
+echo "🔎 验收 checksum manifest..."
+for attempt in 1 2 3 4 5; do
+  if curl -fsSL --retry 5 --retry-delay 2 \
+    "https://github.com/$REPO/releases/download/$TAG/SHA256SUMS" \
+    | cmp -s "$CHECKSUMS" -; then
+    break
+  fi
+  [ "$attempt" -lt 5 ] || { echo "❌ checksum manifest 校验失败"; exit 1; }
+  sleep 2
+done
+
+echo "🔎 验收 stable release 资产集合..."
+for attempt in 1 2 3 4 5; do
+  if gh release view stable -R "$REPO" --json assets \
+    | jq -e '[.assets[].name] == ["latest.json"]' >/dev/null; then
+    break
+  fi
+  [ "$attempt" -lt 5 ] || { echo "❌ stable release 包含非 latest.json 资产"; exit 1; }
   sleep 2
 done
 
@@ -171,6 +246,25 @@ for attempt in 1 2 3 4 5; do
     break
   fi
   [ "$attempt" -lt 5 ] || { echo "❌ updater manifest 校验失败"; exit 1; }
+  sleep 2
+done
+
+echo "🔎 验收 stable updater manifest..."
+for attempt in 1 2 3 4 5; do
+  if curl -fsSL --retry 5 --retry-delay 2 \
+    "https://github.com/$REPO/releases/download/stable/latest.json" \
+    | jq -e \
+      --arg version "$VERSION" \
+      --arg url "$APP_TAR_URL" '
+        .version == $version
+        and (.platforms["darwin-aarch64"].signature | length > 0)
+        and (.platforms["darwin-x86_64"].signature | length > 0)
+        and .platforms["darwin-aarch64"].url == $url
+        and .platforms["darwin-x86_64"].url == $url
+      ' >/dev/null; then
+    break
+  fi
+  [ "$attempt" -lt 5 ] || { echo "❌ stable updater manifest 校验失败"; exit 1; }
   sleep 2
 done
 

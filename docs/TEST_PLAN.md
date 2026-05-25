@@ -4,6 +4,8 @@
 > 目标：在不写"全套企业级测试"的前提下，建立**最小可用的回归网**，让你改完代码后能在 5 分钟内确认核心路径没坏。
 > 原则：投入产出比优先 — 先盖"安全 + 路径 + 格式化"等纯逻辑、留拖拽 / 视觉给人工 smoke。
 
+> 当前状态：自动化回归网已经落地。`npm test` 当前为 14 个测试文件、129 个用例通过；`npm run test:rust` 当前为 81 个 Rust 单元测试通过；`npm run lint`、`npm run lint:ci-gates`、`npm run lint:rust` 和 `npm run build` 已纳入合并 / 发版前门禁。
+
 ---
 
 ## 一、范围划分（三层防线）
@@ -30,20 +32,46 @@
 ```
 src-tauri/src/
 ├── lib.rs
-├── main.rs
-└── tests/                              # NEW
-    └── (内联在 lib.rs 的 #[cfg(test)] mod tests)
+└── main.rs
+    # Rust 测试内联在 lib.rs 的 #[cfg(test)] mod tests
 
 src/
 ├── ...
-└── __tests__/                          # NEW
+├── lib/
+│   ├── app-error.ts
+│   ├── asset-url-cache.ts
+│   ├── directory-signature.ts
+│   ├── file-selection.ts
+│   ├── keyboard-shortcuts.ts
+│   ├── media-metadata.ts
+│   ├── native-menu.ts
+│   ├── navigation-history.ts
+│   ├── path-helpers.ts
+│   ├── settings.ts
+│   ├── smoke.ts
+│   ├── startup-diagnostics.ts
+│   ├── url-guard.ts
+│   ├── use-debounced-value.ts
+│   └── use-prefers-reduced-motion.ts
+└── __tests__/
+    ├── app-error.test.ts
+    ├── asset-url-cache.test.ts
+    ├── directory-signature.test.ts
+    ├── file-selection.test.ts
+    ├── keyboard-shortcuts.test.ts
+    ├── media-metadata.test.ts
+    ├── native-menu.test.ts
+    ├── navigation-history.test.ts
+    ├── path-helpers.test.ts
     ├── settings.test.ts
+    ├── startup-diagnostics.test.ts
     ├── url-guard.test.ts
-    └── path-helpers.test.ts
+    ├── use-debounced-value.test.ts
+    └── use-prefers-reduced-motion.test.ts
 
 docs/
 ├── TEST_PLAN.md                        # 本文档
-└── SMOKE_TEST.md                       # NEW — 人工 checklist + console 脚本
+└── SMOKE_TEST.md                       # 人工 checklist + console smoke 说明
 ```
 
 > Rust 测试用 `#[cfg(test)] mod tests`（与代码同文件），不另开 `tests/` 集成测试目录 — 保持 lib.rs 重构后测试跟着走。
@@ -58,27 +86,28 @@ docs/
 - 不依赖外部进程（`std::process::Command`）
 - 不依赖文件系统（或可走 `tempfile` 隔离）
 
-### 第一批必测函数（15 个）
+### 当前覆盖与后续补强
 
-| 函数 | 位置 | 测试要点 | 优先级 |
+| 函数 / 主题 | 状态 | 测试要点 | 后续 |
 |------|------|---------|-------|
-| `format_size` | lib.rs:75 | 边界值：0 / 1023 / 1024 / 1048576 / 巨大数；单位精度 | 🟡 |
-| `format_kib` | lib.rs:92 | 解析失败回原值；正常 KiB→人类可读 | 🟡 |
-| `parse_df_line` | lib.rs:98 | 多空格列 / mount 含空格 / 列数不足返 Err | 🟠 |
-| `parse_capacity` | lib.rs:1278 | "85%" → 85；"" / "abc" → 0；">100%" → 100 cap | 🟡 |
-| `detect_mime` | lib.rs:106 | 各扩展名分类正确；大小写不敏感；`.app` 识别；不带扩展名 → "file" | 🟠 |
-| `unique_destination` | lib.rs:617 | 不存在 → 原路径；存在 → " copy" 后缀递增；含扩展名 / 不含 | 🟠 |
-| `encode_query_component` | lib.rs:508 | 中文 / 空格 / & / # 正确百分号编码 | 🟡 |
-| `shell_quote` | lib.rs:lookup | 单引号转义；空字符串；含 `$()` 反引号正确包裹 | 🔴 安全 |
-| `apple_quote` | lib.rs:1451 | 双引号 / 反斜杠转义；当前死代码 — 写测试时同时考虑是否真接入（详见 RELEASE_AUDIT P0-1） | 🔴 安全 |
-| `is_allowed_terminal` | 待新增 | 白名单匹配；大小写不敏感；拒绝注入字符串 | 🔴 安全 |
-| `validate_shell_fragment` | 待新增 | 拒绝 `$(` `` ` `` `&&` `\|` `;` `>` `<` `\n`；接受普通命令 | 🔴 安全 |
-| `safe_canonicalize` | 待新增 | 不存在路径 → Err；正常路径 → 绝对化；含 `..` → 解析 | 🔴 安全 |
-| `format_modified` | lib.rs:297 | 时间格式 `YYYY-MM-DD HH:MM`；无效元数据 → "未知" | 🟡 |
-| `format_system_time` | lib.rs:308 | Some/None；时区使用本地 | 🟡 |
-| `add_dir_to_zip` 入口校验 | lib.rs | 不存在 / 权限拒绝 → Err；正常返回 Ok | 🟡 |
+| `format_size` / `format_kib` | 已覆盖 | 边界值、单位换算、解析失败回原值 | 持续保留 |
+| `parse_df_line` / `parse_capacity` | 已覆盖 | 多空格列、mount 含空格、列数不足、百分比截断 | 持续保留 |
+| `detect_mime` | 已覆盖 | 图片 / 音视频 / code / text / archive / `.app` / 无扩展名 | 持续保留 |
+| `unique_destination` | 已覆盖 | 不存在路径、`copy` 后缀递增、无扩展名 | 持续保留 |
+| `encode_query_component` | 已覆盖 | safe chars 保留，空格 / `/` / `&` / `=` 百分号编码 | 持续保留 |
+| `shell_quote` | 已覆盖 | 单引号、空字符串、`$()`、反引号、`;`、`|`、`&&`、空格路径 | 持续保留 |
+| `validate_shell_fragment` | 已覆盖 | safe input trim、quoted file placeholders、注入字符、未闭合 quote、空字符串 | 持续保留 |
+| `is_allowed_terminal` | 已覆盖 | 允许 Terminal / iTerm / Warp / WezTerm，拒绝注入、空值、未知 app、`.app` 后缀 | 持续保留 |
+| `apple_quote` | 已覆盖 | AppleScript 字符串包裹、双引号和反斜杠转义 | 持续保留 |
+| `open_terminal_at` | 已覆盖 | 非白名单终端返回结构化 `InvalidPath` 错误 | 持续保留 |
+| copy / move conflict | 已覆盖 | skip conflict、same-dir、copy into self、transfer 统计 | 持续保留 |
+| symlink copy | 已覆盖 | 目录 symlink、self symlink、dangling symlink、命令入口复制 symlink | 持续保留 |
+| transfer cancel cleanup | 已覆盖 | staged target、replace backup、copy file / dir cancel 清理 | 持续保留 |
+| `safe_canonicalize` | 待补强 | 不存在路径、`..`、symlink 相关路径边界 | 改路径安全链路时 TDD |
+| `format_modified` / `format_system_time` | 待补强 | 时间格式与无效元数据 | 低风险补充 |
+| `add_dir_to_zip` 入口校验 | 待补强 | 不存在、权限拒绝、正常压缩 | 改压缩链路时补 |
 
-> 🔴 标的 5 个函数是 **`RELEASE_AUDIT.md` P0-1 命令注入修复的前置依赖** — 写测试时同时定型 API，避免修复时反复返工。
+> 安全相关测试优先级仍高于覆盖率数字。后续如改终端执行、路径 canonicalize、压缩或 AppleScript 相关链路，先补 failing case，再改实现。
 
 ### 写法范例（追加到 `src-tauri/src/lib.rs` 末尾）
 
@@ -146,30 +175,28 @@ cargo test --lib       # 仅测 lib.rs（不重编 bin）
 cargo test -- --nocapture format_size
 ```
 
-预期：所有测试 < 3 秒跑完，0 失败。
+预期：所有测试通过，当前基线为 81 个 Rust 单元测试。
 
 ---
 
 ## 四、Layer 2: 前端 TS 纯函数测试（vitest）
 
-### 安装
+### 当前配置
 
 ```bash
-npm install -D vitest @vitest/ui @testing-library/dom jsdom
+npm install -D vitest @vitest/ui jsdom
 ```
 
-在 `vite.config.ts` 加：
+`vite.config.ts` 已配置：
 ```ts
-import { defineConfig } from 'vitest/config';
-// ...
 test: {
   environment: 'jsdom',
-  globals: true,
-  include: ['src/**/__tests__/**/*.test.ts', 'src/**/*.test.ts'],
+  globals: false,
+  include: ['src/**/__tests__/**/*.test.{ts,tsx}'],
 }
 ```
 
-在 `package.json`：
+`package.json` 已配置：
 ```json
 {
   "scripts": {
@@ -179,23 +206,25 @@ test: {
 }
 ```
 
-### 第一批必测函数（8 个 / 文件 3 个）
+### 当前覆盖
 
-| 文件 / 函数 | 测试要点 | 优先级 |
+| 文件 / 函数 | 测试要点 | 后续 |
 |-----------|---------|-------|
-| `src/__tests__/settings.test.ts` | | |
-| ┖ `normalizeThemeSettings` | 缺字段填默认；旧版字段保留；contextMenuExtensions 过滤 deprecated | 🟠 |
-| ┖ `normalizeContextMenuExtensions` | 已 deprecated IDs 被剔除；填默认 actionType；保留自定义 | 🟠 |
-| ┖ `loadThemeFromLocalStorage` | 空 localStorage → DEFAULT；坏 JSON → DEFAULT | 🟡 |
-| `src/__tests__/path-helpers.test.ts` | | |
-| ┖ `getPathLeaf` (App.tsx 抽出) | 普通路径；尾随 `/`；空字符串；`aether://` 虚拟 | 🟡 |
-| ┖ `getInitialTabs` | url 含 `path` 参数 → 单 tab；无参数 → 默认主页 | 🟡 |
-| `src/__tests__/url-guard.test.ts` | | |
-| ┖ `safeShellOpen` (待新增) | http/https/mailto 通过；javascript: / file: / about: 拒绝 | 🔴 安全 |
-| ┖ `isValidWallpaperUrl` (待新增) | asset:// / http/https 通过；其他 false | 🔴 安全 |
-| ┖ `interpolateActionTemplate` 转义 (待修) | 文件名含 `'` 时 shell-safe；含 `;` 时 shell-safe | 🔴 安全 |
-
-> 🔴 三项与 `RELEASE_AUDIT.md` P0-2/3 的安全修复绑定，**先写测试 → 再改实现**（TDD）。
+| `settings.test.ts` | theme settings 默认值、迁移、context menu extension 规范化、localStorage 容错 | 持续保留 |
+| `ai-ops-log.test.ts` | 历史 index 迁移、分页、关键词/日期过滤、retention 清理、删除一致性 | 持续保留 |
+| `url-guard.test.ts` | `safeShellOpen` / wallpaper URL / action template interpolation / shell escaping | 持续保留 |
+| `app-error.test.ts` | app error normalize / directory error kind | 持续保留 |
+| `asset-url-cache.test.ts` | asset URL cache 复用与释放 | 持续保留 |
+| `directory-signature.test.ts` | 目录签名首次记录、无变化、变化刷新判断 | 持续保留 |
+| `file-selection.test.ts` | lookup、last selected、selected files、键盘相邻选择解析 | 持续保留 |
+| `keyboard-shortcuts.test.ts` | Explorer 快捷键解析 | 改键盘 effect 前先补 case |
+| `media-metadata.test.ts` | duration formatting | 持续保留 |
+| `native-menu.test.ts` | 原生菜单 display-mode 命令解析 | 持续保留 |
+| `navigation-history.test.ts` | back / forward / navigate history | 持续保留 |
+| `path-helpers.test.ts` | path leaf、虚拟路径、初始 tabs、共同父目录 | 持续保留 |
+| `startup-diagnostics.test.ts` | panic log fingerprint、启动异常提示去重 | 持续保留 |
+| `use-debounced-value.test.ts` | debounce 行为 | 持续保留 |
+| `use-prefers-reduced-motion.test.ts` | reduced motion 订阅与 fallback | 持续保留 |
 
 ### 写法范例
 
@@ -224,7 +253,7 @@ describe('normalizeThemeSettings', () => {
 });
 ```
 
-> **依赖工作**：normalizeThemeSettings 当前嵌在 App.tsx 里，需先抽到 `src/lib/settings.ts`。这是 `IMPROVEMENT_PROPOSALS.md` 1.1 / 8.1 的 settings migrator 重构的一部分，顺手做。
+> `normalizeThemeSettings` 已抽到 `src/lib/settings.ts`，后续继续按“先抽纯函数，再补测试”的模式处理高风险 UI 逻辑。
 
 ### 验证
 ```bash
@@ -232,13 +261,13 @@ npm test
 npm run test:watch    # 改代码时实时回归
 ```
 
-预期：< 2 秒跑完。
+预期：当前 14 个测试文件、129 个用例通过。
 
 ---
 
 ## 五、Layer 3: Smoke Test Checklist（人工 + console 脚本）
 
-写到 `docs/SMOKE_TEST.md`，**每次合并前过一遍**，5 分钟内能完成。
+已写到 `docs/SMOKE_TEST.md`，**每次合并前过一遍**，5 分钟内能完成。
 
 ### 结构示例
 ```markdown
@@ -257,7 +286,6 @@ npm run test:watch    # 改代码时实时回归
 
 ## 文件操作
 - [ ] Cmd+C / Cmd+V 复制粘贴
-- [ ] 右键 → 移至废纸篓，文件消失
 - [ ] 拖文件到子文件夹，移动成功
 - [ ] 重命名（双击 / 右键）
 
@@ -278,101 +306,64 @@ npm run test:watch    # 改代码时实时回归
 ```js
 window.__aether?.smoke()
 ```
-应输出 `{ ok: true, checks: N }`。
+应输出 `{ ok: true, total: N, failed: [] }`。
 ```
 
-### Console 自检脚本（一并落地）
+### Console 自检脚本（已落地）
 
-在 `src/lib/smoke.ts` 写一段 dev-only 工具：
+`src/lib/smoke.ts` 已提供 dev-only 工具，并在 `src/main.tsx` 中导入：
 ```ts
-// 仅 dev 注入 window.__aether.smoke
 if (import.meta.env.DEV) {
-  (window as any).__aether = {
-    async smoke() {
-      const checks: Array<[string, () => boolean | Promise<boolean>]> = [
-        ['theme loaded', () => !!document.documentElement.style.getPropertyValue('--primary')],
-        ['store ready', async () => {
-          const { load } = await import('@tauri-apps/plugin-store');
-          const s = await load('settings.json', { autoSave: true });
-          return !!s;
-        }],
-        ['list_directory works', async () => {
-          const { invoke } = await import('@tauri-apps/api/core');
-          const home = await invoke<string>('get_home_dir');
-          const entries = await invoke<unknown[]>('list_directory', { dirPath: home, showHidden: false });
-          return entries.length > 0;
-        }],
-        // 5-10 个更多检查
-      ];
-      const results = await Promise.all(checks.map(async ([name, fn]) => {
-        try { return [name, await fn()] as const; }
-        catch (e) { return [name, false, String(e)] as const; }
-      }));
-      const failed = results.filter(r => !r[1]);
-      console.table(results.map(r => ({ check: r[0], ok: r[1], err: r[2] })));
-      return { ok: failed.length === 0, checks: results.length, failed };
-    },
-  };
+  window.__aether = { smoke };
 }
 ```
 
-收益：连"控制台敲一行命令"都能验证 N 个隐式假设是否仍成立。
+当前 smoke 覆盖主题 CSS var、根节点、settings store、`get_home_dir`、`list_directory`、`get_child_count`、`list_volumes`、localStorage theme、URL guard、shell escape、`raise_window_at` 和当前窗口 label。收益：连"控制台敲一行命令"都能验证 N 个隐式假设是否仍成立。
 
 ---
 
 ## 六、CI 接入
 
 ```yaml
-# .github/workflows/release.yml 现有 release 流程之上加 job
-jobs:
-  test:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
-      - uses: dtolnay/rust-toolchain@stable
-      - run: npm ci
-      - run: npm test
-      - run: cd src-tauri && cargo test --lib
-
-  release:
-    needs: test    # 测试不过不发版
-    # ...
-```
-
-收益：未来你或贡献者写 PR，CI 自动跑两层测试。`scripts/release.sh` 本地版也加：
-```bash
-echo "🧪 跑测试..."
+npm run lint
+npm run lint:readme
+npm run lint:i18n
+npm run lint:ci-gates
 npm test
-cd src-tauri && cargo test --lib && cd ..
+npm run test:rust
+npm run lint:rust
+npm run build
 ```
+
+收益：未来你或贡献者写 PR，CI 自动跑前端 lint、文档 / i18n / gate 检查、Vitest、Rust test、Rust clippy 和 production build。test workflow 覆盖 `main`、`feat/**`、`fix/**`、`test/**`、`codex/**` 和 `codex-*` 工作分支，`lint:ci-gates` 会防止这些 push 触发或 `pull_request` 到 `main` 的触发被误删。`lint:ci-gates` 也会确认关键 npm scripts 仍指向真实检查器或真实命令，并分别检查 test workflow、release `test-gate` 和 release job 保留 Node 20、npm cache、`npm ci`、Rust cache、release universal targets 与明确的 `timeout-minutes`，同时检查 release job 依赖 `test-gate`，并检查 release workflow / 本地 release 脚本保留版本一致性校验，避免绕过发版门禁。`scripts/release.sh` 本地版也使用同一组 release gate，避免本地发版弱于 CI。
 
 ---
 
 ## 七、执行计划
 
 ### Phase 1：地基（半天）
-- [ ] 加 `vitest` 依赖 + `vite.config.ts` 配置
-- [ ] 创建 `src/__tests__/` 目录
-- [ ] 在 `lib.rs` 末尾添加 `#[cfg(test)] mod tests`
-- [ ] 抽出 `normalizeThemeSettings` 到 `src/lib/settings.ts`（便于测试）
-- [ ] 写出 5 个 Rust 纯函数测试：`format_size / shell_quote / detect_mime / unique_destination / parse_df_line`
-- [ ] 写出 3 个 TS 测试：`normalizeThemeSettings / getPathLeaf / loadThemeFromLocalStorage`
-- [ ] 跑通 `npm test` 与 `cargo test --lib`
+- [x] 加 `vitest` 依赖 + `vite.config.ts` 配置
+- [x] 创建 `src/__tests__/` 目录
+- [x] 在 `lib.rs` 末尾添加 `#[cfg(test)] mod tests`
+- [x] 抽出 `normalizeThemeSettings` 到 `src/lib/settings.ts`（便于测试）
+- [x] 写出 Rust 纯函数测试：`format_size / shell_quote / detect_mime / unique_destination / parse_df_line` 等
+- [x] 写出 TS 测试：settings、URL guard、file selection、keyboard shortcuts、navigation history、path helpers、startup diagnostics 等
+- [x] 跑通 `npm test` 与 `cargo test --lib`
 
 ### Phase 2：补全（半天）
-- [ ] Layer 1 剩余 10 个 Rust 测试
-- [ ] Layer 2 剩余 5 个 TS 测试
-- [ ] CI workflow 接入 `test` job
-- [ ] `scripts/release.sh` 加 test gate
+- [x] Layer 1 扩展到 81 个 Rust 单元测试
+- [x] Layer 2 扩展到 14 个测试文件、129 个 Vitest 用例
+- [x] CI test workflow 接入 lint / docs / i18n / gate / Vitest / Rust test / clippy / build，并覆盖声明的 push 分支与 PR 到 `main`
+- [x] release workflow 接入 `test-gate`，并由 `lint:ci-gates` 防止关键 npm scripts 退化为空命令、release job 绕过该依赖或删除版本一致性校验
+- [x] `scripts/release.sh` 加 release gate：lint / README sync / i18n / CI gate / Vitest / Rust test / clippy / build
 
 ### Phase 3：Smoke layer（半天）
-- [ ] 写 `docs/SMOKE_TEST.md` 完整 checklist（30 条）
-- [ ] 写 `src/lib/smoke.ts` console 自检脚本
-- [ ] 在 App.tsx mount 时注入 `window.__aether`（仅 dev）
+- [x] 写 `docs/SMOKE_TEST.md` checklist
+- [x] 写 `src/lib/smoke.ts` console 自检脚本
+- [x] 在 `src/main.tsx` 导入 dev-only smoke，注入 `window.__aether`
+- [ ] 每个发版候选手动跑一轮 `docs/SMOKE_TEST.md`
 
-**总投入：1.5 天 → 永久消除"改一处就怕踩坑"的心理负担**
+后续投入应集中在：给 `ExplorerView` 拖拽 / 外部导入 / 键盘 effect 的纯解析层补测试，避免直接重构大型 effect；给路径、压缩、终端执行等高风险链路补缺口。
 
 ---
 
@@ -380,14 +371,14 @@ cd src-tauri && cargo test --lib && cd ..
 
 | 未来工作 | 测试关联 |
 |---------|---------|
-| `RELEASE_AUDIT.md` P0-1 命令注入 | 先写 `shell_quote / validate_shell_fragment / apple_quote` 测试，TDD 改实现 |
-| `RELEASE_AUDIT.md` P0-2 shell.open 白名单 | 先写 `safeShellOpen` / `isValidWallpaperUrl` 测试 |
+| `RELEASE_AUDIT.md` P0-1 命令注入 | `shell_quote`、`validate_shell_fragment`、`is_allowed_terminal`、`apple_quote` 和非白名单终端错误已覆盖；改 terminal / AppleScript 链路前继续先补 case |
+| `RELEASE_AUDIT.md` P0-2 shell.open 白名单 | `safeShellOpen` / `isValidWallpaperUrl` 已覆盖，改白名单前先补 case |
 | `RELEASE_AUDIT.md` P0-4 路径校验 | 先写 `safe_canonicalize` 测试 |
 | `PERF_PLAN.md` L2-B 异步 list_directory | 改成 spawn_blocking 时，原 `format_size / detect_mime / unique_destination` 等纯函数保留，测试不变 |
 | `IMPROVEMENT_PROPOSALS.md` 1.1 状态机 | 把 reducer 单独写成纯函数，超容易测 |
 | `IMPROVEMENT_PROPOSALS.md` 8.1 settings migrator | `migrateV1ToV2` 是纯函数，直接覆盖 |
 
-每次做新功能 / 修 bug，**先在 `__tests__` 里加一条 failing case → 改代码到 pass**。这是最便宜的"防回归"。
+每次做新功能 / 修 bug，优先在 `__tests__` 或 Rust `#[cfg(test)]` 中加一条 failing case，再改代码到 pass。对拖拽 / 跨窗口 / Finder 导入这类系统集成路径，先补纯函数和人工 smoke 步骤，不盲目引入脆弱自动化。
 
 ---
 
@@ -402,6 +393,6 @@ cd src-tauri && cargo test --lib && cd ..
 
 ## 一句话总结
 
-**Rust 纯函数 + TS 纯函数 + Console 自检 + Smoke checklist** = 1.5 天投入 → 每次改完跑 `npm test && cargo test --lib`（5 秒）+ console 一行命令（5 秒）+ 5 分钟人工 smoke = 6 分钟内能合并。
+**Rust 纯函数 + TS 纯函数 + Console 自检 + Smoke checklist** = 每次改完跑 `npm run lint && npm test && npm run build && git diff --check`，涉及 Rust 时再跑 `npm run test:rust && npm run lint:rust`；发版候选再补 5 分钟人工 smoke。
 
-比起"复测一遍累"的心理成本，这点投入太值。
+这套回归网的目标是让高风险行为有证据可查，同时避免为了追求覆盖率去改坏 ExplorerView 的拖拽、导入、快捷键和刷新链路。

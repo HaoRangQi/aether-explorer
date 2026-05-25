@@ -1,31 +1,42 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle, File as FileIcon, Search } from 'lucide-react';
+import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle, File as FileIcon, Search, FileText, History } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { confirm as tauriConfirm, open, save } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
-import { safeShellOpen } from '../lib/url-guard';
+import { isValidWallpaperUrl, safeShellOpen } from '../lib/url-guard';
+import { normalizeAppError } from '../lib/app-error';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { ThemeSettings, ContextMenuAction, LanguageOption, AIProviderConfig } from '../types';
 import { ACCENT_COLORS } from '../constants';
-import { DEFAULT_THEME, DEFAULT_LIGHT_ACCENT, DEFAULT_DARK_ACCENT } from '../lib/settings';
+import {
+  DEFAULT_THEME,
+  DEFAULT_LIGHT_ACCENT,
+  DEFAULT_DARK_ACCENT,
+  buildSettingsBackup,
+  sanitizeImportedContextMenuExtensions,
+  sanitizeImportedSettingsBackup,
+} from '../lib/settings';
 import { testProviderConnection, fetchModels, getProviderApiUrl } from '../lib/ai-service';
+import type { ImportedSettingsBackup } from '../lib/settings';
 
 interface SettingsViewProps {
   theme: ThemeSettings;
   onThemeChange: (theme: ThemeSettings) => void;
+  initialCategory?: SettingsCategory;
   favorites?: string[];
   fileTags?: Record<string, string[]>;
   recentItems?: string[];
   onImport?: (data: { theme?: ThemeSettings; favorites?: string[]; fileTags?: Record<string, string[]>; recentItems?: string[] }) => void;
+  onResetAllData?: () => void;
   /** 用户在设置内点了"恢复我的收藏"后，App 把 view 切到首页 tab 给即时反馈 */
   onNavigateToHome?: () => void;
 }
 
-type SettingsCategory = 'appearance' | 'files' | 'permissions' | 'extensions' | 'features' | 'ai' | 'about';
+export type SettingsCategory = 'appearance' | 'files' | 'permissions' | 'extensions' | 'features' | 'ai' | 'about';
 
 const CURATED_PALETTES = [
   { name: 'Default', colors: ['#007aff', '#EBE0FF', '#FFD8E4', '#C2E7FF'] },
@@ -60,16 +71,18 @@ const AVAILABLE_LANGUAGE_SLOTS: LanguageOption[] = [
   { code: 'de', label: 'German', nativeLabel: 'Deutsch', source: 'available', completeness: 0, enabled: false },
 ];
 
-const CORE_CONTEXT_ACTIONS = ['打开', '重命名', '复制到', '移动到', '压缩', '解压', 'Quick Look', 'Finder 显示', '复制路径', '终端打开', '移至废纸篓'];
+const ISSUE_URL = 'https://github.com/HaoRangQi/aether-explorer/issues/new/choose';
 
-const ACTION_TYPE_META = {
-  terminal: { label: '终端动作', description: '打开指定终端，并在选中目录或当前目录执行启动参数。', icon: Terminal },
-  shell: { label: 'Shell 命令', description: '把命令模板带入终端执行，适合脚本、构建、批处理。', icon: Code2 },
-  url: { label: 'URL 动作', description: '按模板生成链接并交给系统浏览器打开。', icon: ExternalLink },
-  placeholder: { label: '插件占位', description: '保留菜单入口，等待后续插件或 AI 工作流接入。', icon: Sparkles },
-  'ai-assistant': { label: 'AI 文件助手', description: '打开 AI 文件助手，对选中文件或当前目录执行智能操作。', icon: Sparkles },
-  'ai-history': { label: 'AI 操作历史', description: '查看 AI 操作记录，支持一键回滚。', icon: Sparkles },
-} satisfies Record<NonNullable<ContextMenuAction['actionType']>, { label: string; description: string; icon: React.ComponentType<{ className?: string }> }>;
+const CORE_CONTEXT_ACTIONS = ['open', 'rename', 'copyTo', 'moveTo', 'compress', 'decompress', 'quickLook', 'revealInFinder', 'copyPath', 'openTerminal', 'trash'] as const;
+
+const ACTION_TYPE_ICONS = {
+  terminal: Terminal,
+  shell: Code2,
+  url: ExternalLink,
+  placeholder: Sparkles,
+  'ai-assistant': Sparkles,
+  'ai-history': Sparkles,
+} satisfies Record<NonNullable<ContextMenuAction['actionType']>, React.ComponentType<{ className?: string }>>;
 
 type UpdateStatus = {
   state: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'installing' | 'restarting' | 'error';
@@ -81,6 +94,18 @@ type UpdateStatus = {
   downloaded: number;
   contentLength: number;
   message: string;
+};
+
+type DiagnosticsStatus = {
+  loading: boolean;
+  message: string;
+  kind: 'idle' | 'ok' | 'error';
+};
+
+type BackupStatus = {
+  loading: boolean;
+  message: string;
+  kind: 'idle' | 'ok' | 'error';
 };
 
 const DEFAULT_UPDATE_STATUS: UpdateStatus = {
@@ -95,6 +120,20 @@ const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   message: '尚未检查更新。',
 };
 
+const DEFAULT_DIAGNOSTICS_STATUS: DiagnosticsStatus = {
+  loading: false,
+  message: '',
+  kind: 'idle',
+};
+
+const DEFAULT_BACKUP_STATUS: BackupStatus = {
+  loading: false,
+  message: '',
+  kind: 'idle',
+};
+
+const AI_HISTORY_RETENTION_OPTIONS = [3, 7, 15, 30, 90];
+
 function formatBytes(bytes: number): string {
   if (!bytes || bytes < 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -107,9 +146,13 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-export default function SettingsView({ theme, onThemeChange, favorites = [], fileTags = {}, recentItems = [], onImport, onNavigateToHome }: SettingsViewProps) {
+function countFileTagEntries(fileTags?: Record<string, string[]>): number {
+  return fileTags ? Object.keys(fileTags).length : 0;
+}
+
+export default function SettingsView({ theme, onThemeChange, initialCategory = 'appearance', favorites = [], fileTags = {}, recentItems = [], onImport, onResetAllData, onNavigateToHome }: SettingsViewProps) {
   const { t, i18n } = useTranslation();
-  const [activeCategory, setActiveCategory] = useState<SettingsCategory>('appearance');
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>(initialCategory);
   const [availableFonts, setAvailableFonts] = useState<string[]>(['Inter', 'System Default', 'Arial', 'Segoe UI', 'Roboto', 'Times New Roman']);
   const [terminalApps, setTerminalApps] = useState<string[]>(['Terminal', 'iTerm']);
   const [newActionLabel, setNewActionLabel] = useState('');
@@ -125,6 +168,143 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
   const [showLanguageManager, setShowLanguageManager] = useState(false);
   const [showMediaGridControls, setShowMediaGridControls] = useState(false);
   const [cleanupStatus, setCleanupStatus] = useState<{ cleaning: boolean; message: string }>({ cleaning: false, message: '' });
+  const [diagnosticsStatus, setDiagnosticsStatus] = useState<DiagnosticsStatus>(DEFAULT_DIAGNOSTICS_STATUS);
+  const [backupStatus, setBackupStatus] = useState<BackupStatus>(DEFAULT_BACKUP_STATUS);
+  const [lastPanicLog, setLastPanicLog] = useState<string | null>(null);
+  const [wallpaperUrlError, setWallpaperUrlError] = useState('');
+  const [wallpaperUrlDraft, setWallpaperUrlDraft] = useState(theme.wallpaperUrl || '');
+
+  const getActionTypeMeta = useCallback((type: NonNullable<ContextMenuAction['actionType']>) => ({
+    label: t(`settings.extensions.actionTypes.${type}.label`),
+    description: t(`settings.extensions.actionTypes.${type}.description`),
+    icon: ACTION_TYPE_ICONS[type],
+  }), [t]);
+
+  useEffect(() => {
+    setActiveCategory(initialCategory);
+  }, [initialCategory]);
+
+  const buildImportConfirmMessage = useCallback((backup: ImportedSettingsBackup): string => {
+    const lines: string[] = [];
+    if (backup.theme) {
+      lines.push(t('settings.importConfirm.theme'));
+    }
+    if (backup.favorites) {
+      lines.push(t('settings.importConfirm.favorites', {
+        imported: backup.favorites.length,
+        current: favorites.length,
+      }));
+    }
+    if (backup.fileTags) {
+      lines.push(t('settings.importConfirm.fileTags', {
+        imported: countFileTagEntries(backup.fileTags),
+        current: countFileTagEntries(fileTags),
+      }));
+    }
+    if (backup.recentItems) {
+      lines.push(t('settings.importConfirm.recentItems', {
+        imported: backup.recentItems.length,
+        current: recentItems.length,
+      }));
+    }
+
+    return [
+      t('settings.importConfirm.title'),
+      '',
+      t('settings.importConfirm.intro'),
+      ...lines.map(line => `- ${line}`),
+      '',
+      t('settings.importConfirm.warning'),
+    ].join('\n');
+  }, [favorites.length, fileTags, recentItems.length, t]);
+
+  const handleExportSettingsBackup = useCallback(async () => {
+    setBackupStatus({ loading: true, kind: 'idle', message: t('settings.backup.exporting') });
+    try {
+      const path = await save({
+        defaultPath: `aether-backup-${new Date().toISOString().slice(0, 10)}.json`,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (!path) {
+        setBackupStatus(DEFAULT_BACKUP_STATUS);
+        return;
+      }
+      const data = buildSettingsBackup({
+        theme,
+        favorites,
+        fileTags,
+        recentItems,
+        appVersion: appVersion || import.meta.env.VITE_APP_VERSION || '0.0.0',
+      });
+      await writeTextFile(path, JSON.stringify(data, null, 2));
+      setBackupStatus({ loading: false, kind: 'ok', message: t('settings.backup.exported') });
+    } catch (err) {
+      setBackupStatus({
+        loading: false,
+        kind: 'error',
+        message: t('settings.backup.exportFailed', { error: normalizeAppError(err).userMessage }),
+      });
+    }
+  }, [appVersion, favorites, fileTags, recentItems, t, theme]);
+
+  const handleImportSettingsBackup = useCallback(async () => {
+    setBackupStatus({ loading: true, kind: 'idle', message: t('settings.backup.importing') });
+    try {
+      const path = await open({
+        multiple: false,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (!path || typeof path !== 'string') {
+        setBackupStatus(DEFAULT_BACKUP_STATUS);
+        return;
+      }
+      const raw = await readTextFile(path);
+      const data = JSON.parse(raw);
+      const sanitized = sanitizeImportedSettingsBackup(data);
+      const shouldImport = await tauriConfirm(buildImportConfirmMessage(sanitized), {
+        title: t('settings.backup.import'),
+        kind: 'warning',
+      });
+      if (!shouldImport) {
+        setBackupStatus(DEFAULT_BACKUP_STATUS);
+        return;
+      }
+      onImport?.(sanitized);
+      setBackupStatus({ loading: false, kind: 'ok', message: t('settings.backup.imported') });
+    } catch (err) {
+      setBackupStatus({
+        loading: false,
+        kind: 'error',
+        message: t('settings.backup.importFailed', { error: normalizeAppError(err).userMessage }),
+      });
+    }
+  }, [buildImportConfirmMessage, onImport, t]);
+
+  const handleResetAllSettingsData = useCallback(async () => {
+    const ok = await tauriConfirm(t('settings.backup.resetConfirm'), {
+      title: t('settings.backup.resetAll'),
+      kind: 'warning',
+    });
+    if (!ok) return;
+    try {
+      onResetAllData?.();
+      setBackupStatus({ loading: false, kind: 'ok', message: t('settings.backup.resetDone') });
+    } catch (err) {
+      setBackupStatus({
+        loading: false,
+        kind: 'error',
+        message: t('settings.backup.resetFailed', { error: normalizeAppError(err).userMessage }),
+      });
+    }
+  }, [onResetAllData, t]);
+
+  useEffect(() => {
+    setWallpaperUrlDraft(theme.wallpaperUrl || '');
+  }, [theme.wallpaperUrl]);
+
+  useEffect(() => {
+    setActiveCategory(initialCategory);
+  }, [initialCategory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -176,16 +356,27 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
   };
 
   const handleWallpaperUrlChange = (url: string) => {
+    setWallpaperUrlDraft(url);
     const trimmedUrl = url.trim();
+    if (!trimmedUrl) {
+      setWallpaperUrlError('');
+      onThemeChange({ ...theme, wallpaperUrl: undefined });
+      return;
+    }
+    if (!isValidWallpaperUrl(trimmedUrl)) {
+      setWallpaperUrlError(t('settings.wallpaperUrlInvalid'));
+      return;
+    }
+    setWallpaperUrlError('');
     if (trimmedUrl) {
       onThemeChange({
         ...theme,
-        wallpaperUrl: url,
+        wallpaperUrl: trimmedUrl,
         wallpaperBlur: 0,
         blurIntensity: 0
       });
     } else {
-      onThemeChange({ ...theme, wallpaperUrl: url });
+      onThemeChange({ ...theme, wallpaperUrl: undefined });
     }
   };
 
@@ -332,17 +523,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
     try {
       const content = await readTextFile(selected);
       const parsed = JSON.parse(content);
-      if (!Array.isArray(parsed)) throw new Error('文件格式不正确');
-      const normalized = parsed
-        .filter(item => item && typeof item === 'object')
-        .map((item: ContextMenuAction, index: number) => ({
-          ...item,
-          id: item.id || `imported-${Date.now()}-${index}`,
-          enabled: item.enabled !== false,
-          actionType: item.actionType || 'placeholder',
-          workingDirectory: item.workingDirectory || 'selection',
-          confirmExecution: item.confirmExecution ?? true,
-        }));
+      const normalized = sanitizeImportedContextMenuExtensions(parsed);
       onThemeChange({ ...theme, contextMenuExtensions: normalized });
     } catch (err) {
       console.error('导入失败', err);
@@ -350,7 +531,10 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
   };
 
   const handleDeleteExtension = async (id: string, label: string) => {
-    const ok = await window.confirm(t('dialogs.deleteConfirm', { label }));
+    const ok = await tauriConfirm(t('dialogs.deleteConfirm', { label }), {
+      title: t('settings.extensions.deleteAction'),
+      kind: 'warning',
+    });
     if (!ok) return;
     deleteExtension(id);
   };
@@ -390,7 +574,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
       setUpdateStatus({
         ...DEFAULT_UPDATE_STATUS,
         state: 'error',
-        message: t('settings.update.checkFailed', { error: String(err) }),
+        message: t('settings.update.checkFailed', { error: normalizeAppError(err).userMessage }),
       });
     }
   };
@@ -456,13 +640,13 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
       setUpdateStatus(prev => ({
         ...prev,
         state: 'error',
-        message: t('settings.update.installFailed', { error: String(err) }),
+        message: t('settings.update.installFailed', { error: normalizeAppError(err).userMessage }),
       }));
     }
   };
 
   const handleCleanup = async () => {
-    setCleanupStatus({ cleaning: true, message: '正在清理缓存...' });
+    setCleanupStatus({ cleaning: true, message: t('settings.cleanup.cleaning') });
 
     try {
       // 清理 localStorage 中的临时数据
@@ -487,7 +671,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
 
       setCleanupStatus({
         cleaning: false,
-        message: `清理完成！已清理 ${keysToRemove.length} 个缓存项。`
+        message: t('settings.cleanup.done', { count: keysToRemove.length })
       });
 
       // 3秒后清除消息
@@ -497,25 +681,138 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
     } catch (err) {
       setCleanupStatus({
         cleaning: false,
-        message: `清理失败：${String(err)}`
+        message: t('settings.cleanup.failed', { error: normalizeAppError(err).userMessage })
       });
     }
   };
 
   const categories = [
-    { id: 'appearance', label: t('settings.appearanceHeader', '主题与外观'), icon: Palette },
-    { id: 'files', label: t('settings.filesHeader', '文件与存储'), icon: HardDrive },
-    { id: 'permissions', label: t('settings.privacyHeader', '权限与隐私'), icon: Shield },
-    { id: 'extensions', label: t('settings.extensionsHeader', '右键菜单扩展'), icon: Puzzle },
-    { id: 'features', label: '功能设置', icon: Monitor },
-    { id: 'ai', label: 'AI 服务', icon: Sparkles },
-    { id: 'about', label: '关于', icon: Info },
+    { id: 'appearance', label: t('settings.appearanceHeader'), icon: Palette },
+    { id: 'files', label: t('settings.filesHeader'), icon: HardDrive },
+    { id: 'permissions', label: t('settings.privacyHeader'), icon: Shield },
+    { id: 'extensions', label: t('settings.extensionsHeader'), icon: Puzzle },
+    { id: 'features', label: t('settings.featuresHeader'), icon: Monitor },
+    { id: 'ai', label: t('settings.aiHeader'), icon: Sparkles },
+    { id: 'about', label: t('settings.aboutHeader'), icon: Info },
   ];
 
   const selectedLanguage = theme.language || i18n.language || 'zh';
   const languageOptions = theme.languageOptions || BUILT_IN_LANGUAGES;
   const visibleLanguages = [...languageOptions, ...AVAILABLE_LANGUAGE_SLOTS.filter(slot => !languageOptions.some(lang => lang.code === slot.code))];
   const systemLanguage = navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+
+  const buildDiagnosticsReport = useCallback(async () => {
+    const logsDir = await invoke<string>('get_logs_dir').catch(() => t('settings.diagnostics.unavailable'));
+    const configDir = await invoke<string>('get_config_dir').catch(() => t('settings.diagnostics.unavailable'));
+    const payload = {
+      app: 'Aether Explorer',
+      version: appVersion || import.meta.env.VITE_APP_VERSION || '0.0.0',
+      platform: navigator.platform,
+      userAgent: navigator.userAgent,
+      language: selectedLanguage,
+      systemLanguage: navigator.language,
+      logsDir,
+      configDir,
+      settings: {
+        mode: theme.mode,
+        accentColor: theme.accentColor,
+        showHiddenFiles: Boolean(theme.showHiddenFiles),
+        showPreviewPanel: Boolean(theme.showPreviewPanel),
+        enableMultiWindow: Boolean(theme.enableMultiWindow),
+        crossWindowDropDefault: theme.crossWindowDropDefault || 'copy',
+        terminalApp: theme.terminalApp || 'Terminal',
+        contextMenuExtensions: theme.contextMenuExtensions?.length || 0,
+        aiProviders: theme.aiProviders?.map(provider => ({
+          id: provider.id,
+          name: provider.name,
+          type: provider.type,
+          enabled: provider.enabled,
+          hasApiKey: Boolean(provider.apiKey),
+          active: theme.aiActiveProvider === provider.id,
+        })) || [],
+      },
+    };
+    return JSON.stringify(payload, null, 2);
+  }, [appVersion, selectedLanguage, t, theme]);
+
+  const copyTextToClipboard = useCallback(async (text: string) => {
+    await navigator.clipboard.writeText(text);
+  }, []);
+
+  const handleCopyDiagnostics = useCallback(async () => {
+    setDiagnosticsStatus({ loading: true, kind: 'idle', message: t('settings.diagnostics.collecting') });
+    try {
+      await copyTextToClipboard(await buildDiagnosticsReport());
+      setDiagnosticsStatus({ loading: false, kind: 'ok', message: t('settings.diagnostics.copied') });
+    } catch (err) {
+      setDiagnosticsStatus({
+        loading: false,
+        kind: 'error',
+        message: t('settings.diagnostics.copyFailed', { error: normalizeAppError(err).userMessage }),
+      });
+    }
+  }, [buildDiagnosticsReport, copyTextToClipboard, t]);
+
+  const handleOpenLogsDir = useCallback(async () => {
+    setDiagnosticsStatus({ loading: true, kind: 'idle', message: t('settings.diagnostics.openingLogs') });
+    try {
+      await invoke('open_logs_dir');
+      setDiagnosticsStatus({ loading: false, kind: 'ok', message: t('settings.diagnostics.logsOpened') });
+    } catch (err) {
+      setDiagnosticsStatus({
+        loading: false,
+        kind: 'error',
+        message: t('settings.diagnostics.openLogsFailed', { error: normalizeAppError(err).userMessage }),
+      });
+    }
+  }, [t]);
+
+  const handleOpenConfigDir = useCallback(async () => {
+    setDiagnosticsStatus({ loading: true, kind: 'idle', message: t('settings.diagnostics.openingConfig') });
+    try {
+      await invoke('open_config_dir');
+      setDiagnosticsStatus({ loading: false, kind: 'ok', message: t('settings.diagnostics.configOpened') });
+    } catch (err) {
+      setDiagnosticsStatus({
+        loading: false,
+        kind: 'error',
+        message: t('settings.diagnostics.openConfigFailed', { error: normalizeAppError(err).userMessage }),
+      });
+    }
+  }, [t]);
+
+  const handleReadLastPanicLog = useCallback(async () => {
+    setDiagnosticsStatus({ loading: true, kind: 'idle', message: t('settings.diagnostics.readingPanicLog') });
+    try {
+      const log = await invoke<string | null>('read_last_panic_log');
+      setLastPanicLog(log);
+      setDiagnosticsStatus({
+        loading: false,
+        kind: log ? 'ok' : 'idle',
+        message: log ? t('settings.diagnostics.panicLogLoaded') : t('settings.diagnostics.noPanicLog'),
+      });
+    } catch (err) {
+      setDiagnosticsStatus({
+        loading: false,
+        kind: 'error',
+        message: t('settings.diagnostics.readPanicLogFailed', { error: normalizeAppError(err).userMessage }),
+      });
+    }
+  }, [t]);
+
+  const handleCopyPanicLog = useCallback(async () => {
+    if (!lastPanicLog) return;
+    try {
+      await copyTextToClipboard(lastPanicLog);
+      setDiagnosticsStatus({ loading: false, kind: 'ok', message: t('settings.diagnostics.panicLogCopied') });
+    } catch (err) {
+      setDiagnosticsStatus({
+        loading: false,
+        kind: 'error',
+        message: t('settings.diagnostics.copyFailed', { error: normalizeAppError(err).userMessage }),
+      });
+    }
+  }, [copyTextToClipboard, lastPanicLog, t]);
 
   const applyLanguage = (code: string) => {
     i18n.changeLanguage(code);
@@ -887,18 +1184,27 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
               <div className="flex gap-3">
                 <input
                   type="text"
-                  value={theme.wallpaperUrl || ''}
+                  value={wallpaperUrlDraft}
                   onChange={(e) => handleWallpaperUrlChange(e.target.value)}
                   placeholder="https://images.unsplash.com/..."
-                  className="flex-1 bg-primary/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all font-medium"
+                  className={`flex-1 bg-primary/5 border rounded-2xl px-5 py-4 text-[13px] outline-none focus:ring-4 focus:ring-primary/10 transition-all font-medium ${
+                    wallpaperUrlError ? 'border-red-400/70 focus:border-red-400' : 'border-primary/20 focus:border-primary'
+                  }`}
                 />
                 <button
-                  onClick={() => onThemeChange({ ...theme, wallpaperUrl: undefined })}
+                  onClick={() => {
+                    setWallpaperUrlError('');
+                    setWallpaperUrlDraft('');
+                    onThemeChange({ ...theme, wallpaperUrl: undefined });
+                  }}
                   className="px-5 bg-primary/10 rounded-2xl text-[13px] font-bold hover:bg-primary/20 transition-all"
                 >
                   {t('common.reset')}
                 </button>
               </div>
+              {wallpaperUrlError && (
+                <p className="text-[11px] text-red-400 font-bold">{wallpaperUrlError}</p>
+              )}
             </div>
             <div className="relative">
               <button
@@ -1292,8 +1598,6 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
     </div>
   );
 
-  const [multiWindow, setMultiWindow] = useState(false);
-
   const renderFeaturesCategory = () => (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <section className="bg-primary/5 rounded-[32px] p-10 border border-primary/10 space-y-8">
@@ -1307,14 +1611,14 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
         <div className="space-y-2">
           <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group">
             <div className="space-y-1">
-              <h4 className="text-[15px] font-bold text-on-surface">允许多窗口</h4>
-              <p className="text-[12px] text-on-surface/50">开启后可按 Cmd+N 新建独立窗口。默认使用多标签页，已满足大多数场景。</p>
+              <h4 className="text-[15px] font-bold text-on-surface">Cmd+N 新建独立窗口</h4>
+              <p className="text-[12px] text-on-surface/50">开启后 Cmd+N / 加号会新建独立窗口；关闭时默认新建标签页。拖出标签页始终会分离成窗口。</p>
             </div>
             <button
-              onClick={() => setMultiWindow(!multiWindow)}
-              className={`w-14 h-8 rounded-full p-1.5 transition-colors duration-300 flex items-center ${multiWindow ? 'bg-primary' : 'bg-on-surface/[0.1]'}`}
+              onClick={() => onThemeChange({ ...theme, enableMultiWindow: !theme.enableMultiWindow })}
+              className={`w-14 h-8 rounded-full p-1.5 transition-colors duration-300 flex items-center ${theme.enableMultiWindow ? 'bg-primary' : 'bg-on-surface/[0.1]'}`}
             >
-              <motion.div animate={{ x: multiWindow ? 24 : 0 }} className="w-5 h-5 rounded-full shadow-lg bg-white" />
+              <motion.div animate={{ x: theme.enableMultiWindow ? 24 : 0 }} className="w-5 h-5 rounded-full shadow-lg bg-white" />
             </button>
           </div>
 
@@ -1364,8 +1668,8 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
         <div className="grid grid-cols-2 gap-3 text-[13px]">
           {[
             ['Cmd+A', '全选'],
-            ['Cmd+C', '复制路径'],
-            ['Cmd+N', '新建窗口'],
+            ['Cmd+C', '复制到文件剪贴板'],
+            ['Cmd+N', '新建窗口（需开启多窗口）'],
             ['Cmd+W', '关闭标签'],
             ['Delete', '移至废纸篓'],
             ['Enter', '打开文件'],
@@ -1759,6 +2063,94 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
       </section>
 
       <section className="bg-primary/5 rounded-[32px] p-10 border border-primary/10 space-y-6">
+        <div className="flex items-start justify-between gap-6">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0">
+              <FileText className="w-6 h-6 text-primary" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-[18px] font-black text-on-surface">{t('settings.diagnostics.title')}</h3>
+              <p className="text-[12px] text-on-surface/45 mt-1 leading-relaxed">{t('settings.diagnostics.description')}</p>
+            </div>
+          </div>
+          {diagnosticsStatus.loading && <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <button
+            onClick={handleCopyDiagnostics}
+            disabled={diagnosticsStatus.loading}
+            className="px-5 py-4 rounded-2xl bg-primary/10 text-primary text-[12px] font-black flex items-center justify-center gap-2 hover:bg-primary/20 transition-colors disabled:opacity-60"
+          >
+            <Copy className="w-4 h-4" />
+            {t('settings.diagnostics.copyInfo')}
+          </button>
+          <button
+            onClick={handleOpenLogsDir}
+            disabled={diagnosticsStatus.loading}
+            className="px-5 py-4 rounded-2xl bg-primary/10 text-primary text-[12px] font-black flex items-center justify-center gap-2 hover:bg-primary/20 transition-colors disabled:opacity-60"
+          >
+            <Folder className="w-4 h-4" />
+            {t('settings.diagnostics.openLogs')}
+          </button>
+          <button
+            onClick={handleOpenConfigDir}
+            disabled={diagnosticsStatus.loading}
+            className="px-5 py-4 rounded-2xl bg-primary/10 text-primary text-[12px] font-black flex items-center justify-center gap-2 hover:bg-primary/20 transition-colors disabled:opacity-60"
+          >
+            <Folder className="w-4 h-4" />
+            {t('settings.diagnostics.openConfig')}
+          </button>
+          <button
+            onClick={handleReadLastPanicLog}
+            disabled={diagnosticsStatus.loading}
+            className="px-5 py-4 rounded-2xl bg-primary/10 text-primary text-[12px] font-black flex items-center justify-center gap-2 hover:bg-primary/20 transition-colors disabled:opacity-60"
+          >
+            <FileText className="w-4 h-4" />
+            {t('settings.diagnostics.loadPanicLog')}
+          </button>
+          <button
+            onClick={() => safeShellOpen(ISSUE_URL).catch(() => {})}
+            className="px-5 py-4 rounded-2xl bg-primary text-on-primary text-[12px] font-black flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:bg-primary/90 transition-colors"
+          >
+            <ExternalLink className="w-4 h-4" />
+            {t('settings.diagnostics.openIssue')}
+          </button>
+        </div>
+
+        {diagnosticsStatus.message && (
+          <div className={`rounded-2xl border px-5 py-4 flex items-center gap-3 ${
+            diagnosticsStatus.kind === 'error'
+              ? 'bg-red-500/10 border-red-500/20 text-red-500'
+              : 'bg-primary/5 border-primary/10 text-on-surface/70'
+          }`}>
+            {diagnosticsStatus.kind === 'error' ? <X className="w-5 h-5 shrink-0" /> : <BadgeCheck className="w-5 h-5 text-primary shrink-0" />}
+            <span className="text-[13px] font-bold leading-relaxed">{diagnosticsStatus.message}</span>
+          </div>
+        )}
+
+        {lastPanicLog !== null && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-[12px] font-black text-on-surface/45 uppercase tracking-widest">{t('settings.diagnostics.lastPanicLog')}</h4>
+              {lastPanicLog && (
+                <button
+                  onClick={handleCopyPanicLog}
+                  className="px-3 py-2 rounded-xl bg-primary/10 text-primary text-[11px] font-black flex items-center gap-1.5 hover:bg-primary/20 transition-colors"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  {t('settings.diagnostics.copyPanicLog')}
+                </button>
+              )}
+            </div>
+            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-2xl bg-on-surface/[0.04] border border-primary/10 p-4 text-[11px] leading-relaxed text-on-surface/65 font-mono">
+              {lastPanicLog || t('settings.diagnostics.noPanicLog')}
+            </pre>
+          </div>
+        )}
+      </section>
+
+      <section className="bg-primary/5 rounded-[32px] p-10 border border-primary/10 space-y-6">
         <div className="flex items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
@@ -2013,6 +2405,36 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
             </div>
           </div>
 
+          <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group gap-6">
+            <div className="space-y-1 min-w-0">
+              <h4 className="text-[15px] font-bold text-on-surface flex items-center gap-2">
+                <History className="w-4 h-4 text-primary" />
+                {t('settings.aiHistoryRetention', 'AI 操作历史保留时长')}
+              </h4>
+              <p className="text-[12px] text-on-surface/50">
+                {t('settings.aiHistoryRetentionDesc', '用于控制本地 AI 操作历史保存周期。默认 7 天，最长 90 天。')}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 p-1 bg-primary/5 rounded-2xl border border-primary/10">
+              {AI_HISTORY_RETENTION_OPTIONS.map(days => {
+                const active = (theme.aiOpsHistoryRetentionDays || 7) === days;
+                return (
+                  <button
+                    key={days}
+                    onClick={() => onThemeChange({ ...theme, aiOpsHistoryRetentionDays: days })}
+                    className={`px-3 py-1.5 rounded-xl text-[12px] font-black transition-all ${
+                      active
+                        ? 'bg-primary text-on-primary shadow-md shadow-primary/20'
+                        : 'text-on-surface/60 hover:text-on-surface hover:bg-primary/10'
+                    }`}
+                  >
+                    {days} 天
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group">
             <div className="space-y-1">
               <h4 className="text-[15px] font-bold text-on-surface flex items-center gap-2">
@@ -2050,63 +2472,48 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
       {/* 数据导出/导入 */}
       <section className="bg-primary/5 rounded-[32px] p-10 border border-primary/10 space-y-8">
         <h3 className="text-[17px] font-bold text-on-surface flex items-center gap-2">
-          <ArrowRightLeft className="w-4 h-4 text-primary" /> 配置备份与恢复
+          <ArrowRightLeft className="w-4 h-4 text-primary" /> {t('settings.backup.title')}
         </h3>
         <p className="text-[13px] text-on-surface/40 leading-relaxed">
-          将所有配置（主题、收藏夹、文件标签、最近使用）导出为 JSON 文件，重装后一键恢复。
+          {t('settings.backup.description')}
         </p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <button
-            onClick={async () => {
-              const data = {
-                version: appVersion || '0.0.0',
-                exportedAt: new Date().toISOString(),
-                theme,
-                favorites,
-                fileTags,
-                recentItems,
-              };
-              const path = await save({
-                defaultPath: `aether-backup-${new Date().toISOString().slice(0,10)}.json`,
-                filters: [{ name: 'JSON', extensions: ['json'] }],
-              });
-              if (path) {
-                await writeTextFile(path, JSON.stringify(data, null, 2));
-              }
-            }}
-            className="flex items-center justify-center gap-3 px-6 py-5 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[14px] font-bold text-primary transition-all"
+            onClick={handleExportSettingsBackup}
+            disabled={backupStatus.loading}
+            className="flex items-center justify-center gap-3 px-6 py-5 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[14px] font-bold text-primary transition-all disabled:opacity-60"
           >
             <FileDown className="w-5 h-5" />
-            导出配置
+            {t('settings.backup.export')}
           </button>
           <button
-            onClick={async () => {
-              const path = await open({
-                multiple: false,
-                filters: [{ name: 'JSON', extensions: ['json'] }],
-              });
-              if (!path || typeof path !== 'string') return;
-              try {
-                const raw = await readTextFile(path);
-                const data = JSON.parse(raw);
-                if (!data || typeof data !== 'object') throw new Error('格式无效');
-                onImport?.({
-                  theme: data.theme,
-                  favorites: data.favorites,
-                  fileTags: data.fileTags,
-                  recentItems: data.recentItems,
-                });
-              } catch (e) {
-                alert(`导入失败：${e instanceof Error ? e.message : String(e)}`);
-              }
-            }}
-            className="flex items-center justify-center gap-3 px-6 py-5 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[14px] font-bold text-primary transition-all"
+            onClick={handleImportSettingsBackup}
+            disabled={backupStatus.loading}
+            className="flex items-center justify-center gap-3 px-6 py-5 bg-primary/10 hover:bg-primary/20 rounded-2xl text-[14px] font-bold text-primary transition-all disabled:opacity-60"
           >
             <FileUp className="w-5 h-5" />
-            导入配置
+            {t('settings.backup.import')}
+          </button>
+          <button
+            onClick={handleResetAllSettingsData}
+            disabled={backupStatus.loading}
+            className="flex items-center justify-center gap-3 px-6 py-5 bg-red-500/10 hover:bg-red-500/15 rounded-2xl text-[14px] font-bold text-red-500 transition-all disabled:opacity-60"
+          >
+            <RotateCw className="w-5 h-5" />
+            {t('settings.backup.resetAll')}
           </button>
         </div>
-        <p className="text-[11px] text-on-surface/25">导入会覆盖当前所有配置，操作前建议先导出备份。</p>
+        {backupStatus.message && (
+          <div className={`rounded-2xl border px-5 py-4 flex items-center gap-3 ${
+            backupStatus.kind === 'error'
+              ? 'bg-red-500/10 border-red-500/20 text-red-500'
+              : 'bg-primary/5 border-primary/10 text-on-surface/70'
+          }`}>
+            {backupStatus.loading ? <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" /> : backupStatus.kind === 'error' ? <X className="w-5 h-5 shrink-0" /> : <BadgeCheck className="w-5 h-5 text-primary shrink-0" />}
+            <span className="text-[13px] font-bold leading-relaxed">{backupStatus.message}</span>
+          </div>
+        )}
+        <p className="text-[11px] text-on-surface/25">{t('settings.backup.warning')}</p>
       </section>
     </div>
   );
@@ -2119,11 +2526,11 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
     try {
       const home = await invoke<string>('get_home_dir');
       const dirs = [
-        { path: `${home}/Documents`, label: '文稿' },
-        { path: `${home}/Desktop`, label: '桌面' },
-        { path: `${home}/Downloads`, label: '下载' },
-        { path: `${home}/.Trash`, label: '废纸篓' },
-        { path: '/Applications', label: '应用程序' },
+        { path: `${home}/Documents`, label: t('settings.permissions.documents') },
+        { path: `${home}/Desktop`, label: t('settings.permissions.desktop') },
+        { path: `${home}/Downloads`, label: t('settings.permissions.downloads') },
+        { path: `${home}/.Trash`, label: t('settings.permissions.trash') },
+        { path: '/Applications', label: t('settings.permissions.applications') },
       ];
       const results = await Promise.all(dirs.map(async d => {
         try {
@@ -2139,7 +2546,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
       setPermChecks([]);
       setPermChecksLoaded(true);
     }
-  }, []);
+  }, [t]);
 
   const renderPermissionsCategory = () => (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -2150,31 +2557,31 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
               <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center shadow-xl shadow-primary/10">
                 <Shield className="w-6 h-6 text-primary" />
               </div>
-              完全磁盘访问权限
+              {t('settings.permissions.fullDiskTitle')}
             </h3>
-            <p className="text-[14px] text-on-surface/50 max-w-md">允许 Aether 读取受保护的系统目录。需要系统级授权。</p>
+            <p className="text-[14px] text-on-surface/50 max-w-md">{t('settings.permissions.fullDiskDescription')}</p>
           </div>
           <button
             onClick={() => invoke('open_system_settings').catch(() => {})}
             className="px-6 py-3 bg-primary text-on-primary font-black rounded-2xl text-[13px] whitespace-nowrap shrink-0 shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all uppercase tracking-widest"
           >
-            打开系统设置
+            {t('settings.permissions.openSystemSettings')}
           </button>
         </div>
 
         {/* Permission check results */}
         <div className="space-y-3">
           <div className="flex items-center justify-between px-2">
-            <h4 className="text-[13px] font-bold text-on-surface/40 uppercase tracking-wider">目录访问状态</h4>
+            <h4 className="text-[13px] font-bold text-on-surface/40 uppercase tracking-wider">{t('settings.permissions.accessStatus')}</h4>
             <button
               onClick={checkPermissions}
               className="px-4 py-2 bg-primary/10 hover:bg-primary/20 rounded-xl text-[12px] font-bold text-primary transition-colors"
             >
-              {permChecksLoaded ? '重新检查' : '检查权限'}
+              {permChecksLoaded ? t('settings.permissions.recheck') : t('settings.permissions.check')}
             </button>
           </div>
           {!permChecksLoaded ? (
-            <p className="text-[13px] text-on-surface/30 px-2">点击「检查权限」查看各目录访问状态</p>
+            <p className="text-[13px] text-on-surface/30 px-2">{t('settings.permissions.checkHint')}</p>
           ) : (
             permChecks.map(p => (
               <div key={p.path} className="flex items-center justify-between px-6 py-4 bg-primary/5 rounded-2xl border border-transparent">
@@ -2183,11 +2590,11 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
                   <p className="text-[11px] text-on-surface/30 font-mono">{p.path}</p>
                 </div>
                 {p.ok ? (
-                  <span className="text-[11px] font-black text-green-400 bg-green-400/10 px-4 py-1 rounded-full">可访问</span>
+                  <span className="text-[11px] font-black text-green-400 bg-green-400/10 px-4 py-1 rounded-full">{t('settings.permissions.accessible')}</span>
                 ) : p.ok === false ? (
-                  <span className="text-[11px] font-black text-red-400 bg-red-400/10 px-4 py-1 rounded-full">无权限</span>
+                  <span className="text-[11px] font-black text-red-400 bg-red-400/10 px-4 py-1 rounded-full">{t('settings.permissions.denied')}</span>
                 ) : (
-                  <span className="text-[11px] font-black text-on-surface/20 bg-on-surface/5 px-4 py-1 rounded-full">检查中</span>
+                  <span className="text-[11px] font-black text-on-surface/20 bg-on-surface/5 px-4 py-1 rounded-full">{t('settings.permissions.checking')}</span>
                 )}
               </div>
             ))
@@ -2199,7 +2606,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
 
   const renderExtensionsCategory = () => {
     const extensions = theme.contextMenuExtensions || [];
-    const currentActionMeta = ACTION_TYPE_META[newActionType];
+    const currentActionMeta = getActionTypeMeta(newActionType);
     const CurrentActionIcon = currentActionMeta.icon;
 
     return (
@@ -2213,26 +2620,26 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
                 </div>
                 {t('settings.contextMenuExt', '右键菜单扩展')}
               </h3>
-              <p className="text-[13px] text-on-surface/55 font-bold max-w-2xl leading-relaxed">基础文件操作固定展示；这里仅配置额外动作，例如用指定终端打开目录、带参数执行脚本、跳转到外部 URL 或保留插件入口。</p>
+              <p className="text-[13px] text-on-surface/55 font-bold max-w-2xl leading-relaxed">{t('settings.extensions.description')}</p>
             </div>
             <div className="bg-primary/10 px-4 py-2 rounded-2xl flex items-center gap-2 shrink-0">
               <div className="w-2 h-2 rounded-full bg-primary" />
-              <span className="text-[11px] font-black text-primary uppercase tracking-widest">{extensions.filter(ext => ext.enabled).length} Enabled</span>
+              <span className="text-[11px] font-black text-primary uppercase tracking-widest">{t('settings.extensions.enabledCount', { count: extensions.filter(ext => ext.enabled).length })}</span>
             </div>
           </header>
 
           <div className="flex flex-wrap gap-3">
             <button onClick={handleImportExtensions} className="px-4 py-2 rounded-2xl bg-primary/10 text-primary text-[11px] font-black flex items-center gap-2 hover:bg-primary/20 transition-colors">
-              <FileUp className="w-4 h-4" /> 导入 JSON
+              <FileUp className="w-4 h-4" /> {t('settings.extensions.importJson')}
             </button>
             <button onClick={handleExportExtensions} className="px-4 py-2 rounded-2xl bg-primary/10 text-primary text-[11px] font-black flex items-center gap-2 hover:bg-primary/20 transition-colors">
-              <FileDown className="w-4 h-4" /> 导出 JSON
+              <FileDown className="w-4 h-4" /> {t('settings.extensions.exportJson')}
             </button>
             <button onClick={() => navigator.clipboard.writeText(JSON.stringify(extensions, null, 2)).catch(() => {})} className="px-4 py-2 rounded-2xl bg-primary/10 text-primary text-[11px] font-black flex items-center gap-2 hover:bg-primary/20 transition-colors">
-              <Copy className="w-4 h-4" /> 复制配置
+              <Copy className="w-4 h-4" /> {t('settings.extensions.copyConfig')}
             </button>
             <button onClick={resetActionForm} className="px-4 py-2 rounded-2xl bg-primary/5 text-on-surface text-[11px] font-black flex items-center gap-2 hover:bg-primary/10 transition-colors">
-              取消编辑
+              {t('settings.extensions.cancelEdit')}
             </button>
           </div>
 
@@ -2242,38 +2649,38 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
                 <Settings2 className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-[15px] font-black text-on-surface">基础菜单固定项</h4>
-                <p className="text-[12px] text-on-surface/45 mt-1">这些是文件管理器必备能力，不作为扩展开关管理。</p>
+                <h4 className="text-[15px] font-black text-on-surface">{t('settings.extensions.coreActionsTitle')}</h4>
+                <p className="text-[12px] text-on-surface/45 mt-1">{t('settings.extensions.coreActionsDescription')}</p>
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
               {CORE_CONTEXT_ACTIONS.map(action => (
-                <span key={action} className="px-3 py-2 rounded-xl bg-primary/5 border border-primary/10 text-[12px] font-black text-on-surface/65">{action}</span>
+                <span key={action} className="px-3 py-2 rounded-xl bg-primary/5 border border-primary/10 text-[12px] font-black text-on-surface/65">{t(`settings.extensions.coreActions.${action}`)}</span>
               ))}
             </div>
           </div>
 
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h4 className="text-[15px] font-black text-on-surface">自定义扩展动作</h4>
-              <span className="text-[11px] font-black text-on-surface/35 uppercase tracking-widest">Template variables: {'{path}'} {'{dir}'} {'{name}'} {'{currentPath}'}</span>
+              <h4 className="text-[15px] font-black text-on-surface">{t('settings.extensions.customActionsTitle')}</h4>
+              <span className="text-[11px] font-black text-on-surface/35 uppercase tracking-widest">{t('settings.extensions.templateVariables')}: {'{path}'} {'{dir}'} {'{name}'} {'{currentPath}'}</span>
             </div>
             {extensions.length === 0 ? (
               <div className="rounded-[24px] bg-primary/5 border border-dashed border-primary/20 px-8 py-10 text-center">
-                <p className="text-[13px] font-bold text-on-surface/45">暂无自定义扩展动作。</p>
+                <p className="text-[13px] font-bold text-on-surface/45">{t('settings.extensions.emptyCustomActions')}</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-4">
                 {extensions.map((ext) => {
                   const actionType = ext.actionType || 'placeholder';
-                  const meta = ACTION_TYPE_META[actionType];
+                  const meta = getActionTypeMeta(actionType);
                   const Icon = meta.icon;
                   const detail = actionType === 'terminal'
-                    ? `${ext.terminalApp || theme.terminalApp || 'Terminal'} · ${ext.workingDirectory === 'current' ? '当前目录' : '选中项目'} · ${ext.terminalArgs || '仅打开目录'}`
+                    ? `${ext.terminalApp || theme.terminalApp || 'Terminal'} · ${ext.workingDirectory === 'current' ? t('settings.extensions.workingDirectoryCurrent') : t('settings.extensions.workingDirectorySelection')} · ${ext.terminalArgs || t('settings.extensions.openDirectoryOnly')}`
                     : actionType === 'shell'
-                      ? `${ext.terminalApp || theme.terminalApp || 'Terminal'} · ${ext.command || '未配置命令'}`
+                      ? `${ext.terminalApp || theme.terminalApp || 'Terminal'} · ${ext.command || t('settings.extensions.commandMissing')}`
                       : actionType === 'url'
-                        ? ext.urlTemplate || '未配置 URL 模板'
+                        ? ext.urlTemplate || t('settings.extensions.urlTemplateMissing')
                         : meta.description;
                   return (
                     <div
@@ -2298,7 +2705,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
                           <button
                             onClick={() => populateActionForm(ext)}
                             className="p-3 text-on-surface/25 hover:text-primary hover:bg-primary/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                            aria-label={`编辑 ${ext.label}`}
+                            aria-label={t('settings.extensions.editAction', { label: ext.label })}
                           >
                             <Pencil className="w-5 h-5" />
                           </button>
@@ -2307,18 +2714,18 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
                           <button
                             onClick={() => handleDeleteExtension(ext.id, ext.label)}
                             className="p-3 text-on-surface/25 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                            aria-label={`删除 ${ext.label}`}
+                            aria-label={t('settings.extensions.deleteAction', { label: ext.label })}
                           >
                             <Trash2 className="w-5 h-5" />
                           </button>
                         )}
                         {ext.isSystem && (
-                          <span className="text-[9px] font-black text-on-surface/25 uppercase tracking-widest px-2 py-1 bg-on-surface/5 rounded-lg">系统内置</span>
+                          <span className="text-[9px] font-black text-on-surface/25 uppercase tracking-widest px-2 py-1 bg-on-surface/5 rounded-lg">{t('settings.extensions.systemBuiltIn')}</span>
                         )}
                         <button
                           onClick={() => toggleExtension(ext.id)}
                           className={`w-14 h-8 rounded-full p-1.5 transition-colors duration-300 flex items-center ${ext.enabled ? 'bg-primary' : 'bg-on-surface/[0.2]'}`}
-                          aria-label={`${ext.enabled ? '停用' : '启用'} ${ext.label}`}
+                          aria-label={ext.enabled ? t('settings.extensions.disableAction', { label: ext.label }) : t('settings.extensions.enableAction', { label: ext.label })}
                         >
                           <motion.div animate={{ x: ext.enabled ? 24 : 0 }} className={`w-5 h-5 rounded-full shadow-lg ${ext.enabled ? 'bg-on-primary' : 'bg-on-surface/40'}`} />
                         </button>
@@ -2336,14 +2743,14 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
                 <Plus className="w-7 h-7" />
               </div>
               <div>
-                <h4 className="text-[16px] font-black text-on-surface">添加自定义功能</h4>
-                <p className="text-[12px] text-on-surface/45 mt-1 leading-relaxed">选择动作类型后配置参数。终端动作会把选中的文件夹作为工作目录；选中文件时会自动使用其所在目录。</p>
+                <h4 className="text-[16px] font-black text-on-surface">{t('settings.extensions.addCustomAction')}</h4>
+                <p className="text-[12px] text-on-surface/45 mt-1 leading-relaxed">{t('settings.extensions.addCustomActionDescription')}</p>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <label className="space-y-2">
-                <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">菜单名称</span>
+                <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">{t('settings.extensions.menuLabel')}</span>
                 <input
                   type="text"
                   value={newActionLabel}
@@ -2354,13 +2761,13 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
                 />
               </label>
               <label className="space-y-2">
-                <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">动作类型</span>
+                <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">{t('settings.extensions.actionType')}</span>
                 <select
                   value={newActionType}
                   onChange={(e) => setNewActionType(e.target.value as NonNullable<ContextMenuAction['actionType']>)}
                   className="w-full bg-white/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] font-bold text-on-surface outline-none focus:ring-4 focus:ring-primary/10 transition-all"
                 >
-                  {Object.entries(ACTION_TYPE_META).filter(([type]) => !type.startsWith('ai-')).map(([type, meta]) => <option key={type} value={type}>{meta.label}</option>)}
+                  {Object.keys(ACTION_TYPE_ICONS).filter((type) => !type.startsWith('ai-')).map((type) => <option key={type} value={type}>{getActionTypeMeta(type as NonNullable<ContextMenuAction['actionType']>).label}</option>)}
                 </select>
               </label>
             </div>
@@ -2379,7 +2786,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
               {(newActionType === 'terminal' || newActionType === 'shell') && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                   <label className="space-y-2">
-                    <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">终端应用</span>
+                    <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">{t('settings.extensions.terminalApp')}</span>
                     <select
                       value={newTerminalApp}
                       onChange={(e) => setNewTerminalApp(e.target.value)}
@@ -2389,14 +2796,14 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
                     </select>
                   </label>
                   <label className="space-y-2">
-                    <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">工作目录</span>
+                    <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">{t('settings.extensions.workingDirectory')}</span>
                     <select
                       value={newWorkingDirectory}
                       onChange={(e) => setNewWorkingDirectory(e.target.value as 'selection' | 'current')}
                       className="w-full bg-white/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] font-bold text-on-surface outline-none focus:ring-4 focus:ring-primary/10 transition-all"
                     >
-                      <option value="selection">选中项目目录</option>
-                      <option value="current">当前文件列表目录</option>
+                      <option value="selection">{t('settings.extensions.workingDirectorySelection')}</option>
+                      <option value="current">{t('settings.extensions.workingDirectoryCurrent')}</option>
                     </select>
                   </label>
                 </div>
@@ -2404,7 +2811,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
 
               {newActionType === 'terminal' && (
                 <label className="space-y-2 block">
-                  <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">启动参数 / 启动后执行</span>
+                  <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">{t('settings.extensions.terminalArgs')}</span>
                   <input
                     value={newTerminalArgs}
                     onChange={(e) => setNewTerminalArgs(e.target.value)}
@@ -2416,7 +2823,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
 
               {newActionType === 'shell' && (
                 <label className="space-y-2 block">
-                  <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">命令模板</span>
+                  <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">{t('settings.extensions.commandTemplate')}</span>
                   <input
                     value={newCommand}
                     onChange={(e) => setNewCommand(e.target.value)}
@@ -2428,7 +2835,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
 
               {newActionType === 'url' && (
                 <label className="space-y-2 block">
-                  <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">URL 模板</span>
+                  <span className="text-[11px] font-black text-on-surface/45 uppercase tracking-wider">{t('settings.extensions.urlTemplate')}</span>
                   <input
                     value={newUrlTemplate}
                     onChange={(e) => setNewUrlTemplate(e.target.value)}
@@ -2439,7 +2846,8 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
               )}
 
               <div className="rounded-2xl bg-primary/5 border border-primary/10 px-5 py-4">
-                <p className="text-[11px] font-bold text-on-surface/45 leading-relaxed">可用变量：<span className="font-mono text-primary">{'{path}'}</span> 选中路径，<span className="font-mono text-primary">{'{dir}'}</span> 选中目录，<span className="font-mono text-primary">{'{name}'}</span> 文件名，<span className="font-mono text-primary">{'{currentPath}'}</span> 当前列表目录。</p>
+                <p className="text-[11px] font-bold text-on-surface/45 leading-relaxed">{t('settings.extensions.availableVariables')}: <span className="font-mono text-primary">{'{path}'}</span> {t('settings.extensions.variablePath')}, <span className="font-mono text-primary">{'{dir}'}</span> {t('settings.extensions.variableDir')}, <span className="font-mono text-primary">{'{name}'}</span> {t('settings.extensions.variableName')}, <span className="font-mono text-primary">{'{currentPath}'}</span> {t('settings.extensions.variableCurrentPath')}.</p>
+                <p className="mt-2 text-[11px] font-bold text-on-surface/40 leading-relaxed">{t('settings.extensions.escapeHint')}</p>
               </div>
             </div>
 
@@ -2449,7 +2857,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
                 disabled={!isNewActionValid()}
                 className="px-8 py-4 bg-primary text-on-primary font-black rounded-2xl shadow-xl shadow-primary/20 disabled:opacity-50 disabled:shadow-none transition-all uppercase tracking-widest text-[12px]"
               >
-                {editingExtensionId ? '保存修改' : '添加动作'}
+                {editingExtensionId ? t('settings.extensions.saveChanges') : t('settings.extensions.addAction')}
               </button>
             </div>
           </div>
@@ -2463,7 +2871,7 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
       {/* Category Sidebar */}
       <aside className="w-48 border-r border-primary/5 flex flex-col pt-16 pb-8 px-4 space-y-6 shrink-0 bg-primary/[0.02]">
         <div className="px-4 mb-2">
-            <h2 className="text-[11px] font-black text-primary uppercase tracking-[0.3em] mb-8 opacity-60">System Preferences</h2>
+            <h2 className="text-[11px] font-black text-primary uppercase tracking-[0.3em] mb-8 opacity-60">{t('settings.sidebarTitle')}</h2>
             <nav className="space-y-3">
               {categories.map((cat) => {
                 const isActive = activeCategory === cat.id;
@@ -2497,21 +2905,14 @@ export default function SettingsView({ theme, onThemeChange, favorites = [], fil
           <header className="mb-20 space-y-6">
             <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-primary/10 rounded-full border border-primary/20">
                 <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                <span className="text-[9px] font-black text-primary uppercase tracking-[0.2em]">{categories.find(c => c.id === activeCategory)?.id} Configuration</span>
+                <span className="text-[9px] font-black text-primary uppercase tracking-[0.2em]">{t('settings.configurationBadge', { category: categories.find(c => c.id === activeCategory)?.label })}</span>
             </div>
             <h1 className="text-[48px] font-black text-on-surface tracking-tighter leading-[0.9] flex items-center gap-4">
               {categories.find(c => c.id === activeCategory)?.label}
               <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-2 h-2 rounded-full bg-primary mt-4" />
             </h1>
             <p className="text-on-surface/40 text-[18px] max-w-xl font-medium antialiased">
-              {{appearance:'自定义工作区色彩主题、毛玻璃质感、壁纸背景、字体与布局参数。',
-                files:'配置文件浏览行为：隐藏文件显示、预览面板开关、列表密度等。',
-                permissions:'检查并管理系统级文件访问权限，确保 Aether 能读取受保护目录。',
-                extensions:'管理右键菜单中的自定义动作，基础文件操作始终固定展示。',
-                features:'配置窗口行为、快捷键参考与交互方式。',
-                ai:'配置 AI 服务商，支持官方 API、中转站和本地模型，用于智能重命名等功能。',
-                about:'查看版本信息、发布渠道与在线更新状态。',
-              }[activeCategory] || '从视觉主题到系统内核权限，在此处个性化您的文件管家。'}
+              {t(`settings.categoryDescriptions.${activeCategory}`, { defaultValue: t('settings.categoryDescriptions.default') })}
             </p>
           </header>
 

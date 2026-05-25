@@ -70,7 +70,7 @@ function back(h: History): History {
 
 ### 1.3 文件路径作为 ID 不稳定
 
-`FileItem.id = item.path`（filesystem.ts:21）。重命名后 path 变 → React key 变 → 整个 motion 子树重新挂载 → 跳动+触发动画。
+`FileItem.id = item.path`（见 `src/api/filesystem.ts` 的文件项构造链路）。重命名后 path 变 → React key 变 → 整个 motion 子树重新挂载 → 跳动+触发动画。
 
 **改成 inode 或稳定 hash**：
 ```rust
@@ -203,9 +203,9 @@ loadSettingsStore()
 
 至少在本地写一份滚动日志（Tauri log plugin 已经引入），出 bug 时让用户附日志比让用户回忆"我点了啥然后白屏了"友好 100 倍。
 
-### 2.3 没有 Rust panic 捕获
+### 2.3 Rust panic 捕获后续完善
 
-`tauri-plugin-log` 装了，但 Rust 端没注册 panic hook。一次 unwrap 失败整窗口黑屏，用户除了强退没办法。
+Rust 端已经注册 panic hook，并把崩溃日志落盘到 `~/Library/Logs/Aether Explorer/`。设置页“关于”中已提供诊断与反馈入口，可打开日志目录、读取最近崩溃日志、复制本地诊断信息。启动后也会检查最近崩溃日志：若发现新的 panic log，会弹出“上次异常退出”提示，引导用户打开诊断页查看。
 
 ```rust
 // lib.rs setup
@@ -220,7 +220,7 @@ std::panic::set_hook(Box::new(|info| {
 }));
 ```
 
-并加一个 `read_last_panic_log` 命令，启动后检查上次有无 panic，弹出"上次崩溃，是否上报"对话框。
+当前项目按公益和本地优先维护，不默认接入远程崩溃上报。后续若继续增强，可把日志预览和 issue 模板进一步串联，但仍应保持用户主动复制 / 主动反馈。
 
 ---
 
@@ -306,13 +306,15 @@ useEffect(() => {
 ## 四、Bundle / 加载速度
 
 ### 当前 bundle 数据
-- `index-CBJ1xcCt.js`：**568KB**（未 gzip）— 单个 chunk 太大
-- `SettingsView-0oW4DuvC.js`：86KB（已 lazy）
-- `index-BlKQ8M5F.css`：73KB
+- 主入口 `index-*.js`：约 **258KB**（未 gzip）— 已低于 Vite 500KB warning 阈值
+- `vendor-react-bi2_g7yP.js`：约 194KB
+- `vendor-T4qKPao8.js`：约 129KB
+- `SettingsView-D9dVBofl.js`：约 107KB（已 lazy）
+- `index-U521V8fE.css`：约 85KB
 
-主 chunk 568KB 包含：React 19、framer-motion、lucide-react（数百图标）、i18next、全部 ExplorerView + Sidebar + TopBar。
+主 chunk 已通过 manualChunks 拆出 React、Tauri、lucide-react、i18n 和通用 vendor，当前主要剩余 ExplorerView + Sidebar + TopBar 等首屏业务代码。
 
-### 建议 4.1：vite manualChunks 拆包
+### 建议 4.1：vite manualChunks 拆包 — 已完成
 
 ```ts
 // vite.config.ts
@@ -342,6 +344,8 @@ build: {
   sourcemap: false,  // 桌面应用不需要外暴 sourcemap
 },
 ```
+
+当前实现使用函数式 `manualChunks(id)`，避免把 Tauri 子包和 vendor 依赖拆漏；`motion` 并入通用 vendor，避免循环 chunk 提示。
 
 ### 建议 4.2：lucide-react 按需引入
 
@@ -466,6 +470,8 @@ const handleKeyboardNav = (e: KeyboardEvent) => {
 
 很多用户（包括前庭功能障碍者）开启了系统级"减少动态效果"。
 
+已完成第一轮收口：`src/index.css` 在 `prefers-reduced-motion: reduce` 下禁用网格 hover 上浮并压低 CSS animation / transition 时长；App 根组件通过 `MotionConfig reducedMotion="user"` 让 motion/react 遵从系统设置；`Loader`、传输进度和存储圆环在减少动态效果下改为静态 / 即时更新。
+
 ```ts
 // src/lib/motion.ts
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -482,7 +488,7 @@ export const motionConfig = {
 
 ## 六、Rust 端架构
 
-### 6.1 1539 行单 `lib.rs` 与前端 ExplorerView 异曲同工
+### 6.1 约 4357 行单 `lib.rs` 与前端 ExplorerView 异曲同工
 
 Rust 后端所有命令、所有数据结构、所有 helper、所有 osascript 调用全在 `lib.rs`。建议拆模块：
 
@@ -543,7 +549,7 @@ use mock_fs as fs;
 
 ### 6.3 `tauri::async_runtime::spawn` 没有 task tracker
 
-`lib.rs:1468, 1533` 直接 `spawn` 后丢弃 JoinHandle。任务失败不会被记录、应用退出时任务可能还在跑。
+`src-tauri/src/lib.rs` 中的后台任务入口直接 `spawn` 后丢弃 JoinHandle。任务失败不会被记录、应用退出时任务可能还在跑。
 
 建议用 `tokio::task::JoinSet` 或 `tokio_util::task::TaskTracker` 统一管理：
 
@@ -598,7 +604,11 @@ const commands: Command[] = [
 
 ## 八、配置 / Settings 改进
 
-### 8.1 Settings 没有导入/导出/重置
+### 8.1 Settings 导入/导出后续完善
+
+设置导入/导出已经在 UI 中实现，覆盖主题、收藏夹、文件标签和最近使用。剩余问题是重置、迁移版本化、导入错误 UI，以及用更明确的 schema 保护未来字段演进。
+
+已完成本轮收口：导出文件现在带 `schemaVersion`、`exportedAt`、`appVersion`，并通过 `buildSettingsBackup` 统一脱敏；导入会校验备份 schema、继续兼容旧 `version` 字段；导入 / 导出 / 重置都改为设置页内状态反馈，不再用 `alert`；重置全部配置需要二次确认，并清空主题、收藏、文件标签和最近使用。
 
 ```ts
 // 一键导出
@@ -618,11 +628,11 @@ async function exportSettings() {
 }
 ```
 
-同步加导入（带 migrator）+ 重置（带二次确认）。
+后续如继续演进，可把备份 schema migrator 独立成 `settings-store` 深 Module，并支持跨 schema 多版本迁移。
 
 ### 8.2 `defaultHomePath` 用 `aether://favorites` 作哨兵字符串
 
-`App.tsx:50` `FAVORITES_VIRTUAL_PATH = 'aether://favorites'`。这种把虚拟路径混进真实路径字段的做法，**任何接收 path 的函数都要先判断是不是 `aether://`**，散弹枪式 if-else 已经在 App.tsx:177-198 出现。
+`src/App.tsx` 中 `FAVORITES_VIRTUAL_PATH = 'aether://favorites'`。这种把虚拟路径混进真实路径字段的做法，**任何接收 path 的函数都要先判断是不是 `aether://`**，散弹枪式 if-else 已经在 App 和 Explorer 路径解析链路中出现。
 
 **改成 tagged union**：
 ```ts
@@ -640,7 +650,7 @@ interface ThemeSettings {
 
 ### 8.3 Setting 表单字段太多，缺分组
 
-`SettingsView.tsx` 1999 行 = 把所有设置全堆一面板。建议：
+`SettingsView.tsx` 当前约 2917 行 = 把所有设置全堆一面板。建议：
 
 - 外观（主题/字体/动画/壁纸）
 - 文件浏览（隐藏文件/默认视图/排序记忆）
@@ -753,12 +763,14 @@ npx husky add .husky/commit-msg 'npx --no -- commitlint --edit ${1}'
 
 ### 11.1 dist/ 被提交到工作区目录
 
-仓库本身没 commit `dist/`（gitignore 有），但本地有遗留。**CI 构建前必须 `rm -rf dist src-tauri/target/release/bundle`**，避免上次失败的 dist 被混入。
+仓库本身没 commit `dist/`（gitignore 有），但本地有遗留。已新增 `npm run clean:release`，release workflow 和本地 `scripts/release.sh` 在打包前都会清理 `dist`、`src-tauri/target/release/bundle` 与 `src-tauri/target/universal-apple-darwin/release/bundle`，避免上次失败的产物被混入。
 
-### 11.2 没有 SBOM / 产物清单
+### 11.2 产物清单与完整性
 
-发版 release 没有：
-- SHA256 校验和（`Aether.Explorer_0.2.1_universal.dmg.sha256`）
+发版 release 已补齐：
+- `SHA256SUMS`：覆盖 `.dmg`、`.app.tar.gz`、`.sig` 和 `latest.json`，上传到 versioned release，并在上传后远程比对。
+
+后续仍可继续补：
 - SBOM（CycloneDX 或 SPDX）— 用户/企业要知道你打包了哪些依赖
 - License 清单（`THIRD_PARTY_LICENSES.txt`）— 你用了 trash crate、zip crate 等，按 license 要求需要附录
 
@@ -815,6 +827,8 @@ What's New 内容从 `CHANGELOG.md` 解析即可。
 
 按 `?` 弹出快捷键列表，对键盘用户极友好。可与 Cmd+K 命令面板共用数据源。
 
+已完成第一版：App 级 `?` 打开快捷键列表，覆盖窗口、导航、选择、文件操作、视图和工具类快捷键；输入框、重命名和路径编辑状态不会触发。后续接入 Cmd+K 时可把当前列表抽成共享 command registry。
+
 ---
 
 ## 十三、隐私与本地化数据
@@ -822,6 +836,8 @@ What's New 内容从 `CHANGELOG.md` 解析即可。
 ### 13.1 用户配置都在 `settings.json`，但没有"打开配置文件位置"按钮
 
 调试时让用户"找到 ~/Library/Application Support/com.aether.explorer/settings.json" 是不友好的。
+
+已在设置 → 关于 → 诊断与反馈中补齐“打开配置文件夹”：后端通过 Tauri `app_data_dir` 定位 `settings.json` 所在目录，前端诊断报告也会带上 `configDir`，方便社区排查配置问题。
 
 ```tsx
 <button onClick={() => invoke('reveal_in_finder', { path: settingsPath })}>
@@ -906,14 +922,14 @@ ForkLift / Cyberduck 卖钱靠这个。Aether 现已支持 SMB（系统挂载到
 
 ### 🏆 立即做（高 ROI，1-3 天）
 
-| # | 项目 | 工时 | 用户感知 |
-|---|------|------|----------|
-| ✅ | 8.1 设置导入/导出 | 2h | 重装/换机用户的救命稻草 |
-| ✅ | 5.3 prefers-reduced-motion | 1h | 老人 / 前庭患者立即可用 |
-| ✅ | 11.1 dist 清理 / SHA256 校验和 | 2h | 用户验证下载完整性 |
-| ✅ | 12.3 `?` 快捷键 cheatsheet | 4h | 键盘党 onboarding |
-| ✅ | 13.1 "打开配置文件夹" | 0.5h | 调试友好 |
-| ✅ | 2.3 Rust panic hook | 2h | 崩溃可恢复 |
+| 优先级 | 项目 | 状态 | 工时 | 用户感知 |
+|--------|------|------|------|----------|
+| P0 | 8.1 设置导入/导出 | 已完成本轮收口：schema 导出、导入错误 UI、二次确认重置 | 2h | 重装/换机用户的救命稻草 |
+| P0 | 5.3 prefers-reduced-motion | 已完成第一轮：CSS + motion/react 全局收口 + Loader/进度静态化 | 1h | 老人 / 前庭患者立即可用 |
+| P0 | 11.1 dist 清理 / SHA256 校验和 | 已完成：release 前清理旧产物、生成并上传 `SHA256SUMS`、远程验收、`lint:ci-gates` 防回退 | 2h | 用户验证下载完整性 |
+| P0 | 12.3 `?` 快捷键 cheatsheet | 已完成：App 级帮助弹窗 + i18n + 测试 | 4h | 键盘党 onboarding |
+| P0 | 13.1 "打开配置文件夹" | 已完成：诊断页可打开配置目录并复制 `configDir` | 0.5h | 调试友好 |
+| P0 | 2.3 Rust panic hook | 已完成：落盘、设置页诊断、启动后提示 | 2h | 崩溃可恢复 |
 
 ### 💪 v0.3（高 ROI，1-2 周）
 
@@ -923,7 +939,7 @@ ForkLift / Cyberduck 卖钱靠这个。Aether 现已支持 SMB（系统挂载到
 | ⭐ | 9.1 文件 Stack（暂存夹板） | 2d | **差异化卖点** |
 | ⭐ | 3 文件系统监听 | 2d | "刷新滞后"消失 |
 | ⭐ | 2.1 结构化错误 | 2d | 错误对话框真正有用 |
-| ⭐ | 4 bundle 拆包 + i18n 动态加载 | 1d | 首次启动快 30-50% |
+| ⭐ | 4 i18n 动态加载 + Explorer 业务拆分 | 1d | 首次启动继续减负 |
 | ⭐ | 1.3 inode-based ID | 1d | 重命名不再跳动 |
 
 ### 🎯 v0.4 - v0.5（中 ROI，3-6 周）
@@ -956,6 +972,6 @@ Aether 当前的状态：**"原型完成度 90%，产品力 30%"**。
 - `PERF_PLAN.md` 把"卡"的修掉
 - 本文档把"不亮"的点亮
 
-三份文档全部落地后，Aether 才从"我的副业 demo"变成"我可以推荐给朋友用的工具"。再往后想做 ForkLift 级的商业品，靠的就是**插件 / SFTP / 双窗格 / 工作区** 这一类长线投入。
+三份文档全部落地后，Aether 才从"我的副业 demo"变成"我可以推荐给朋友用的工具"。再往后想做到 ForkLift 级的专业体验，靠的就是**插件 / SFTP / 双窗格 / 工作区** 这一类长线投入。
 
 但每一个"让用户尖叫"的瞬间，都来自看似不起眼的小修：默认关 blur 让滚动顺了、aria-label 让 VoiceOver 用户能用了、Cmd+K 让键盘党不再恨你了。**这些事比"美化主题"重要 100 倍。**

@@ -3,6 +3,8 @@ import { motion } from 'motion/react';
 import { Archive, Database, FolderOpen, HardDrive, RefreshCw, ShieldCheck, TrendingUp, Upload, Usb } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { VolumeInfo } from '../types';
+import { normalizeAppError } from '../lib/app-error';
+import { usePrefersReducedMotion } from '../lib/use-prefers-reduced-motion';
 
 interface DiskInfo {
   filesystem: string;
@@ -21,6 +23,7 @@ const categoryRows = [
 ];
 
 export default function StorageView() {
+  const prefersReducedMotion = usePrefersReducedMotion();
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [primaryDisk, setPrimaryDisk] = useState<DiskInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -39,7 +42,7 @@ export default function StorageView() {
         setVolumes(volumeItems);
         setPrimaryDisk(diskInfo);
       })
-      .catch(err => setError(String(err)))
+      .catch(err => setError(normalizeAppError(err).userMessage))
       .finally(() => setLoading(false));
   };
 
@@ -49,7 +52,7 @@ export default function StorageView() {
       setMessage(`已弹出 ${volume.name}`);
       loadVolumes();
     } catch (err) {
-      setMessage(`弹出失败：${String(err)}`);
+      setMessage(`弹出失败：${normalizeAppError(err).userMessage}`);
     }
     if (messageTimerRef.current) window.clearTimeout(messageTimerRef.current);
     messageTimerRef.current = window.setTimeout(() => setMessage(''), 3200);
@@ -69,7 +72,7 @@ export default function StorageView() {
         }
       })
       .catch(err => {
-        if (!cancelled) setError(String(err));
+        if (!cancelled) setError(normalizeAppError(err).userMessage);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -148,9 +151,9 @@ export default function StorageView() {
                     fill="none"
                     strokeLinecap="round"
                     strokeDasharray={314}
-                    initial={{ strokeDashoffset: 314 }}
+                    initial={prefersReducedMotion ? false : { strokeDashoffset: 314 }}
                     animate={{ strokeDashoffset: 314 - (314 * primaryCapacity) / 100 }}
-                    transition={{ duration: 0.6, ease: 'circOut' }}
+                    transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.6, ease: 'circOut' }}
                   />
                 </svg>
                 <div className="text-center">

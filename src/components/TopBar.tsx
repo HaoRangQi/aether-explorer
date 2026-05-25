@@ -92,53 +92,39 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
   });
 
   const handleTabDragStart = (event: DragEvent<HTMLDivElement>, tab: TabData) => {
-    console.log('[TabDragStart] === 开始拖拽标签页 ===');
     const payload = createTransferPayload(tab);
     const serialized = JSON.stringify(payload);
-    console.log('[TabDragStart] 标签页数据:', payload);
-    console.log('[TabDragStart] 序列化后:', serialized);
     event.stopPropagation();
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData(TAB_TRANSFER_MIME, serialized);
     // 不设置 text/plain，避免拖到桌面时创建文件
     localStorage.setItem(TAB_TRANSFER_STORAGE_KEY, serialized);
-    console.log('[TabDragStart] localStorage 已保存，key:', TAB_TRANSFER_STORAGE_KEY);
-    console.log('[TabDragStart] localStorage 内容:', localStorage.getItem(TAB_TRANSFER_STORAGE_KEY));
     event.currentTarget.dataset.transferId = payload.transferId;
 
-    // 广播拖拽开始事件到所有窗口
-    emit('aether-tab-drag-start', payload).then(() => {
-      console.log('[TabDragStart] 已广播拖拽开始事件');
-    });
+    emit('aether-tab-drag-start', payload).catch(() => {});
   };
 
   const handleTabDragEnd = (event: DragEvent<HTMLDivElement>, tab: TabData) => {
     const transferId = event.currentTarget.dataset.transferId;
     delete event.currentTarget.dataset.transferId;
 
-    console.log('[TabDragEnd] 拖拽结束，dropEffect:', event.dataTransfer.dropEffect);
-
     if (!transferId) return;
 
     // 检查是否拖拽到窗口外（dropEffect 为 'none' 表示没有有效的放置目标）
     if (event.dataTransfer.dropEffect === 'none') {
-      console.log('[TabDragEnd] 拖拽到窗口外');
       // 延迟清除 localStorage，给目标窗口时间读取数据
       setTimeout(() => {
         localStorage.removeItem(TAB_TRANSFER_STORAGE_KEY);
       }, 100);
 
       // 等待 500ms，如果没有收到确认事件，说明是拖到空白处，创建新窗口
-      console.log('[TabDragEnd] 等待 500ms，检查是否有窗口接受标签页');
       const detachTimeout = setTimeout(() => {
-        console.log('[TabDragEnd] 500ms 后未收到确认，创建新窗口');
         onDetachTab(tab);
       }, 500);
 
       // 将 timeout ID 存储到 window 对象，以便确认事件可以取消它
       (window as any)[`detach-timeout-${transferId}`] = detachTimeout;
     } else {
-      console.log('[TabDragEnd] 拖拽到有效目标');
       // 如果拖拽到了有效目标，延迟清除
       setTimeout(() => {
         localStorage.removeItem(TAB_TRANSFER_STORAGE_KEY);
@@ -157,47 +143,35 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
   };
 
   const handleTabsDragOver = (event: DragEvent<HTMLDivElement>) => {
-    console.log('=== 标签栏 DragOver 事件触发 ===');
-    console.log('globalDragData:', globalDragData);
-
     // 检查是否有全局拖拽数据
     if (!globalDragData) {
-      console.log('没有全局拖拽数据，忽略');
       return;
     }
 
     // 检查是否是从其他窗口拖拽过来的
     const currentWindowLabel = getCurrentWindow().label;
     if (globalDragData.sourceWindowLabel === currentWindowLabel) {
-      console.log('同窗口拖拽，忽略');
       return;
     }
 
-    console.log('跨窗口拖拽检测到，允许放置');
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     setIsDragOver(true);
   };
 
   const handleTabsDragLeave = (event: DragEvent<HTMLDivElement>) => {
-    console.log('=== 标签栏 DragLeave 事件触发 ===');
     setIsDragOver(false);
   };
 
   const handleTabsDrop = (event: DragEvent<HTMLDivElement>) => {
-    console.log('=== 标签栏 Drop 事件触发 ===');
     setIsDragOver(false);
 
     if (!globalDragData) {
-      console.log('没有全局拖拽数据');
       return;
     }
 
-    console.log('准备接受标签页:', globalDragData);
     event.preventDefault();
-    console.log('调用 onAcceptDraggedTab');
     onAcceptDraggedTab(globalDragData);
-    console.log('标签页接受完成');
   };
 
   return (
