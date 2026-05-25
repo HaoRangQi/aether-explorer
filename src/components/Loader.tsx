@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
+import { usePrefersReducedMotion } from '../lib/use-prefers-reduced-motion';
 
 interface LoaderProps {
   className?: string;
@@ -8,14 +9,15 @@ interface LoaderProps {
 }
 
 export default function Loader({ className = '', size = 48, color = 'var(--primary)' }: LoaderProps) {
+  const prefersReducedMotion = usePrefersReducedMotion();
   // Material 3 Circular Progress style: thick stroke, specific dasharray animation.
   return (
     <div className={`relative flex items-center justify-center ${className}`} style={{ width: size, height: size }}>
       <motion.svg
         viewBox="22 22 44 44"
         className="w-full h-full"
-        animate={{ rotate: 360 }}
-        transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+        animate={prefersReducedMotion ? undefined : { rotate: 360 }}
+        transition={prefersReducedMotion ? undefined : { duration: 2, repeat: Infinity, ease: 'linear' }}
       >
         <motion.circle
           cx="44"
@@ -25,11 +27,11 @@ export default function Loader({ className = '', size = 48, color = 'var(--prima
           strokeWidth="3.6"
           stroke={color}
           strokeLinecap="round"
-          animate={{
+          animate={prefersReducedMotion ? undefined : {
             strokeDasharray: ['1, 200', '89, 200', '89, 200'],
             strokeDashoffset: [0, -35, -124]
           }}
-          transition={{
+          transition={prefersReducedMotion ? undefined : {
             duration: 1.5,
             repeat: Infinity,
             ease: 'easeInOut'

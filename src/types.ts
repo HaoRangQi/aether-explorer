@@ -11,6 +11,7 @@ export interface FileItem {
   thumbnail?: string;
   tags?: string[];
   dimensions?: string;
+  duration?: string;
   childCount?: number;
   parentId?: string; // used for folder hierarchy if needed
 }
@@ -79,6 +80,8 @@ export interface ThemeSettings {
   /** 空格键调用 macOS Quick Look 预览，默认开启 */
   enableSpacePreview?: boolean;
   enableDevTools?: boolean;
+  /** 允许 Cmd+N / 菜单创建独立窗口，默认关闭，优先使用多标签页 */
+  enableMultiWindow?: boolean;
   useSystemContextMenu?: boolean;
   wallpaperUrl?: string;
   wallpaperBlur?: number;
@@ -98,6 +101,10 @@ export interface ThemeSettings {
    * 修饰键在任何模式下都能临时覆盖（⌘ + 点击切换、⌥ 强制复制、⇧ 强制移动）。
    */
   crossWindowDropDefault?: 'copy' | 'move' | 'ask';
+  /**
+   * AI 操作历史保留天数（默认 7 天，最大 90 天）。
+   */
+  aiOpsHistoryRetentionDays?: number;
   language?: string;
   followSystemLanguage?: boolean;
   languageOptions?: LanguageOption[];

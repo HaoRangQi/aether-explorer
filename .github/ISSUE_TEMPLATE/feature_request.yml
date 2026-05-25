@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a workflow improvement for the local-first community project.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow or user problem
+      placeholder: "Describe the real file-management task this would improve."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Project fit
+      options:
+        - label: Fits local-first usage.
+        - label: Does not require commercialization, subscription, or enterprise accounts.
+        - label: Does not require cloud sync.
+        - label: Does not depend on Developer ID signing, notarization, or App Store distribution.
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and tradeoffs
+      description: Mention privacy, data-loss, performance, or maintenance concerns.

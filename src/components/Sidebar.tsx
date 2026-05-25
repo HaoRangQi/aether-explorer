@@ -23,6 +23,7 @@ import {
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import { ViewMode, ThemeSettings, VolumeInfo, TabData } from '../types';
+import { normalizeAppError } from '../lib/app-error';
 
 const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 const RECENT_VIRTUAL_PATH = 'aether://recent';
@@ -207,7 +208,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
       setVolumeMessage(t('messages.ejected', { name: volume.name }));
       loadVolumes();
     } catch (err) {
-      setVolumeMessage(t('messages.ejectFailed', { error: String(err) }));
+      setVolumeMessage(t('messages.ejectFailed', { error: normalizeAppError(err).userMessage }));
     }
     if (volumeMessageTimerRef.current) window.clearTimeout(volumeMessageTimerRef.current);
     volumeMessageTimerRef.current = window.setTimeout(() => setVolumeMessage(''), 2600);

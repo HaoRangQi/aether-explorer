@@ -1,12 +1,16 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::hash::{Hash, Hasher};
+use std::os::unix::fs as unix_fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_log::{Target, TargetKind};
 
 #[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -62,6 +66,209 @@ struct VolumeInfo {
     is_ejectable: bool,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+struct DirectorySignature {
+    fingerprint: String,
+    entry_count: u64,
+}
+
+#[derive(Clone, Default)]
+struct DirectoryLoadState(Arc<Mutex<HashMap<String, u64>>>);
+
+#[derive(Clone)]
+struct DirectoryLoadToken {
+    scope: String,
+    request_id: u64,
+    latest_requests: Arc<Mutex<HashMap<String, u64>>>,
+}
+
+impl DirectoryLoadState {
+    fn mark_latest(&self, scope: String, request_id: u64) -> Result<(), AppError> {
+        let mut latest = self.0.lock().map_err(|_| AppError::unavailable("目录加载状态不可用"))?;
+        let should_update = match latest.get(&scope).copied() {
+            Some(current) => request_id >= current,
+            None => true,
+        };
+        if should_update {
+            latest.insert(scope, request_id);
+        }
+        Ok(())
+    }
+
+    fn begin(&self, scope: Option<String>, request_id: Option<u64>) -> Result<Option<DirectoryLoadToken>, AppError> {
+        let (Some(scope), Some(request_id)) = (scope, request_id) else {
+            return Ok(None);
+        };
+
+        self.mark_latest(scope.clone(), request_id)?;
+        Ok(Some(DirectoryLoadToken {
+            scope,
+            request_id,
+            latest_requests: self.0.clone(),
+        }))
+    }
+}
+
+impl DirectoryLoadToken {
+    fn is_cancelled(&self) -> bool {
+        match self.latest_requests.lock() {
+            Ok(latest) => latest.get(&self.scope).copied() != Some(self.request_id),
+            Err(_) => true,
+        }
+    }
+
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+enum AppErrorKind {
+    PermissionDenied,
+    NotFound,
+    DiskFull,
+    Busy,
+    InvalidPath,
+    Conflict,
+    Cancelled,
+    TrashUnsupported,
+    Internal,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AppError {
+    kind: AppErrorKind,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+}
+
+impl AppError {
+    fn new(kind: AppErrorKind, message: impl Into<String>, path: Option<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            path,
+        }
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::new(AppErrorKind::Internal, message, None)
+    }
+
+    fn internal_at(message: impl Into<String>, path: Option<String>) -> Self {
+        Self::new(AppErrorKind::Internal, message, path)
+    }
+
+    fn invalid_path(message: impl Into<String>, path: Option<String>) -> Self {
+        Self::new(AppErrorKind::InvalidPath, message, path)
+    }
+
+    fn conflict(message: impl Into<String>, path: Option<String>) -> Self {
+        Self::new(AppErrorKind::Conflict, message, path)
+    }
+
+    fn cancelled(message: impl Into<String>, path: Option<String>) -> Self {
+        Self::new(AppErrorKind::Cancelled, message, path)
+    }
+
+    fn trash_unsupported(message: impl Into<String>, path: Option<String>) -> Self {
+        Self::new(AppErrorKind::TrashUnsupported, message, path)
+    }
+
+    fn unavailable(message: impl Into<String>) -> Self {
+        Self::new(AppErrorKind::Internal, message, None)
+    }
+
+    fn from_io(err: &std::io::Error, path: Option<&str>, fallback: impl Into<String>) -> Self {
+        let path_string = path.map(|p| p.to_string());
+        match err.kind() {
+            ErrorKind::PermissionDenied => Self::new(AppErrorKind::PermissionDenied, "权限不足，无法访问该路径", path_string),
+            ErrorKind::NotFound => Self::new(AppErrorKind::NotFound, "路径不存在", path_string),
+            ErrorKind::StorageFull => Self::new(AppErrorKind::DiskFull, "磁盘空间不足", path_string),
+            _ => {
+                let msg = err.to_string();
+                if msg.contains("permission") || msg.contains("denied") || msg.contains("not allowed") {
+                    Self::new(AppErrorKind::PermissionDenied, "权限不足，无法访问该路径", path_string)
+                } else if msg.contains("busy") {
+                    Self::new(AppErrorKind::Busy, "文件正在被占用", path_string)
+                } else {
+                    Self::new(AppErrorKind::Internal, fallback, path_string)
+                }
+            }
+        }
+    }
+}
+
+fn aether_log_dir(home_dir: &Path) -> PathBuf {
+    home_dir.join("Library").join("Logs").join("Aether Explorer")
+}
+
+fn panic_log_path(log_dir: &Path) -> PathBuf {
+    log_dir.join("panic.log")
+}
+
+#[cfg(test)]
+fn settings_store_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("settings.json")
+}
+
+fn format_panic_report(message: &str, location: Option<&std::panic::Location<'_>>) -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let location = location
+        .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    format!(
+        "[{}] RUST PANIC\nlocation: {}\nmessage: {}\n\n",
+        timestamp, location, message
+    )
+}
+
+fn write_panic_report(log_dir: &Path, report: &str) -> std::io::Result<()> {
+    fs::create_dir_all(log_dir)?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(panic_log_path(log_dir))?;
+    file.write_all(report.as_bytes())
+}
+
+fn read_last_panic_log_from_dir(log_dir: &Path, max_bytes: u64) -> std::io::Result<Option<String>> {
+    let path = panic_log_path(log_dir);
+    let metadata = match fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    if metadata.len() == 0 {
+        return Ok(Some(String::new()));
+    }
+
+    let read_len = metadata.len().min(max_bytes.max(1));
+    let mut file = fs::File::open(path)?;
+    file.seek(SeekFrom::Start(metadata.len() - read_len))?;
+    let mut buffer = Vec::with_capacity(read_len as usize);
+    file.take(read_len).read_to_end(&mut buffer)?;
+    Ok(Some(String::from_utf8_lossy(&buffer).into_owned()))
+}
+
+fn install_panic_hook(log_dir: PathBuf) {
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|value| (*value).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic payload".to_string());
+        let report = format_panic_report(&message, info.location());
+
+        log::error!("{}", report.trim_end());
+        let _ = write_panic_report(&log_dir, &report);
+    }));
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FileTransferPayload {
@@ -79,6 +286,182 @@ struct FileTransferPayload {
 
 struct FileClipboardState(Mutex<Option<FileTransferPayload>>);
 struct FileDragState(Mutex<Option<FileTransferPayload>>);
+
+#[derive(Clone, Default)]
+struct TransferTaskState(Arc<Mutex<HashMap<String, TransferTask>>>);
+
+#[derive(Clone)]
+struct TransferTask {
+    snapshot: TransferTaskSnapshot,
+    cancel_requested: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TransferTaskSnapshot {
+    id: String,
+    kind: String,
+    status: String,
+    total_items: u64,
+    completed_items: u64,
+    total_bytes: u64,
+    completed_bytes: u64,
+    current_name: Option<String>,
+    error: Option<String>,
+    started_at: u64,
+    finished_at: Option<u64>,
+    copied: u64,
+    moved: u64,
+    copied_cross_device: u64,
+    failed: u64,
+    conflicts: u64,
+    skipped: u64,
+    skipped_same_dir: u64,
+    skipped_conflicts: u64,
+}
+
+#[derive(Clone)]
+struct TransferProgress {
+    task_id: String,
+    state: TransferTaskState,
+    cancel_requested: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct TransferEstimate {
+    items: u64,
+    bytes: u64,
+}
+
+impl TransferTaskState {
+    fn insert(&self, snapshot: TransferTaskSnapshot, cancel_requested: Arc<AtomicBool>) -> Result<(), AppError> {
+        let mut tasks = self.0.lock().map_err(|_| AppError::unavailable("传输任务状态不可用"))?;
+        tasks.insert(snapshot.id.clone(), TransferTask { snapshot, cancel_requested });
+        Ok(())
+    }
+
+    fn update<F>(&self, task_id: &str, update: F)
+    where
+        F: FnOnce(&mut TransferTaskSnapshot),
+    {
+        match self.0.lock() {
+            Ok(mut tasks) => {
+                if let Some(task) = tasks.get_mut(task_id) {
+                    update(&mut task.snapshot);
+                }
+            }
+            Err(_) => log::error!("传输任务状态锁不可用，无法更新任务 {}", task_id),
+        }
+    }
+
+    fn list(&self) -> Result<Vec<TransferTaskSnapshot>, AppError> {
+        let tasks = self.0.lock().map_err(|_| AppError::unavailable("传输任务状态不可用"))?;
+        let mut snapshots: Vec<TransferTaskSnapshot> = tasks.values().map(|task| task.snapshot.clone()).collect();
+        snapshots.sort_by_key(|snapshot| snapshot.started_at);
+        Ok(snapshots)
+    }
+}
+
+impl TransferProgress {
+    fn check_cancelled(&self) -> Result<(), String> {
+        if self.cancel_requested.load(Ordering::SeqCst) {
+            Err("操作已取消".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn set_current(&self, path: &Path) {
+        let current_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        self.state.update(&self.task_id, |snapshot| {
+            snapshot.current_name = Some(current_name);
+        });
+    }
+
+    fn complete(&self, items: u64, bytes: u64) {
+        self.state.update(&self.task_id, |snapshot| {
+            snapshot.completed_items = snapshot.completed_items.saturating_add(items).min(snapshot.total_items);
+            snapshot.completed_bytes = snapshot.completed_bytes.saturating_add(bytes).min(snapshot.total_bytes);
+        });
+    }
+
+    fn complete_one(&self, bytes: u64) {
+        self.complete(1, bytes);
+    }
+
+    fn complete_path_estimate(&self, path: &Path) {
+        let estimate = estimate_transfer_path(path);
+        self.complete(estimate.items.max(1), estimate.bytes);
+    }
+}
+
+fn is_terminal_transfer_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
+}
+
+const FINISHED_TRANSFER_TASK_RETENTION_SECONDS: u64 = 30;
+
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn next_transfer_task_id(kind: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{}-{}-{}", kind, std::process::id(), nanos)
+}
+
+fn estimate_transfer_path(path: &Path) -> TransferEstimate {
+    let mut estimate = TransferEstimate::default();
+    estimate_transfer_path_into(path, &mut estimate);
+    estimate
+}
+
+fn estimate_transfer_path_into(path: &Path, estimate: &mut TransferEstimate) {
+    estimate.items = estimate.items.saturating_add(1);
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+
+    if metadata.file_type().is_symlink() {
+        return;
+    }
+    if metadata.is_dir() {
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                estimate_transfer_path_into(&entry.path(), estimate);
+            }
+        }
+    } else {
+        estimate.bytes = estimate.bytes.saturating_add(metadata.len());
+    }
+}
+
+fn estimate_transfer_paths(paths: &[String]) -> TransferEstimate {
+    paths.iter().fold(TransferEstimate::default(), |mut estimate, path| {
+        estimate_transfer_path_into(Path::new(path), &mut estimate);
+        estimate
+    })
+}
+
+fn summarize_transfer_error(failed: &[MoveFailure], conflicts: &[MoveConflict]) -> Option<String> {
+    if !conflicts.is_empty() {
+        return Some(format!("存在 {} 个文件冲突", conflicts.len()));
+    }
+    if !failed.is_empty() {
+        return Some(format!("{} 个项目失败：{}", failed.len(), failed[0].error));
+    }
+    None
+}
 
 fn format_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
@@ -298,7 +681,7 @@ fn resolve_app_icon_png(app_path: &Path) -> Option<String> {
 }
 
 #[tauri::command]
-fn get_app_icon(path: String) -> Result<Option<String>, String> {
+fn get_app_icon(path: String) -> Result<Option<String>, AppError> {
     Ok(resolve_app_icon_png(Path::new(&path)))
 }
 
@@ -306,9 +689,9 @@ fn format_modified(metadata: &fs::Metadata) -> String {
     metadata
         .modified()
         .ok()
-        .and_then(|t| {
+        .map(|t| {
             let dt: chrono::DateTime<chrono::Local> = t.into();
-            Some(dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            dt.format("%Y-%m-%d %H:%M:%S").to_string()
         })
         .unwrap_or_else(|| "未知".into())
 }
@@ -341,30 +724,30 @@ fn read_mdls_date(_path: &Path, _attr: &str) -> String {
     String::new()
 }
 
-fn classify_directory_read_error(err: &std::io::Error, dir_path: &str) -> String {
-    match err.kind() {
-        ErrorKind::PermissionDenied => format!("PermissionDenied: 无法读取目录 {}", dir_path),
-        ErrorKind::NotFound => format!("NotFound: 目录不存在 {}", dir_path),
-        _ => {
-            let msg = err.to_string();
-            if msg.contains("permission") || msg.contains("denied") || msg.contains("not allowed") {
-                format!("PermissionDenied: 无法读取目录 {}", dir_path)
-            } else {
-                format!("ReadDirFailed: 无法读取目录 {}: {}", dir_path, err)
-            }
-        }
-    }
+fn classify_directory_read_error(err: &std::io::Error, dir_path: &str) -> AppError {
+    AppError::from_io(
+        err,
+        Some(dir_path),
+        format!("无法读取目录: {}", err),
+    )
 }
 
-#[tauri::command]
-fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
-    let entries = fs::read_dir(&dir_path).map_err(|e| classify_directory_read_error(&e, &dir_path))?;
+fn list_directory_entries(
+    dir_path: &str,
+    show_hidden: bool,
+    cancel_token: Option<DirectoryLoadToken>,
+) -> Result<Vec<FileEntry>, AppError> {
+    let entries = fs::read_dir(dir_path).map_err(|e| classify_directory_read_error(&e, dir_path))?;
 
     let mut files: Vec<FileEntry> = Vec::new();
     let mut dirs: Vec<FileEntry> = Vec::new();
 
     for entry in entries {
-        let entry = entry.map_err(|e| format!("读取条目失败: {}", e))?;
+        if cancel_token.as_ref().is_some_and(DirectoryLoadToken::is_cancelled) {
+            return Err(AppError::cancelled("目录加载已被新的请求取代", Some(dir_path.to_string())));
+        }
+
+        let entry = entry.map_err(|e| AppError::from_io(&e, Some(dir_path), format!("读取条目失败: {}", e)))?;
         let name = entry.file_name().to_string_lossy().to_string();
 
         if !show_hidden && name.starts_with('.') {
@@ -372,7 +755,7 @@ fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>,
         }
 
         let path = entry.path().to_string_lossy().to_string();
-        let metadata = entry.metadata().map_err(|e| format!("读取元数据失败: {}", e))?;
+        let metadata = entry.metadata().map_err(|e| AppError::from_io(&e, Some(&path), format!("读取元数据失败: {}", e)))?;
         let is_dir = metadata.is_dir();
         let size = if is_dir {
             "--".into()
@@ -415,11 +798,36 @@ fn list_directory(dir_path: String, show_hidden: bool) -> Result<Vec<FileEntry>,
     }
 
     // Sort: directories first, then files, both alphabetically
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
     dirs.append(&mut files);
 
     Ok(dirs)
+}
+
+#[tauri::command]
+async fn list_directory(
+    state: tauri::State<'_, DirectoryLoadState>,
+    dir_path: String,
+    show_hidden: bool,
+    request_scope: Option<String>,
+    request_id: Option<u64>,
+) -> Result<Vec<FileEntry>, AppError> {
+    let cancel_token = state.begin(request_scope, request_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        list_directory_entries(&dir_path, show_hidden, cancel_token)
+    })
+        .await
+        .map_err(|e| AppError::internal(format!("目录加载任务失败: {}", e)))?
+}
+
+#[tauri::command]
+fn cancel_directory_loads(
+    state: tauri::State<DirectoryLoadState>,
+    request_scope: String,
+    request_id: u64,
+) -> Result<(), AppError> {
+    state.mark_latest(request_scope, request_id)
 }
 
 #[tauri::command]
@@ -459,31 +867,100 @@ fn is_sensitive_for_preview(path: &Path) -> bool {
 }
 
 #[tauri::command]
-fn read_text_preview(path: String) -> Result<String, String> {
+fn read_text_preview(path: String) -> Result<String, AppError> {
     use std::io::Read;
     let p = Path::new(&path);
     if is_sensitive_for_preview(p) {
-        return Err("此文件类型默认不在预览面板展示（含敏感信息）— 可使用『打开方式』显式打开".into());
+        return Err(AppError::new(
+            AppErrorKind::PermissionDenied,
+            "此文件类型默认不在预览面板展示（含敏感信息）— 可使用『打开方式』显式打开",
+            Some(path),
+        ));
     }
-    let mut file = fs::File::open(&path).map_err(|e| format!("无法打开文件: {}", e))?;
+    let mut file = fs::File::open(&path)
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("无法打开文件: {}", e)))?;
     let mut buf = vec![0u8; 8192]; // First 8KB
-    let n = file.read(&mut buf).map_err(|e| format!("读取失败: {}", e))?;
+    let n = file.read(&mut buf)
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("读取失败: {}", e)))?;
     buf.truncate(n);
-    String::from_utf8(buf).map_err(|e| format!("不是有效的文本文件: {}", e))
+    String::from_utf8(buf)
+        .map_err(|e| AppError::invalid_path(format!("不是有效的文本文件: {}", e), Some(path)))
 }
 
 #[tauri::command]
-fn open_system_settings() -> Result<(), String> {
+fn open_system_settings() -> Result<(), AppError> {
     std::process::Command::new("open")
         .args(["x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])
         .spawn()
-        .map_err(|e| format!("无法打开系统设置: {}", e))?;
+        .map_err(|e| AppError::internal(format!("无法打开系统设置: {}", e)))?;
     Ok(())
 }
 
 #[tauri::command]
-fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
-    window.start_dragging().map_err(|e| format!("启动窗口拖拽失败: {}", e))
+fn get_logs_dir(app: tauri::AppHandle) -> Result<String, AppError> {
+    let home_dir = app
+        .path()
+        .home_dir()
+        .map_err(|e| AppError::internal(format!("无法读取用户目录: {}", e)))?;
+    Ok(aether_log_dir(&home_dir).to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn get_config_dir(app: tauri::AppHandle) -> Result<String, AppError> {
+    let config_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::internal(format!("无法读取配置目录: {}", e)))?;
+    Ok(config_dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn open_logs_dir(app: tauri::AppHandle) -> Result<(), AppError> {
+    let home_dir = app
+        .path()
+        .home_dir()
+        .map_err(|e| AppError::internal(format!("无法读取用户目录: {}", e)))?;
+    let log_dir = aether_log_dir(&home_dir);
+    fs::create_dir_all(&log_dir)
+        .map_err(|e| AppError::from_io(&e, log_dir.to_str(), format!("无法创建日志目录: {}", e)))?;
+    std::process::Command::new("open")
+        .arg(&log_dir)
+        .spawn()
+        .map_err(|e| AppError::internal(format!("无法打开日志目录: {}", e)))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn open_config_dir(app: tauri::AppHandle) -> Result<(), AppError> {
+    let config_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::internal(format!("无法读取配置目录: {}", e)))?;
+    fs::create_dir_all(&config_dir)
+        .map_err(|e| AppError::from_io(&e, config_dir.to_str(), format!("无法创建配置目录: {}", e)))?;
+    std::process::Command::new("open")
+        .arg(&config_dir)
+        .spawn()
+        .map_err(|e| AppError::internal(format!("无法打开配置目录: {}", e)))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn read_last_panic_log(app: tauri::AppHandle) -> Result<Option<String>, AppError> {
+    let home_dir = app
+        .path()
+        .home_dir()
+        .map_err(|e| AppError::internal(format!("无法读取用户目录: {}", e)))?;
+    let log_dir = aether_log_dir(&home_dir);
+    read_last_panic_log_from_dir(&log_dir, 64 * 1024)
+        .map_err(|e| AppError::from_io(&e, panic_log_path(&log_dir).to_str(), format!("无法读取崩溃日志: {}", e)))
+}
+
+#[tauri::command]
+fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    window
+        .start_dragging()
+        .map_err(|e| AppError::internal(format!("启动窗口拖拽失败: {}", e)))
 }
 
 /// 拖拽期间被源窗口频繁调用：把屏幕坐标下的非源窗口置顶。
@@ -499,14 +976,20 @@ fn raise_window_at(
     screen_x: f64,
     screen_y: f64,
     except_window: String,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AppError> {
     let windows = app.webview_windows();
     for (label, win) in windows.iter() {
         if label == &except_window { continue; }
         if label == "drag-preview" { continue; }
-        let factor = win.scale_factor().map_err(|e| e.to_string())?;
-        let pos = win.outer_position().map_err(|e| e.to_string())?;
-        let size = win.outer_size().map_err(|e| e.to_string())?;
+        let factor = win
+            .scale_factor()
+            .map_err(|e| AppError::internal(format!("读取窗口缩放失败: {}", e)))?;
+        let pos = win
+            .outer_position()
+            .map_err(|e| AppError::internal(format!("读取窗口位置失败: {}", e)))?;
+        let size = win
+            .outer_size()
+            .map_err(|e| AppError::internal(format!("读取窗口尺寸失败: {}", e)))?;
         let x0 = pos.x as f64 / factor;
         let y0 = pos.y as f64 / factor;
         let x1 = x0 + size.width as f64 / factor;
@@ -545,10 +1028,10 @@ async fn create_app_window(
     app: tauri::AppHandle,
     initial_path: Option<String>,
     tab_label: Option<String>,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("生成窗口标识失败: {}", e))?
+        .map_err(|e| AppError::internal(format!("生成窗口标识失败: {}", e)))?
         .as_millis();
     let label = format!("window-{}", now);
 
@@ -575,7 +1058,7 @@ async fn create_app_window(
         .title_bar_style(TitleBarStyle::Overlay)
         .hidden_title(true)
         .build()
-        .map_err(|e| format!("创建窗口失败: {}", e))?;
+        .map_err(|e| AppError::internal(format!("创建窗口失败: {}", e)))?;
 
     let _ = window.show();
     let _ = window.set_focus();
@@ -583,7 +1066,7 @@ async fn create_app_window(
 }
 
 #[tauri::command]
-fn list_fonts() -> Result<Vec<String>, String> {
+fn list_fonts() -> Result<Vec<String>, AppError> {
     let mut fonts = Vec::new();
     let font_dirs = [
         "/System/Library/Fonts",
@@ -630,7 +1113,7 @@ fn list_fonts() -> Result<Vec<String>, String> {
             }
         }
     }
-    fonts.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    fonts.sort_by_key(|a| a.to_lowercase());
     Ok(fonts)
 }
 
@@ -638,13 +1121,13 @@ fn list_fonts() -> Result<Vec<String>, String> {
 
 // 路径规范化 — 对用户输入的目标目录做 canonicalize。
 // 防 `..` 跳逃 + 符号链接绕过 scope。失败说明路径不存在或无权限，直接返 Err。
-fn safe_canonicalize(path: &Path) -> Result<std::path::PathBuf, String> {
+fn safe_canonicalize(path: &Path) -> Result<std::path::PathBuf, AppError> {
     path.canonicalize()
-        .map_err(|e| format!("路径解析失败 {}: {}", path.display(), e))
+        .map_err(|e| AppError::from_io(&e, Some(&path.to_string_lossy()), format!("路径解析失败: {}", e)))
 }
 
 fn unique_destination(path: &Path) -> std::path::PathBuf {
-    if !path.exists() {
+    if !path_exists_no_follow(path) {
         return path.to_path_buf();
     }
 
@@ -659,7 +1142,7 @@ fn unique_destination(path: &Path) -> std::path::PathBuf {
             _ => format!("{}{}", stem, suffix),
         };
         let candidate = parent.join(file_name);
-        if !candidate.exists() {
+        if !path_exists_no_follow(&candidate) {
             return candidate;
         }
     }
@@ -667,40 +1150,342 @@ fn unique_destination(path: &Path) -> std::path::PathBuf {
     path.to_path_buf()
 }
 
+fn validate_child_name(name: &str) -> Result<String, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::invalid_path("文件名不能为空", None));
+    }
+    if trimmed == "." || trimmed == ".." {
+        return Err(AppError::invalid_path("文件名不能是 . 或 ..", Some(trimmed.to_string())));
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains('\0') {
+        return Err(AppError::invalid_path("文件名不能包含路径分隔符", Some(trimmed.to_string())));
+    }
+    if trimmed.chars().any(|c| c.is_control() || matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|')) {
+        return Err(AppError::invalid_path("文件名包含非法字符", Some(trimmed.to_string())));
+    }
+
+    let mut components = Path::new(trimmed).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(trimmed.to_string()),
+        _ => Err(AppError::invalid_path("文件名必须是单个名称，不能是路径", Some(trimmed.to_string()))),
+    }
+}
+
+fn replace_backup_path(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or(Path::new("/"));
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("target");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(".{}.aether-replace-backup-{}-{}", name, std::process::id(), now))
+}
+
+fn transfer_temp_path(path: &Path, label: &str) -> PathBuf {
+    let parent = path.parent().unwrap_or(Path::new("/"));
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("target");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(".{}.aether-{}-{}-{}", name, label, std::process::id(), now))
+}
+
+fn remove_path(path: &Path) -> std::io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+fn path_exists_no_follow(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn is_same_directory_no_follow(src: &Path, dst: &Path) -> bool {
+    src.parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .is_some_and(|parent| parent == dst)
+}
+
+fn canonical_source_dir_for_recursion_check(src: &Path) -> Option<PathBuf> {
+    let metadata = fs::symlink_metadata(src).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return None;
+    }
+    src.canonicalize().ok()
+}
+
+fn copy_symlink_with_progress(src: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<(), String> {
+    if let Some(progress) = progress {
+        progress.check_cancelled()?;
+    }
+    let target = fs::read_link(src).map_err(|e| format!("读取符号链接失败: {}", e))?;
+    unix_fs::symlink(&target, dst).map_err(|e| format!("创建符号链接失败: {}", e))?;
+    if let Some(progress) = progress {
+        progress.complete(1, 0);
+    }
+    Ok(())
+}
+
+fn copy_file_contents_with_progress(src: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<(), String> {
+    if let Some(progress) = progress {
+        progress.check_cancelled()?;
+    }
+    let mut reader = fs::File::open(src).map_err(|e| format!("打开源文件失败: {}", e))?;
+    let mut writer = fs::File::create(dst).map_err(|e| format!("创建目标文件失败: {}", e))?;
+    let mut buffer = vec![0_u8; 1024 * 1024];
+
+    loop {
+        if let Some(progress) = progress {
+            progress.check_cancelled()?;
+        }
+        let read = reader.read(&mut buffer).map_err(|e| format!("读取文件失败: {}", e))?;
+        if read == 0 {
+            break;
+        }
+        writer
+            .write_all(&buffer[..read])
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+        if let Some(progress) = progress {
+            progress.complete(0, read as u64);
+        }
+    }
+
+    if let Some(progress) = progress {
+        progress.check_cancelled()?;
+    }
+    writer.flush().map_err(|e| format!("写入文件失败: {}", e))?;
+    if let Some(progress) = progress {
+        progress.complete(1, 0);
+    }
+    Ok(())
+}
+
+fn commit_staged_path(staged: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<(), String> {
+    if let Some(progress) = progress {
+        if let Err(error) = progress.check_cancelled() {
+            let _ = remove_path(staged);
+            return Err(error);
+        }
+    }
+    if path_exists_no_follow(dst) {
+        let _ = remove_path(staged);
+        return Err("目标已存在".into());
+    }
+    if let Err(error) = fs::rename(staged, dst) {
+        let _ = remove_path(staged);
+        return Err(format!("提交临时目标失败: {}", error));
+    }
+    Ok(())
+}
+
+fn copy_file_with_progress(src: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<(), String> {
+    let temp = transfer_temp_path(dst, "copy-temp");
+    let copy_result = match fs::symlink_metadata(src) {
+        Ok(metadata) if metadata.file_type().is_symlink() => copy_symlink_with_progress(src, &temp, progress),
+        Ok(_) => copy_file_contents_with_progress(src, &temp, progress),
+        Err(error) => Err(format!("读取源元数据失败: {}", error)),
+    };
+
+    if let Err(error) = copy_result {
+        let _ = remove_path(&temp);
+        return Err(error);
+    }
+
+    commit_staged_path(&temp, dst, progress)
+}
+
+fn copy_path_with_progress(src: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<(), String> {
+    if let Some(progress) = progress {
+        progress.check_cancelled()?;
+        progress.set_current(src);
+    }
+
+    let metadata = fs::symlink_metadata(src).map_err(|e| format!("读取源元数据失败: {}", e))?;
+    if metadata.file_type().is_symlink() {
+        copy_file_with_progress(src, dst, progress)
+    } else if metadata.is_dir() {
+        copy_dir_recursive_with_progress(src, dst, progress)
+    } else {
+        copy_file_with_progress(src, dst, progress)?;
+        Ok(())
+    }
+}
+
+fn restore_backup(backup: &Path, dst: &Path) -> Result<(), String> {
+    if path_exists_no_follow(dst) {
+        remove_path(dst).map_err(|e| format!("清理半成品目标失败: {}", e))?;
+    }
+    fs::rename(backup, dst).map_err(|e| format!("恢复原目标失败: {}", e))
+}
+
+#[cfg(test)]
+fn replace_existing_for_copy(src: &Path, dst: &Path) -> Result<(), String> {
+    replace_existing_for_copy_with_progress(src, dst, None)
+}
+
+fn replace_existing_for_copy_with_progress(src: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<(), String> {
+    if !path_exists_no_follow(dst) {
+        return copy_path_with_progress(src, dst, progress);
+    }
+
+    let backup = replace_backup_path(dst);
+    fs::rename(dst, &backup).map_err(|e| format!("备份原目标失败: {}", e))?;
+
+    match copy_path_with_progress(src, dst, progress) {
+        Ok(_) => {
+            if let Err(e) = remove_path(&backup) {
+                return Err(format!("清理原目标备份失败: {}", e));
+            }
+            Ok(())
+        }
+        Err(copy_err) => match restore_backup(&backup, dst) {
+            Ok(_) => Err(copy_err),
+            Err(restore_err) => Err(format!("{}；{}", copy_err, restore_err)),
+        },
+    }
+}
+
+enum MovePathOutcome {
+    Moved,
+    CopiedCrossDevice,
+}
+
+fn is_cross_device_rename_error(err: &std::io::Error) -> bool {
+    matches!(err.raw_os_error(), Some(18))
+}
+
+fn rename_or_copy_cross_device(src: &Path, dst: &Path) -> Result<MovePathOutcome, String> {
+    rename_or_copy_cross_device_with_progress(src, dst, None)
+}
+
+fn rename_or_copy_cross_device_with_progress(src: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<MovePathOutcome, String> {
+    if let Some(progress) = progress {
+        progress.check_cancelled()?;
+        progress.set_current(src);
+    }
+
+    match fs::rename(src, dst) {
+        Ok(_) => {
+            if let Some(progress) = progress {
+                progress.complete_path_estimate(dst);
+            }
+            Ok(MovePathOutcome::Moved)
+        }
+        Err(e) if is_cross_device_rename_error(&e) => {
+            copy_path_with_progress(src, dst, progress).map(|_| MovePathOutcome::CopiedCrossDevice)
+        }
+        Err(e) => Err(format!("{}", e)),
+    }
+}
+
+#[cfg(test)]
+fn replace_existing_for_move(src: &Path, dst: &Path) -> Result<MovePathOutcome, String> {
+    replace_existing_for_move_with_progress(src, dst, None)
+}
+
+fn replace_existing_for_move_with_progress(src: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<MovePathOutcome, String> {
+    let backup = if path_exists_no_follow(dst) {
+        let backup = replace_backup_path(dst);
+        fs::rename(dst, &backup).map_err(|e| format!("备份原目标失败: {}", e))?;
+        Some(backup)
+    } else {
+        None
+    };
+
+    let move_outcome = rename_or_copy_cross_device_with_progress(src, dst, progress);
+
+    match move_outcome {
+        Ok(outcome) => {
+            if let Some(backup) = backup {
+                if let Err(e) = remove_path(&backup) {
+                    return Err(format!("清理原目标备份失败: {}", e));
+                }
+            }
+            Ok(outcome)
+        }
+        Err(move_err) => {
+            if let Some(backup) = backup {
+                match restore_backup(&backup, dst) {
+                    Ok(_) => Err(move_err),
+                    Err(restore_err) => Err(format!("{}；{}", move_err, restore_err)),
+                }
+            } else {
+                Err(move_err)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    copy_dir_recursive_with_progress(src, dst, None)
+}
+
+fn copy_dir_recursive_with_progress(src: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<(), String> {
+    let temp = transfer_temp_path(dst, "copy-dir-temp");
+    let copy_result = copy_dir_recursive_contents_with_progress(src, &temp, progress);
+    if let Err(error) = copy_result {
+        let _ = remove_path(&temp);
+        return Err(error);
+    }
+    commit_staged_path(&temp, dst, progress)
+}
+
+fn copy_dir_recursive_contents_with_progress(src: &Path, dst: &Path, progress: Option<&TransferProgress>) -> Result<(), String> {
+    if let Some(progress) = progress {
+        progress.check_cancelled()?;
+        progress.set_current(src);
+    }
+
     fs::create_dir_all(dst).map_err(|e| format!("创建目标目录失败: {}", e))?;
+    if let Some(progress) = progress {
+        progress.complete_one(0);
+    }
+
     for entry in fs::read_dir(src).map_err(|e| format!("读取目录失败: {}", e))? {
         let entry = entry.map_err(|e| format!("读取条目失败: {}", e))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
+        let metadata = fs::symlink_metadata(&src_path).map_err(|e| format!("读取源元数据失败: {}", e))?;
+        if metadata.file_type().is_symlink() {
+            copy_symlink_with_progress(&src_path, &dst_path, progress)
+                .map_err(|e| format!("复制符号链接失败: {}", e))?;
+        } else if metadata.is_dir() {
+            copy_dir_recursive_contents_with_progress(&src_path, &dst_path, progress)?;
         } else {
-            fs::copy(&src_path, &dst_path).map_err(|e| format!("复制文件失败: {}", e))?;
+            if let Some(progress) = progress {
+                progress.check_cancelled()?;
+                progress.set_current(&src_path);
+            }
+            copy_file_contents_with_progress(&src_path, &dst_path, progress)
+                .map_err(|e| format!("复制文件失败: {}", e))?;
         }
     }
     Ok(())
 }
 
 #[tauri::command]
-fn copy_file(src: String, dst: String) -> Result<String, String> {
+fn copy_file(src: String, dst: String) -> Result<String, AppError> {
     let src_path = Path::new(&src);
     let name = src_path.file_name().unwrap_or_default().to_string_lossy();
     let dst_path = unique_destination(&Path::new(&dst).join(name.as_ref()));
-    if src_path.is_dir() {
-        copy_dir_recursive(src_path, &dst_path)?;
-    } else {
-        fs::copy(&src, &dst_path).map_err(|e| format!("复制失败: {}", e))?;
-    }
+    copy_path_with_progress(src_path, &dst_path, None)
+        .map_err(|e| AppError::internal_at(e, Some(src.clone())))?;
     Ok(dst_path.to_string_lossy().into())
 }
 
 #[tauri::command]
-fn move_file(src: String, dst_dir: String) -> Result<String, String> {
+fn move_file(src: String, dst_dir: String) -> Result<String, AppError> {
     let src_path = Path::new(&src);
     let name = src_path.file_name().unwrap_or_default().to_string_lossy();
     let dst_path = unique_destination(&Path::new(&dst_dir).join(name.as_ref()));
-    fs::rename(&src, &dst_path).map_err(|e| format!("移动失败: {}", e))?;
+    rename_or_copy_cross_device(src_path, &dst_path)
+        .map_err(|e| AppError::internal_at(format!("移动失败: {}", e), Some(src.clone())))?;
     Ok(dst_path.to_string_lossy().into())
 }
 
@@ -709,8 +1494,8 @@ fn set_file_clipboard(
     state: tauri::State<FileClipboardState>,
     paths: Vec<String>,
     cut: bool,
-) -> Result<(), String> {
-    let mut clipboard = state.0.lock().map_err(|_| "文件剪贴板不可用".to_string())?;
+) -> Result<(), AppError> {
+    let mut clipboard = state.0.lock().map_err(|_| AppError::unavailable("文件剪贴板不可用"))?;
     *clipboard = if paths.is_empty() {
         None
     } else {
@@ -729,14 +1514,14 @@ fn set_file_clipboard(
 #[tauri::command]
 fn get_file_clipboard(
     state: tauri::State<FileClipboardState>,
-) -> Result<Option<FileTransferPayload>, String> {
-    let clipboard = state.0.lock().map_err(|_| "文件剪贴板不可用".to_string())?;
+) -> Result<Option<FileTransferPayload>, AppError> {
+    let clipboard = state.0.lock().map_err(|_| AppError::unavailable("文件剪贴板不可用"))?;
     Ok(clipboard.clone())
 }
 
 #[tauri::command]
-fn clear_file_clipboard(state: tauri::State<FileClipboardState>) -> Result<(), String> {
-    let mut clipboard = state.0.lock().map_err(|_| "文件剪贴板不可用".to_string())?;
+fn clear_file_clipboard(state: tauri::State<FileClipboardState>) -> Result<(), AppError> {
+    let mut clipboard = state.0.lock().map_err(|_| AppError::unavailable("文件剪贴板不可用"))?;
     *clipboard = None;
     Ok(())
 }
@@ -750,8 +1535,8 @@ fn set_file_drag_payload(
     transfer_id: Option<String>,
     preview_name: Option<String>,
     count: Option<u32>,
-) -> Result<(), String> {
-    let mut drag_payload = state.0.lock().map_err(|_| "文件拖拽状态不可用".to_string())?;
+) -> Result<(), AppError> {
+    let mut drag_payload = state.0.lock().map_err(|_| AppError::unavailable("文件拖拽状态不可用"))?;
     *drag_payload = if paths.is_empty() {
         None
     } else {
@@ -770,14 +1555,14 @@ fn set_file_drag_payload(
 #[tauri::command]
 fn get_file_drag_payload(
     state: tauri::State<FileDragState>,
-) -> Result<Option<FileTransferPayload>, String> {
-    let drag_payload = state.0.lock().map_err(|_| "文件拖拽状态不可用".to_string())?;
+) -> Result<Option<FileTransferPayload>, AppError> {
+    let drag_payload = state.0.lock().map_err(|_| AppError::unavailable("文件拖拽状态不可用"))?;
     Ok(drag_payload.clone())
 }
 
 #[tauri::command]
-fn clear_file_drag_payload(state: tauri::State<FileDragState>) -> Result<(), String> {
-    let mut drag_payload = state.0.lock().map_err(|_| "文件拖拽状态不可用".to_string())?;
+fn clear_file_drag_payload(state: tauri::State<FileDragState>) -> Result<(), AppError> {
+    let mut drag_payload = state.0.lock().map_err(|_| AppError::unavailable("文件拖拽状态不可用"))?;
     *drag_payload = None;
     Ok(())
 }
@@ -797,21 +1582,24 @@ struct MoveConflict {
     name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 enum MoveConflictStrategy {
     Abort,
     Replace,
     KeepBoth,
+    Skip,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MoveResult {
     moved: Vec<String>,
+    copied_cross_device: Vec<String>,
     failed: Vec<MoveFailure>,
     conflicts: Vec<MoveConflict>,
     skipped_same_dir: u32,
+    skipped_conflicts: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -820,101 +1608,126 @@ struct CopyResult {
     copied: Vec<String>,
     failed: Vec<MoveFailure>,
     conflicts: Vec<MoveConflict>,
+    skipped_conflicts: u32,
 }
 
-#[tauri::command]
-fn copy_files(
+fn find_copy_conflicts(srcs: &[String], dst: &Path) -> Vec<MoveConflict> {
+    let mut conflicts = Vec::new();
+    for src in srcs {
+        let src_path = Path::new(src);
+        if !path_exists_no_follow(src_path) {
+            continue;
+        }
+
+        let name = src_path.file_name().unwrap_or_default().to_string_lossy();
+        let dst_path = dst.join(name.as_ref());
+        if path_exists_no_follow(&dst_path) {
+            conflicts.push(MoveConflict {
+                src: src.clone(),
+                dst: dst_path.to_string_lossy().into(),
+                name: name.into(),
+            });
+        }
+    }
+    conflicts
+}
+
+fn find_move_conflicts(srcs: &[String], dst: &Path) -> Vec<MoveConflict> {
+    let mut conflicts = Vec::new();
+    for src in srcs {
+        let src_path = Path::new(src);
+        if !path_exists_no_follow(src_path) {
+            continue;
+        }
+
+        if is_same_directory_no_follow(src_path, dst) {
+            continue;
+        }
+
+        let name = src_path.file_name().unwrap_or_default().to_string_lossy();
+        let dst_path = dst.join(name.as_ref());
+        if path_exists_no_follow(&dst_path) {
+            conflicts.push(MoveConflict {
+                src: src.clone(),
+                dst: dst_path.to_string_lossy().into(),
+                name: name.into(),
+            });
+        }
+    }
+    conflicts
+}
+
+fn copy_files_impl(
     srcs: Vec<String>,
     dst_dir: String,
     conflict_strategy: Option<MoveConflictStrategy>,
-) -> Result<CopyResult, String> {
+    progress: Option<&TransferProgress>,
+) -> Result<CopyResult, AppError> {
     let dst_buf = safe_canonicalize(Path::new(&dst_dir))?;
     let dst = dst_buf.as_path();
     if !dst.is_dir() {
-        return Err(format!("目标不是目录: {}", dst_dir));
+        return Err(AppError::invalid_path("目标不是目录", Some(dst_dir)));
     }
 
     let conflict_strategy = conflict_strategy.unwrap_or(MoveConflictStrategy::Abort);
     let mut copied: Vec<String> = Vec::new();
     let mut failed: Vec<MoveFailure> = Vec::new();
     let mut conflicts: Vec<MoveConflict> = Vec::new();
+    let mut skipped_conflicts: u32 = 0;
 
     if matches!(conflict_strategy, MoveConflictStrategy::Abort) {
-        for src in &srcs {
-            let src_path = Path::new(src);
-            if !src_path.exists() {
-                continue;
-            }
-
-            let name = src_path.file_name().unwrap_or_default().to_string_lossy();
-            let dst_path = dst.join(name.as_ref());
-            if dst_path.exists() {
-                conflicts.push(MoveConflict {
-                    src: src.clone(),
-                    dst: dst_path.to_string_lossy().into(),
-                    name: name.into(),
-                });
-            }
-        }
-
+        conflicts = find_copy_conflicts(&srcs, dst);
         if !conflicts.is_empty() {
-            return Ok(CopyResult { copied, failed, conflicts });
+            return Ok(CopyResult { copied, failed, conflicts, skipped_conflicts });
         }
     }
 
     for src in srcs {
+        if let Some(progress) = progress {
+            if let Err(error) = progress.check_cancelled() {
+                failed.push(MoveFailure { src: src.clone(), error });
+                break;
+            }
+        }
+
         let src_path = Path::new(&src);
 
-        if !src_path.exists() {
+        if !path_exists_no_follow(src_path) {
             failed.push(MoveFailure { src: src.clone(), error: "源不存在".into() });
             continue;
         }
 
-        if src_path.is_dir() && (dst == src_path || dst.starts_with(src_path)) {
-            failed.push(MoveFailure {
-                src: src.clone(),
-                error: "目标在源目录内".into(),
-            });
-            continue;
+        if let Some(src_canonical) = canonical_source_dir_for_recursion_check(src_path) {
+            if dst == src_canonical || dst.starts_with(&src_canonical) {
+                failed.push(MoveFailure {
+                    src: src.clone(),
+                    error: "目标在源目录内".into(),
+                });
+                continue;
+            }
         }
 
         let name = src_path.file_name().unwrap_or_default().to_string_lossy();
         let base_dst_path = dst.join(name.as_ref());
+        if matches!(conflict_strategy, MoveConflictStrategy::Skip) && path_exists_no_follow(&base_dst_path) {
+            skipped_conflicts += 1;
+            continue;
+        }
         let dst_path = match conflict_strategy {
             MoveConflictStrategy::Abort => base_dst_path,
             MoveConflictStrategy::KeepBoth => unique_destination(&base_dst_path),
-            MoveConflictStrategy::Replace => {
-                if base_dst_path == src_path {
-                    failed.push(MoveFailure {
-                        src: src.clone(),
-                        error: "不能替换自身".into(),
-                    });
-                    continue;
-                }
-                if base_dst_path.exists() {
-                    let remove_result = if base_dst_path.is_dir() {
-                        fs::remove_dir_all(&base_dst_path)
-                    } else {
-                        fs::remove_file(&base_dst_path)
-                    };
-                    if let Err(e) = remove_result {
-                        failed.push(MoveFailure {
-                            src: src.clone(),
-                            error: format!("替换目标失败: {}", e),
-                        });
-                        continue;
-                    }
-                }
-                base_dst_path
-            }
+            MoveConflictStrategy::Replace => base_dst_path,
+            MoveConflictStrategy::Skip => base_dst_path,
         };
 
-        let copy_outcome = if src_path.is_dir() {
-            copy_dir_recursive(src_path, &dst_path)
+        let copy_outcome = if matches!(conflict_strategy, MoveConflictStrategy::Replace) {
+            if dst_path == src_path {
+                Err("不能替换自身".into())
+            } else {
+                replace_existing_for_copy_with_progress(src_path, &dst_path, progress)
+            }
         } else {
-            fs::copy(src_path, &dst_path)
-                .map(|_| ())
-                .map_err(|e| format!("复制失败: {}", e))
+            copy_path_with_progress(src_path, &dst_path, progress)
         };
 
         match copy_outcome {
@@ -923,7 +1736,112 @@ fn copy_files(
         }
     }
 
-    Ok(CopyResult { copied, failed, conflicts })
+    Ok(CopyResult { copied, failed, conflicts, skipped_conflicts })
+}
+
+#[tauri::command]
+fn copy_files(
+    srcs: Vec<String>,
+    dst_dir: String,
+    conflict_strategy: Option<MoveConflictStrategy>,
+) -> Result<CopyResult, AppError> {
+    copy_files_impl(srcs, dst_dir, conflict_strategy, None)
+}
+
+#[tauri::command]
+fn preview_copy_file_conflicts(srcs: Vec<String>, dst_dir: String) -> Result<Vec<MoveConflict>, AppError> {
+    let dst_buf = safe_canonicalize(Path::new(&dst_dir))?;
+    let dst = dst_buf.as_path();
+    if !dst.is_dir() {
+        return Err(AppError::invalid_path("目标不是目录", Some(dst_dir)));
+    }
+    Ok(find_copy_conflicts(&srcs, dst))
+}
+
+fn move_files_impl(
+    srcs: Vec<String>,
+    dst_dir: String,
+    conflict_strategy: Option<MoveConflictStrategy>,
+    progress: Option<&TransferProgress>,
+) -> Result<MoveResult, AppError> {
+    let dst_buf = safe_canonicalize(Path::new(&dst_dir))?;
+    let dst = dst_buf.as_path();
+    if !dst.is_dir() {
+        return Err(AppError::invalid_path("目标不是目录", Some(dst_dir)));
+    }
+
+    let conflict_strategy = conflict_strategy.unwrap_or(MoveConflictStrategy::Abort);
+    let mut moved: Vec<String> = Vec::new();
+    let mut copied_cross_device: Vec<String> = Vec::new();
+    let mut failed: Vec<MoveFailure> = Vec::new();
+    let mut conflicts: Vec<MoveConflict> = Vec::new();
+    let mut skipped_same_dir: u32 = 0;
+    let mut skipped_conflicts: u32 = 0;
+
+    if matches!(conflict_strategy, MoveConflictStrategy::Abort) {
+        conflicts = find_move_conflicts(&srcs, dst);
+        if !conflicts.is_empty() {
+            return Ok(MoveResult { moved, copied_cross_device, failed, conflicts, skipped_same_dir, skipped_conflicts });
+        }
+    }
+
+    for src in srcs {
+        if let Some(progress) = progress {
+            if let Err(error) = progress.check_cancelled() {
+                failed.push(MoveFailure { src: src.clone(), error });
+                break;
+            }
+        }
+
+        let src_path = Path::new(&src);
+
+        if !path_exists_no_follow(src_path) {
+            failed.push(MoveFailure { src: src.clone(), error: "源不存在".into() });
+            continue;
+        }
+
+        if is_same_directory_no_follow(src_path, dst) {
+            skipped_same_dir += 1;
+            continue;
+        }
+
+        if let Some(src_canonical) = canonical_source_dir_for_recursion_check(src_path) {
+            if dst == src_canonical || dst.starts_with(&src_canonical) {
+                failed.push(MoveFailure {
+                    src: src.clone(),
+                    error: "目标在源目录内".into(),
+                });
+                continue;
+            }
+        }
+
+        let name = src_path.file_name().unwrap_or_default().to_string_lossy();
+        let base_dst_path = dst.join(name.as_ref());
+        if matches!(conflict_strategy, MoveConflictStrategy::Skip) && path_exists_no_follow(&base_dst_path) {
+            skipped_conflicts += 1;
+            continue;
+        }
+        let dst_path = match conflict_strategy {
+            MoveConflictStrategy::Abort => base_dst_path,
+            MoveConflictStrategy::KeepBoth => unique_destination(&base_dst_path),
+            MoveConflictStrategy::Replace => base_dst_path,
+            MoveConflictStrategy::Skip => base_dst_path,
+        };
+
+        let move_outcome = if matches!(conflict_strategy, MoveConflictStrategy::Replace) {
+            replace_existing_for_move_with_progress(src_path, &dst_path, progress)
+        } else {
+            rename_or_copy_cross_device_with_progress(src_path, &dst_path, progress)
+        };
+
+        match move_outcome {
+            Ok(MovePathOutcome::Moved) => moved.push(dst_path.to_string_lossy().into()),
+            Ok(MovePathOutcome::CopiedCrossDevice) => copied_cross_device.push(dst_path.to_string_lossy().into()),
+            Err(e) => failed.push(MoveFailure { src: src.clone(), error: e }),
+        }
+    }
+
+    Ok(MoveResult { moved, copied_cross_device, failed, conflicts, skipped_same_dir, skipped_conflicts })
 }
 
 #[tauri::command]
@@ -931,168 +1849,307 @@ fn move_files(
     srcs: Vec<String>,
     dst_dir: String,
     conflict_strategy: Option<MoveConflictStrategy>,
-) -> Result<MoveResult, String> {
-    let dst_buf = safe_canonicalize(Path::new(&dst_dir))?;
-    let dst = dst_buf.as_path();
-    if !dst.is_dir() {
-        return Err(format!("目标不是目录: {}", dst_dir));
-    }
-
-    let conflict_strategy = conflict_strategy.unwrap_or(MoveConflictStrategy::Abort);
-    let mut moved: Vec<String> = Vec::new();
-    let mut failed: Vec<MoveFailure> = Vec::new();
-    let mut conflicts: Vec<MoveConflict> = Vec::new();
-    let mut skipped_same_dir: u32 = 0;
-
-    if matches!(conflict_strategy, MoveConflictStrategy::Abort) {
-        for src in &srcs {
-            let src_path = Path::new(src);
-            if !src_path.exists() {
-                continue;
-            }
-            if src_path.parent().is_some_and(|parent| parent == dst) {
-                continue;
-            }
-
-            let name = src_path.file_name().unwrap_or_default().to_string_lossy();
-            let dst_path = dst.join(name.as_ref());
-            if dst_path.exists() {
-                conflicts.push(MoveConflict {
-                    src: src.clone(),
-                    dst: dst_path.to_string_lossy().into(),
-                    name: name.into(),
-                });
-            }
-        }
-
-        if !conflicts.is_empty() {
-            return Ok(MoveResult { moved, failed, conflicts, skipped_same_dir });
-        }
-    }
-
-    for src in srcs {
-        let src_path = Path::new(&src);
-
-        if !src_path.exists() {
-            failed.push(MoveFailure { src: src.clone(), error: "源不存在".into() });
-            continue;
-        }
-
-        if let Some(parent) = src_path.parent() {
-            if parent == dst {
-                skipped_same_dir += 1;
-                continue;
-            }
-        }
-
-        if dst == src_path || dst.starts_with(src_path) {
-            failed.push(MoveFailure {
-                src: src.clone(),
-                error: "目标在源目录内".into(),
-            });
-            continue;
-        }
-
-        let name = src_path.file_name().unwrap_or_default().to_string_lossy();
-        let base_dst_path = dst.join(name.as_ref());
-        let dst_path = match conflict_strategy {
-            MoveConflictStrategy::Abort => base_dst_path,
-            MoveConflictStrategy::KeepBoth => unique_destination(&base_dst_path),
-            MoveConflictStrategy::Replace => {
-                if base_dst_path.exists() {
-                    let remove_result = if base_dst_path.is_dir() {
-                        fs::remove_dir_all(&base_dst_path)
-                    } else {
-                        fs::remove_file(&base_dst_path)
-                    };
-                    if let Err(e) = remove_result {
-                        failed.push(MoveFailure {
-                            src: src.clone(),
-                            error: format!("替换目标失败: {}", e),
-                        });
-                        continue;
-                    }
-                }
-                base_dst_path
-            }
-        };
-
-        match fs::rename(&src, &dst_path) {
-            Ok(_) => moved.push(dst_path.to_string_lossy().into()),
-            Err(e) => {
-                // EXDEV on macOS / Linux = 18 (cross-device link)
-                let is_cross_device = matches!(e.raw_os_error(), Some(18));
-                if is_cross_device {
-                    let copy_outcome = if src_path.is_dir() {
-                        copy_dir_recursive(src_path, &dst_path)
-                    } else {
-                        fs::copy(src_path, &dst_path)
-                            .map(|_| ())
-                            .map_err(|err| format!("跨设备复制失败: {}", err))
-                    };
-                    match copy_outcome {
-                        Ok(_) => {
-                            let rm_outcome = if src_path.is_dir() {
-                                fs::remove_dir_all(src_path)
-                            } else {
-                                fs::remove_file(src_path)
-                            };
-                            if let Err(rm_err) = rm_outcome {
-                                failed.push(MoveFailure {
-                                    src: src.clone(),
-                                    error: format!("已复制但源删除失败: {}", rm_err),
-                                });
-                            } else {
-                                moved.push(dst_path.to_string_lossy().into());
-                            }
-                        }
-                        Err(copy_err) => failed.push(MoveFailure {
-                            src: src.clone(),
-                            error: copy_err,
-                        }),
-                    }
-                } else {
-                    failed.push(MoveFailure {
-                        src: src.clone(),
-                        error: format!("{}", e),
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(MoveResult { moved, failed, conflicts, skipped_same_dir })
+) -> Result<MoveResult, AppError> {
+    move_files_impl(srcs, dst_dir, conflict_strategy, None)
 }
 
 #[tauri::command]
-fn rename_file(path: String, new_name: String) -> Result<String, String> {
+fn preview_move_file_conflicts(srcs: Vec<String>, dst_dir: String) -> Result<Vec<MoveConflict>, AppError> {
+    let dst_buf = safe_canonicalize(Path::new(&dst_dir))?;
+    let dst = dst_buf.as_path();
+    if !dst.is_dir() {
+        return Err(AppError::invalid_path("目标不是目录", Some(dst_dir)));
+    }
+    Ok(find_move_conflicts(&srcs, dst))
+}
+
+fn create_transfer_task(
+    state: &TransferTaskState,
+    kind: &str,
+    srcs: &[String],
+) -> Result<(String, Arc<AtomicBool>), AppError> {
+    let estimate = estimate_transfer_paths(srcs);
+    let id = next_transfer_task_id(kind);
+    let cancel_requested = Arc::new(AtomicBool::new(false));
+    state.insert(
+        TransferTaskSnapshot {
+            id: id.clone(),
+            kind: kind.to_string(),
+            status: "queued".into(),
+            total_items: estimate.items,
+            completed_items: 0,
+            total_bytes: estimate.bytes,
+            completed_bytes: 0,
+            current_name: None,
+            error: None,
+            started_at: now_unix_seconds(),
+            finished_at: None,
+            copied: 0,
+            moved: 0,
+            copied_cross_device: 0,
+            failed: 0,
+            conflicts: 0,
+            skipped: 0,
+            skipped_same_dir: 0,
+            skipped_conflicts: 0,
+        },
+        cancel_requested.clone(),
+    )?;
+    Ok((id, cancel_requested))
+}
+
+fn finish_copy_transfer_task(state: &TransferTaskState, task_id: &str, result: Result<CopyResult, AppError>) {
+    match result {
+        Ok(result) => {
+            let error = summarize_transfer_error(&result.failed, &result.conflicts);
+            let was_cancelled = result.failed.iter().any(|failure| failure.error.contains("取消"));
+            let status = if error.is_some() {
+                if was_cancelled {
+                    "cancelled"
+                } else {
+                    "failed"
+                }
+            } else {
+                "completed"
+            };
+            state.update(task_id, |snapshot| {
+                snapshot.copied = result.copied.len() as u64;
+                snapshot.failed = result.failed.len() as u64;
+                snapshot.conflicts = result.conflicts.len() as u64;
+                snapshot.skipped = result.skipped_conflicts as u64;
+                snapshot.skipped_same_dir = 0;
+                snapshot.skipped_conflicts = result.skipped_conflicts as u64;
+                if snapshot.status == "cancelling" && was_cancelled {
+                    snapshot.status = "cancelled".into();
+                    snapshot.error = Some("操作已取消".into());
+                    snapshot.finished_at = Some(now_unix_seconds());
+                    return;
+                }
+                snapshot.status = status.into();
+                snapshot.error = error;
+                snapshot.finished_at = Some(now_unix_seconds());
+                if snapshot.status == "completed" {
+                    snapshot.completed_items = snapshot.total_items;
+                    snapshot.completed_bytes = snapshot.total_bytes;
+                }
+            });
+        }
+        Err(error) => {
+            state.update(task_id, |snapshot| {
+                if snapshot.status == "cancelling" {
+                    snapshot.status = "cancelled".into();
+                    snapshot.error = Some("操作已取消".into());
+                    snapshot.finished_at = Some(now_unix_seconds());
+                    return;
+                }
+                snapshot.status = "failed".into();
+                snapshot.error = Some(error.message);
+                snapshot.finished_at = Some(now_unix_seconds());
+            });
+        }
+    }
+}
+
+fn finish_move_transfer_task(state: &TransferTaskState, task_id: &str, result: Result<MoveResult, AppError>) {
+    match result {
+        Ok(result) => {
+            let error = summarize_transfer_error(&result.failed, &result.conflicts);
+            let was_cancelled = result.failed.iter().any(|failure| failure.error.contains("取消"));
+            let status = if error.is_some() {
+                if was_cancelled {
+                    "cancelled"
+                } else {
+                    "failed"
+                }
+            } else {
+                "completed"
+            };
+            state.update(task_id, |snapshot| {
+                snapshot.moved = result.moved.len() as u64;
+                snapshot.copied_cross_device = result.copied_cross_device.len() as u64;
+                snapshot.failed = result.failed.len() as u64;
+                snapshot.conflicts = result.conflicts.len() as u64;
+                snapshot.skipped = result.skipped_same_dir.saturating_add(result.skipped_conflicts) as u64;
+                snapshot.skipped_same_dir = result.skipped_same_dir as u64;
+                snapshot.skipped_conflicts = result.skipped_conflicts as u64;
+                if snapshot.status == "cancelling" && was_cancelled {
+                    snapshot.status = "cancelled".into();
+                    snapshot.error = Some("操作已取消".into());
+                    snapshot.finished_at = Some(now_unix_seconds());
+                    return;
+                }
+                snapshot.status = status.into();
+                snapshot.error = error;
+                snapshot.finished_at = Some(now_unix_seconds());
+                if snapshot.status == "completed" {
+                    snapshot.completed_items = snapshot.total_items;
+                    snapshot.completed_bytes = snapshot.total_bytes;
+                }
+            });
+        }
+        Err(error) => {
+            state.update(task_id, |snapshot| {
+                if snapshot.status == "cancelling" {
+                    snapshot.status = "cancelled".into();
+                    snapshot.error = Some("操作已取消".into());
+                    snapshot.finished_at = Some(now_unix_seconds());
+                    return;
+                }
+                snapshot.status = "failed".into();
+                snapshot.error = Some(error.message);
+                snapshot.finished_at = Some(now_unix_seconds());
+            });
+        }
+    }
+}
+
+#[tauri::command]
+fn start_copy_files_task(
+    state: tauri::State<TransferTaskState>,
+    srcs: Vec<String>,
+    dst_dir: String,
+    conflict_strategy: Option<MoveConflictStrategy>,
+) -> Result<String, AppError> {
+    let state = state.inner().clone();
+    let (task_id, cancel_requested) = create_transfer_task(&state, "copy", &srcs)?;
+    let progress = TransferProgress {
+        task_id: task_id.clone(),
+        state: state.clone(),
+        cancel_requested,
+    };
+    let task_id_for_worker = task_id.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        state.update(&task_id_for_worker, |snapshot| {
+            if snapshot.status == "queued" {
+                snapshot.status = "running".into();
+            }
+        });
+        let result = copy_files_impl(srcs, dst_dir, conflict_strategy, Some(&progress));
+        finish_copy_transfer_task(&state, &task_id_for_worker, result);
+    });
+
+    Ok(task_id)
+}
+
+#[tauri::command]
+fn start_move_files_task(
+    state: tauri::State<TransferTaskState>,
+    srcs: Vec<String>,
+    dst_dir: String,
+    conflict_strategy: Option<MoveConflictStrategy>,
+) -> Result<String, AppError> {
+    let state = state.inner().clone();
+    let (task_id, cancel_requested) = create_transfer_task(&state, "move", &srcs)?;
+    let progress = TransferProgress {
+        task_id: task_id.clone(),
+        state: state.clone(),
+        cancel_requested,
+    };
+    let task_id_for_worker = task_id.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        state.update(&task_id_for_worker, |snapshot| {
+            if snapshot.status == "queued" {
+                snapshot.status = "running".into();
+            }
+        });
+        let result = move_files_impl(srcs, dst_dir, conflict_strategy, Some(&progress));
+        finish_move_transfer_task(&state, &task_id_for_worker, result);
+    });
+
+    Ok(task_id)
+}
+
+#[tauri::command]
+fn list_transfer_tasks(state: tauri::State<TransferTaskState>) -> Result<Vec<TransferTaskSnapshot>, AppError> {
+    state.list()
+}
+
+#[tauri::command]
+fn cancel_transfer_task(state: tauri::State<TransferTaskState>, task_id: String) -> Result<(), AppError> {
+    let mut tasks = state.0.lock().map_err(|_| AppError::unavailable("传输任务状态不可用"))?;
+    let task = tasks
+        .get_mut(&task_id)
+        .ok_or_else(|| AppError::invalid_path("传输任务不存在", Some(task_id.clone())))?;
+
+    task.cancel_requested.store(true, Ordering::SeqCst);
+    if matches!(task.snapshot.status.as_str(), "queued" | "running") {
+        task.snapshot.status = "cancelling".into();
+        task.snapshot.error = Some("正在取消".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_finished_transfer_tasks(state: tauri::State<TransferTaskState>) -> Result<(), AppError> {
+    let mut tasks = state.0.lock().map_err(|_| AppError::unavailable("传输任务状态不可用"))?;
+    let now = now_unix_seconds();
+    tasks.retain(|_, task| should_retain_transfer_task_after_clear(&task.snapshot, now));
+    Ok(())
+}
+
+fn should_retain_transfer_task_after_clear(snapshot: &TransferTaskSnapshot, now: u64) -> bool {
+    if !is_terminal_transfer_status(&snapshot.status) {
+        return true;
+    }
+    let Some(finished_at) = snapshot.finished_at else {
+        return false;
+    };
+    now.saturating_sub(finished_at) < FINISHED_TRANSFER_TASK_RETENTION_SECONDS
+}
+
+#[tauri::command]
+fn rename_file(path: String, new_name: String) -> Result<String, AppError> {
+    let new_name = validate_child_name(&new_name)?;
     let parent = Path::new(&path).parent().unwrap_or(Path::new("/"));
     let new_path = parent.join(&new_name);
-    fs::rename(&path, &new_path).map_err(|e| format!("重命名失败: {}", e))?;
+    fs::rename(&path, &new_path)
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("重命名失败: {}", e)))?;
     Ok(new_path.to_string_lossy().into())
 }
 
 #[tauri::command]
-fn delete_to_trash(path: String) -> Result<(), String> {
-    trash::delete(&path).map_err(|e| format!("移至废纸篓失败: {}", e))
+fn delete_to_trash(path: String) -> Result<(), AppError> {
+    trash::delete(&path)
+        .map_err(|e| trash_delete_error(&path, e.to_string()))
+}
+
+fn trash_delete_error(path: &str, error: impl Into<String>) -> AppError {
+    let detail = error.into();
+    if path.starts_with("/Volumes/") {
+        return AppError::trash_unsupported(
+            format!(
+                "该外置卷无法移至废纸篓，操作已取消；Aether 不会改用永久删除。原始错误: {}",
+                detail
+            ),
+            Some(path.to_string()),
+        );
+    }
+
+    AppError::internal_at(format!("移至废纸篓失败: {}", detail), Some(path.to_string()))
 }
 
 #[tauri::command]
-fn create_file(parent_dir: String, name: String) -> Result<String, String> {
+fn create_file(parent_dir: String, name: String) -> Result<String, AppError> {
+    let name = validate_child_name(&name)?;
     let file_path = unique_destination(&Path::new(&parent_dir).join(&name));
-    fs::write(&file_path, "").map_err(|e| format!("创建文件失败: {}", e))?;
+    fs::write(&file_path, "")
+        .map_err(|e| AppError::from_io(&e, Some(&file_path.to_string_lossy()), format!("创建文件失败: {}", e)))?;
     Ok(file_path.to_string_lossy().into())
 }
 
 #[tauri::command]
-fn create_folder(parent_dir: String, name: String) -> Result<String, String> {
+fn create_folder(parent_dir: String, name: String) -> Result<String, AppError> {
+    let name = validate_child_name(&name)?;
     let dir_path = unique_destination(&Path::new(&parent_dir).join(&name));
-    fs::create_dir(&dir_path).map_err(|e| format!("创建文件夹失败: {}", e))?;
+    fs::create_dir(&dir_path)
+        .map_err(|e| AppError::from_io(&e, Some(&dir_path.to_string_lossy()), format!("创建文件夹失败: {}", e)))?;
     Ok(dir_path.to_string_lossy().into())
 }
 
 #[tauri::command]
-fn make_alias(path: String) -> Result<String, String> {
+fn make_alias(path: String) -> Result<String, AppError> {
     let parent = Path::new(&path).parent().unwrap_or(Path::new("/"));
     let name = Path::new(&path).file_name().unwrap_or_default().to_string_lossy();
     let alias_name = format!("{} 的替身", name);
@@ -1100,18 +2157,19 @@ fn make_alias(path: String) -> Result<String, String> {
 
     #[cfg(target_os = "macos")]
     std::os::unix::fs::symlink(&path, &alias_path)
-        .map_err(|e| format!("创建替身失败: {}", e))?;
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("创建替身失败: {}", e)))?;
 
     #[cfg(not(target_os = "macos"))]
     fs::write(&alias_path, format!("alias: {}", path))
-        .map_err(|e| format!("创建替身失败: {}", e))?;
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("创建替身失败: {}", e)))?;
 
     Ok(alias_path.to_string_lossy().into())
 }
 
 #[tauri::command]
-fn compress_files(paths: Vec<String>, output: String) -> Result<String, String> {
-    let file = fs::File::create(&output).map_err(|e| format!("创建压缩文件失败: {}", e))?;
+fn compress_files(paths: Vec<String>, output: String) -> Result<String, AppError> {
+    let file = fs::File::create(&output)
+        .map_err(|e| AppError::from_io(&e, Some(&output), format!("创建压缩文件失败: {}", e)))?;
     let mut zip_writer = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
 
@@ -1123,27 +2181,66 @@ fn compress_files(paths: Vec<String>, output: String) -> Result<String, String> 
             let name = p.file_name().unwrap_or_default().to_string_lossy();
             zip_writer
                 .start_file(name.as_ref(), options)
-                .map_err(|e| format!("压缩失败: {}", e))?;
-            let mut input = fs::File::open(p).map_err(|e| format!("读取文件失败: {}", e))?;
-            std::io::copy(&mut input, &mut zip_writer).map_err(|e| format!("写入压缩失败: {}", e))?;
+                .map_err(|e| AppError::internal_at(format!("压缩失败: {}", e), Some(path_str.clone())))?;
+            let mut input = fs::File::open(p)
+                .map_err(|e| AppError::from_io(&e, Some(path_str), format!("读取文件失败: {}", e)))?;
+            std::io::copy(&mut input, &mut zip_writer)
+                .map_err(|e| AppError::from_io(&e, Some(path_str), format!("写入压缩失败: {}", e)))?;
         }
     }
 
-    zip_writer.finish().map_err(|e| format!("完成压缩失败: {}", e))?;
+    zip_writer.finish()
+        .map_err(|e| AppError::internal_at(format!("完成压缩失败: {}", e), Some(output.clone())))?;
     Ok(output)
 }
 
 #[tauri::command]
-fn decompress_file(path: String, output_dir: String) -> Result<String, String> {
-    let file = fs::File::open(&path).map_err(|e| format!("打开压缩文件失败: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取压缩文件失败: {}", e))?;
+fn decompress_file(path: String, output_dir: String) -> Result<String, AppError> {
+    let file = fs::File::open(&path)
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("打开压缩文件失败: {}", e)))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| AppError::internal(format!("读取压缩文件失败: {}", e)))?;
+    let output_root = Path::new(&output_dir);
+    let mut planned_files = std::collections::HashSet::new();
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| format!("读取条目失败: {}", e))?;
+        let entry = archive.by_index(i)
+            .map_err(|e| AppError::internal(format!("读取条目失败: {}", e)))?;
         let enclosed = entry
             .enclosed_name()
-            .ok_or_else(|| format!("压缩包包含不安全路径: {}", entry.name()))?;
-        let out_path = Path::new(&output_dir).join(enclosed);
+            .ok_or_else(|| AppError::invalid_path(
+                format!("压缩包包含不安全路径: {}", entry.name()),
+                Some(entry.name().to_string()),
+            ))?;
+        if entry.is_dir() {
+            continue;
+        }
+
+        let out_path = output_root.join(enclosed);
+        if !planned_files.insert(out_path.clone()) {
+            return Err(AppError::conflict(
+                "压缩包包含重复条目",
+                Some(out_path.to_string_lossy().to_string()),
+            ));
+        }
+        if out_path.exists() {
+            return Err(AppError::conflict(
+                "解压目标已存在，已停止以避免覆盖",
+                Some(out_path.to_string_lossy().to_string()),
+            ));
+        }
+    }
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)
+            .map_err(|e| AppError::internal(format!("读取条目失败: {}", e)))?;
+        let enclosed = entry
+            .enclosed_name()
+            .ok_or_else(|| AppError::invalid_path(
+                format!("压缩包包含不安全路径: {}", entry.name()),
+                Some(entry.name().to_string()),
+            ))?;
+        let out_path = output_root.join(enclosed);
 
         if entry.is_dir() {
             fs::create_dir_all(&out_path).ok();
@@ -1152,9 +2249,9 @@ fn decompress_file(path: String, output_dir: String) -> Result<String, String> {
                 fs::create_dir_all(parent).ok();
             }
             let mut out_file = fs::File::create(&out_path)
-                .map_err(|e| format!("创建解压文件失败: {}", e))?;
+                .map_err(|e| AppError::from_io(&e, Some(&out_path.to_string_lossy()), format!("创建解压文件失败: {}", e)))?;
             std::io::copy(&mut entry, &mut out_file)
-                .map_err(|e| format!("解压写入失败: {}", e))?;
+                .map_err(|e| AppError::from_io(&e, Some(&out_path.to_string_lossy()), format!("解压写入失败: {}", e)))?;
         }
     }
 
@@ -1197,10 +2294,10 @@ fn dir_size_recursive(dir: &Path) -> (u64, u64) {
 }
 
 #[tauri::command]
-fn get_dir_size(path: String) -> Result<serde_json::Value, String> {
+fn get_dir_size(path: String) -> Result<serde_json::Value, AppError> {
     let dir = Path::new(&path);
     if !dir.is_dir() {
-        return Err("不是一个目录".into());
+        return Err(AppError::invalid_path("不是一个目录", Some(path)));
     }
     let (bytes, file_count) = dir_size_recursive(dir);
     Ok(serde_json::json!({
@@ -1213,27 +2310,81 @@ fn get_dir_size(path: String) -> Result<serde_json::Value, String> {
 /// 按需查目录的直接子项数（PERF_PLAN L2-B 配套）。
 /// 前端建议加 TTL 缓存避免重复调用。
 #[tauri::command]
-fn get_child_count(path: String, show_hidden: bool) -> Result<u64, String> {
+fn get_child_count(path: String, show_hidden: bool) -> Result<u64, AppError> {
     let p = Path::new(&path);
     if !p.is_dir() {
         return Ok(0);
     }
     let count = fs::read_dir(p)
-        .map(|c| c.flatten()
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("读取目录失败: {}", e)))?
+        .flatten()
             .filter(|e| {
                 if show_hidden { true }
                 else { e.file_name().to_str().map(|n| !n.starts_with('.')).unwrap_or(true) }
             })
-            .count() as u64)
-        .unwrap_or(0);
+            .count() as u64;
     Ok(count)
 }
 
+fn directory_signature_for_path(path: &str, show_hidden: bool) -> Result<DirectorySignature, AppError> {
+    let dir = Path::new(path);
+    if !dir.is_dir() {
+        return Err(AppError::invalid_path("不是一个目录", Some(path.to_string())));
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut entry_count = 0_u64;
+    let mut entries = fs::read_dir(dir)
+        .map_err(|e| AppError::from_io(&e, Some(path), format!("读取目录失败: {}", e)))?
+        .flatten()
+        .filter(|entry| {
+            if show_hidden {
+                true
+            } else {
+                entry
+                    .file_name()
+                    .to_str()
+                    .map(|name| !name.starts_with('.'))
+                    .unwrap_or(true)
+            }
+        })
+        .map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let metadata = entry.metadata().ok();
+            let is_dir = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            let len = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+            let modified = metadata
+                .and_then(|m| m.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            (name, is_dir, len, modified)
+        })
+        .collect::<Vec<_>>();
+
+    entries.sort_by_key(|a| a.0.to_lowercase());
+    for entry in entries {
+        entry_count += 1;
+        entry.hash(&mut hasher);
+    }
+
+    Ok(DirectorySignature {
+        fingerprint: format!("{:016x}", hasher.finish()),
+        entry_count,
+    })
+}
+
 #[tauri::command]
-fn get_file_info(path: String) -> Result<FileEntry, String> {
+fn get_directory_signature(path: String, show_hidden: bool) -> Result<DirectorySignature, AppError> {
+    directory_signature_for_path(&path, show_hidden)
+}
+
+#[tauri::command]
+fn get_file_info(path: String) -> Result<FileEntry, AppError> {
     let p = Path::new(&path);
     let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-    let metadata = fs::metadata(&path).map_err(|e| format!("读取元数据失败: {}", e))?;
+    let metadata = fs::metadata(&path)
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("读取元数据失败: {}", e)))?;
     let is_dir = metadata.is_dir();
     let size = if is_dir { "--".into() } else { format_size(metadata.len()) };
     let modified = format_modified(&metadata);
@@ -1259,12 +2410,12 @@ fn get_file_info(path: String) -> Result<FileEntry, String> {
 }
 
 #[tauri::command]
-fn open_with(path: String, app_name: String) -> Result<(), String> {
+fn open_with(path: String, app_name: String) -> Result<(), AppError> {
     std::process::Command::new("open")
         .args(["-a", &app_name])
         .arg(&path)
         .spawn()
-        .map_err(|e| format!("无法使用 {} 打开: {}", app_name, e))?;
+        .map_err(|e| AppError::internal_at(format!("无法使用 {} 打开: {}", app_name, e), Some(path)))?;
     Ok(())
 }
 
@@ -1273,9 +2424,11 @@ fn add_dir_to_zip(
     base: &Path,
     dir: &Path,
     options: zip::write::SimpleFileOptions,
-) -> Result<(), String> {
-    for entry in fs::read_dir(dir).map_err(|e| format!("读取目录失败: {}", e))? {
-        let entry = entry.map_err(|e| format!("读取条目失败: {}", e))?;
+) -> Result<(), AppError> {
+    for entry in fs::read_dir(dir)
+        .map_err(|e| AppError::from_io(&e, Some(&dir.to_string_lossy()), format!("读取目录失败: {}", e)))? {
+        let entry = entry
+            .map_err(|e| AppError::from_io(&e, Some(&dir.to_string_lossy()), format!("读取条目失败: {}", e)))?;
         let path = entry.path();
         let relative = path.strip_prefix(base).unwrap_or(&path);
         let name = relative.to_string_lossy();
@@ -1283,61 +2436,68 @@ fn add_dir_to_zip(
         if path.is_dir() {
             writer
                 .add_directory(name.as_ref(), options)
-                .map_err(|e| format!("添加目录失败: {}", e))?;
+                .map_err(|e| AppError::internal_at(format!("添加目录失败: {}", e), Some(path.to_string_lossy().to_string())))?;
             add_dir_to_zip(writer, base, &path, options)?;
         } else {
             writer
                 .start_file(name.as_ref(), options)
-                .map_err(|e| format!("添加文件失败: {}", e))?;
-            let mut input = fs::File::open(&path).map_err(|e| format!("读取文件失败: {}", e))?;
-            std::io::copy(&mut input, &mut *writer).map_err(|e| format!("写入失败: {}", e))?;
+                .map_err(|e| AppError::internal_at(format!("添加文件失败: {}", e), Some(path.to_string_lossy().to_string())))?;
+            let mut input = fs::File::open(&path)
+                .map_err(|e| AppError::from_io(&e, Some(&path.to_string_lossy()), format!("读取文件失败: {}", e)))?;
+            std::io::copy(&mut input, &mut *writer)
+                .map_err(|e| AppError::from_io(&e, Some(&path.to_string_lossy()), format!("写入失败: {}", e)))?;
         }
     }
     Ok(())
 }
 
 #[tauri::command]
-fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
+fn open_devtools(window: tauri::WebviewWindow) -> Result<(), AppError> {
     window.open_devtools();
     Ok(())
 }
 
 #[tauri::command]
-fn quick_look(path: String) -> Result<(), String> {
+fn quick_look(path: String) -> Result<(), AppError> {
     std::process::Command::new("qlmanage")
         .args(["-p", &path])
         .spawn()
-        .map_err(|e| format!("无法打开 Quick Look: {}", e))?;
+        .map_err(|e| AppError::internal_at(format!("无法打开 Quick Look: {}", e), Some(path)))?;
     Ok(())
 }
 
 #[tauri::command]
-fn reveal_in_finder(path: String) -> Result<(), String> {
+fn reveal_in_finder(path: String) -> Result<(), AppError> {
     std::process::Command::new("open")
         .args(["-R", &path])
         .spawn()
-        .map_err(|e| format!("无法在 Finder 中显示: {}", e))?;
+        .map_err(|e| AppError::internal_at(format!("无法在 Finder 中显示: {}", e), Some(path)))?;
     Ok(())
 }
 
 #[tauri::command]
-fn open_path(path: String) -> Result<(), String> {
+fn open_path(path: String) -> Result<(), AppError> {
     std::process::Command::new("open")
         .arg(&path)
         .spawn()
-        .map_err(|e| format!("无法打开文件: {}", e))?;
+        .map_err(|e| AppError::internal_at(format!("无法打开文件: {}", e), Some(path)))?;
     Ok(())
 }
 
 #[tauri::command]
-fn get_disk_info(path: String) -> Result<DiskInfo, String> {
+fn get_disk_info(path: String) -> Result<DiskInfo, AppError> {
     let output = std::process::Command::new("df")
         .args(["-k", "-P", &path])
         .output()
-        .map_err(|e| format!("获取磁盘信息失败: {}", e))?;
-    let text = String::from_utf8(output.stdout).map_err(|e| format!("解析磁盘信息失败: {}", e))?;
-    let line = text.lines().nth(1).ok_or_else(|| "磁盘信息为空".to_string())?;
-    let (filesystem, size, used, available, capacity, mount) = parse_df_line(line)?;
+        .map_err(|e| AppError::internal_at(format!("获取磁盘信息失败: {}", e), Some(path.clone())))?;
+    let text = String::from_utf8(output.stdout)
+        .map_err(|e| AppError::internal_at(format!("解析磁盘信息失败: {}", e), Some(path.clone())))?;
+    let line = text
+        .lines()
+        .nth(1)
+        .ok_or_else(|| AppError::internal_at("磁盘信息为空", Some(path.clone())))?;
+    let (filesystem, size, used, available, capacity, mount) = parse_df_line(line)
+        .map_err(|e| AppError::internal_at(e, Some(path.clone())))?;
     Ok(DiskInfo {
         filesystem: filesystem.into(),
         size: format_kib(size),
@@ -1358,13 +2518,14 @@ fn parse_capacity(value: &str) -> u8 {
 }
 
 #[tauri::command]
-fn list_volumes() -> Result<Vec<VolumeInfo>, String> {
+fn list_volumes() -> Result<Vec<VolumeInfo>, AppError> {
     let output = std::process::Command::new("df")
         .args(["-k", "-P"])
         .output()
-        .map_err(|e| format!("获取卷信息失败: {}", e))?;
+        .map_err(|e| AppError::internal(format!("获取卷信息失败: {}", e)))?;
 
-    let text = String::from_utf8(output.stdout).map_err(|e| format!("解析卷信息失败: {}", e))?;
+    let text = String::from_utf8(output.stdout)
+        .map_err(|e| AppError::internal(format!("解析卷信息失败: {}", e)))?;
     let mut volumes = Vec::new();
     let mut seen_mounts = std::collections::HashSet::new();
 
@@ -1409,25 +2570,32 @@ fn list_volumes() -> Result<Vec<VolumeInfo>, String> {
 }
 
 #[tauri::command]
-fn eject_volume(path: String) -> Result<(), String> {
+fn eject_volume(path: String) -> Result<(), AppError> {
     if !path.starts_with("/Volumes/") {
-        return Err("只能弹出 /Volumes 下的外置磁盘".into());
+        return Err(AppError::invalid_path(
+            "只能弹出 /Volumes 下的外置磁盘",
+            Some(path),
+        ));
     }
 
     let status = std::process::Command::new("diskutil")
         .args(["eject", &path])
         .status()
-        .map_err(|e| format!("弹出磁盘失败: {}", e))?;
+        .map_err(|e| AppError::internal_at(format!("弹出磁盘失败: {}", e), Some(path.clone())))?;
 
     if status.success() {
         Ok(())
     } else {
-        Err("弹出磁盘失败：磁盘可能正在被占用".into())
+        Err(AppError::new(
+            AppErrorKind::Busy,
+            "弹出磁盘失败：磁盘可能正在被占用",
+            Some(path),
+        ))
     }
 }
 
 #[tauri::command]
-fn list_terminal_apps() -> Result<Vec<String>, String> {
+fn list_terminal_apps() -> Result<Vec<String>, AppError> {
     let mut terminals = vec!["Terminal".to_string(), "iTerm".to_string()];
     let candidates = [
         "/Applications",
@@ -1472,33 +2640,94 @@ fn list_terminal_apps() -> Result<Vec<String>, String> {
         }
     }
 
-    terminals.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    terminals.sort_by_key(|a| a.to_lowercase());
     terminals.dedup();
     Ok(terminals)
 }
 
-/// 拒绝包含 shell 元字符的用户命令片段。
+/// 拒绝包含未被 shell 单引号保护的 shell 元字符的用户命令片段。
 ///
 /// 这一层防御针对自动化路径：菜单扩展的 terminalArgs / shell command 字段在没有
 /// 用户二次确认时（confirmExecution=false）执行，必须保证 user_cmd 不会
 /// "逃出" 我们包装的引号 / `cd` 前缀。
 ///
-/// 拒绝的字符 / 序列见 FORBIDDEN_TOKENS。用户在设置面板手敲"高级命令"应走
+/// 前端会先对模板占位符执行 shell_quote；这里保留后端兜底，允许危险字符
+/// 出现在已引用参数内。用户在设置面板手敲"高级命令"应走
 /// confirmExecution=true 流程，前端可以选择跳过此校验。
-const FORBIDDEN_TOKENS: &[&str] = &["$(", "`", "&&", "||", ";", "|", ">", "<", "\n", "\r"];
+fn find_forbidden_shell_token_outside_quotes(s: &str) -> Result<Option<&'static str>, String> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_single_quote = false;
+
+    while i < bytes.len() {
+        let ch = bytes[i] as char;
+        if ch == '\n' || ch == '\r' {
+            return Ok(Some(if ch == '\n' { "\n" } else { "\r" }));
+        }
+
+        if in_single_quote
+            && ch == '\''
+            && i + 3 < bytes.len()
+            && bytes[i + 1] as char == '\\'
+            && bytes[i + 2] as char == '\''
+            && bytes[i + 3] as char == '\''
+        {
+            i += 4;
+            continue;
+        }
+
+        if ch == '\'' {
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+
+        if in_single_quote {
+            i += 1;
+            continue;
+        }
+
+        if ch == '\\' {
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+
+        if i + 1 < bytes.len() {
+            match (bytes[i], bytes[i + 1]) {
+                (b'$', b'(') => return Ok(Some("$(")),
+                (b'&', b'&') => return Ok(Some("&&")),
+                (b'|', b'|') => return Ok(Some("||")),
+                _ => {}
+            }
+        }
+
+        match ch {
+            '`' => return Ok(Some("`")),
+            ';' => return Ok(Some(";")),
+            '|' => return Ok(Some("|")),
+            '>' => return Ok(Some(">")),
+            '<' => return Ok(Some("<")),
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if in_single_quote {
+        return Err("命令含未闭合的单引号".into());
+    }
+    Ok(None)
+}
 
 fn validate_shell_fragment(s: &str) -> Result<String, String> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return Err("命令为空".into());
     }
-    for tok in FORBIDDEN_TOKENS {
-        if trimmed.contains(tok) {
-            return Err(format!(
-                "命令含受限字符 {} — 请改用『扩展菜单』的高级命令模式（启用执行前确认）",
-                tok
-            ));
-        }
+    if let Some(tok) = find_forbidden_shell_token_outside_quotes(trimmed)? {
+        return Err(format!(
+            "命令含受限字符 {} — 请改用『扩展菜单』的高级命令模式（启用执行前确认）",
+            tok
+        ));
     }
     Ok(trimmed.to_string())
 }
@@ -1514,7 +2743,7 @@ fn is_allowed_terminal(name: &str) -> bool {
 }
 
 #[tauri::command]
-fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<String>, scripts: Option<Vec<String>>, custom_command: Option<String>) -> Result<(), String> {
+fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<String>, scripts: Option<Vec<String>>, custom_command: Option<String>) -> Result<(), AppError> {
     let target_path = Path::new(&path);
     let dir = if target_path.is_dir() {
         target_path.to_path_buf()
@@ -1525,7 +2754,7 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
 
     let app_name = terminal_app.unwrap_or_else(|| "Terminal".into());
     if !is_allowed_terminal(&app_name) {
-        return Err(format!("不允许的终端应用: {}", app_name));
+        return Err(AppError::invalid_path(format!("不允许的终端应用: {}", app_name), None));
     }
     let arg_text = args.unwrap_or_default();
 
@@ -1535,24 +2764,29 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
         .filter(|ss| !ss.is_empty())
         .map(|ss| {
             ss.into_iter()
-                .map(|s| validate_shell_fragment(&s))
-                .collect::<Result<Vec<_>, _>>()
+                .map(|s| validate_shell_fragment(&s).map_err(|err| AppError::invalid_path(err, None)))
+                .collect::<Result<Vec<_>, AppError>>()
         })
         .transpose()?
         .map(|validated| validated.join(" && "));
 
     let lower = app_name.to_lowercase();
+    let args_tail = {
+        let trimmed_args = arg_text.trim();
+        if trimmed_args.is_empty() {
+            None
+        } else {
+            Some(validate_shell_fragment(trimmed_args).map_err(|err| AppError::invalid_path(err, None))?)
+        }
+    };
     let raw_tail = custom_command
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty())
-        .map(|c| validate_shell_fragment(c))
+        .map(|c| validate_shell_fragment(c).map_err(|err| AppError::invalid_path(err, None)))
         .transpose()?
         .or_else(|| scripts_tail.clone())
-        .or_else(|| {
-            let trimmed_args = arg_text.trim();
-            if trimmed_args.is_empty() { None } else { validate_shell_fragment(trimmed_args).ok() }
-        });
+        .or(args_tail);
     let command = match raw_tail.as_deref() {
         Some(tail) => format!("cd {} && {}", shell_quote(&dir_str), tail),
         None => format!("cd {}", shell_quote(&dir_str)),
@@ -1578,10 +2812,10 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
         let output = std::process::Command::new("osascript")
             .args(["-e", &script])
             .output()
-            .map_err(|e| format!("打开终端失败: {}", e))?;
+            .map_err(|e| AppError::internal_at(format!("打开终端失败: {}", e), Some(path.clone())))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("AppleScript 错误: {}", stderr));
+            return Err(AppError::internal_at(format!("AppleScript 错误: {}", stderr), Some(path)));
         }
     } else {
         // 非 Terminal/iTerm 终端：通过临时脚本传递命令
@@ -1589,18 +2823,18 @@ fn open_terminal_at(path: String, terminal_app: Option<String>, args: Option<Str
             let tmp_script = std::env::temp_dir().join(format!("aether-launch-{}.sh", std::process::id()));
             let script_content = format!("#!/bin/sh\ncd {}\n{}\nexec $SHELL", shell_quote(&dir_str), tail);
             std::fs::write(&tmp_script, &script_content)
-                .map_err(|e| format!("写入临时脚本失败: {}", e))?;
+                .map_err(|e| AppError::internal_at(format!("写入临时脚本失败: {}", e), Some(tmp_script.to_string_lossy().to_string())))?;
             std::fs::set_permissions(&tmp_script, std::fs::Permissions::from_mode(0o755))
-                .map_err(|e| format!("设置脚本权限失败: {}", e))?;
+                .map_err(|e| AppError::internal_at(format!("设置脚本权限失败: {}", e), Some(tmp_script.to_string_lossy().to_string())))?;
             std::process::Command::new("open")
                 .args(["-a", &app_name, tmp_script.to_string_lossy().as_ref()])
                 .spawn()
-                .map_err(|e| format!("打开终端应用失败: {}", e))?;
+                .map_err(|e| AppError::internal_at(format!("打开终端应用失败: {}", e), Some(path)))?;
         } else {
             std::process::Command::new("open")
                 .args(["-a", &app_name, &dir_str])
                 .spawn()
-                .map_err(|e| format!("打开终端应用失败: {}", e))?;
+                .map_err(|e| AppError::internal_at(format!("打开终端应用失败: {}", e), Some(path)))?;
         }
     }
     Ok(())
@@ -1652,13 +2886,34 @@ fn check_updates_message(app: tauri::AppHandle) {
 }
 
 #[cfg(target_os = "macos")]
+fn show_help_message(app: &tauri::AppHandle) {
+    app.dialog()
+        .message("Aether Explorer 是本地优先的 macOS 文件工作台。\n\n常用快捷键：\n⌘N 新建窗口\n⌘R 刷新\n⌘I 显示简介\n⌘C / ⌘X / ⌘V 复制、剪切、粘贴\n空格 Quick Look")
+        .title("Aether Explorer 帮助")
+        .show(|_| {});
+}
+
+#[cfg(target_os = "macos")]
+fn emit_native_menu_command(app: &tauri::AppHandle, command: &str) {
+    let _ = app.emit("aether-native-menu-command", command);
+}
+
+#[cfg(target_os = "macos")]
 fn build_native_app_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_name = app.package_info().name.clone();
     let new_window = MenuItem::with_id(app, "new-window", "新建窗口", true, Some("CmdOrCtrl+N"))?;
-    let reload_window = MenuItem::with_id(app, "reload-window", "重新加载窗口", true, Some("CmdOrCtrl+R"))?;
+    let refresh_view = MenuItem::with_id(app, "refresh-view", "刷新", true, Some("CmdOrCtrl+R"))?;
+    let refresh_view_in_view_menu = MenuItem::with_id(app, "refresh-view-in-view-menu", "刷新", true, None::<&str>)?;
+    let open_settings = MenuItem::with_id(app, "open-settings", "设置…", true, Some("CmdOrCtrl+,"))?;
     let check_updates = MenuItem::with_id(app, "check-updates", "检查更新…", true, None::<&str>)?;
+    let show_help = MenuItem::with_id(app, "show-help", "Aether Explorer 帮助", true, None::<&str>)?;
     let show_all_windows = MenuItem::with_id(app, "show-all-windows", "显示主窗口", true, None::<&str>)?;
     let force_quit = MenuItem::with_id(app, "force-quit-app", "退出 Aether Explorer", true, Some("CmdOrCtrl+Q"))?;
+    let view_list = MenuItem::with_id(app, "view-list", "列表视图", true, Some("CmdOrCtrl+1"))?;
+    let view_grid = MenuItem::with_id(app, "view-grid", "网格视图", true, Some("CmdOrCtrl+2"))?;
+    let view_column = MenuItem::with_id(app, "view-column", "分栏视图", true, Some("CmdOrCtrl+3"))?;
+    let toggle_hidden = MenuItem::with_id(app, "toggle-hidden-files", "显示/隐藏隐藏文件", true, Some("CmdOrCtrl+Shift+."))?;
+    let toggle_inspector = MenuItem::with_id(app, "toggle-inspector", "显示/隐藏简介", true, Some("CmdOrCtrl+I"))?;
 
     let app_menu = Submenu::with_items(
         app,
@@ -1667,7 +2922,7 @@ fn build_native_app_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wr
         &[
             &PredefinedMenuItem::about(app, None, None)?,
             &PredefinedMenuItem::separator(app)?,
-            &check_updates,
+            &open_settings,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, None)?,
             &PredefinedMenuItem::separator(app)?,
@@ -1685,7 +2940,7 @@ fn build_native_app_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wr
         true,
         &[
             &new_window,
-            &reload_window,
+            &refresh_view,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?,
         ],
@@ -1706,6 +2961,22 @@ fn build_native_app_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wr
         ],
     )?;
 
+    let view_menu = Submenu::with_items(
+        app,
+        "显示",
+        true,
+        &[
+            &view_list,
+            &view_grid,
+            &view_column,
+            &PredefinedMenuItem::separator(app)?,
+            &toggle_hidden,
+            &toggle_inspector,
+            &PredefinedMenuItem::separator(app)?,
+            &refresh_view_in_view_menu,
+        ],
+    )?;
+
     let window_menu = Submenu::with_items(
         app,
         "窗口",
@@ -1719,7 +2990,17 @@ fn build_native_app_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wr
         ],
     )?;
 
-    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])
+    let help_menu = Submenu::with_items(
+        app,
+        "帮助",
+        true,
+        &[
+            &show_help,
+            &check_updates,
+        ],
+    )?;
+
+    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu, &help_menu])
 }
 
 #[cfg(target_os = "macos")]
@@ -1774,7 +3055,7 @@ fn install_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 ..
             } = event
             {
-                reveal_any_window(&tray.app_handle());
+                reveal_any_window(tray.app_handle());
             }
         });
 
@@ -1791,6 +3072,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(FileClipboardState(Mutex::new(None)))
         .manage(FileDragState(Mutex::new(None)))
+        .manage(DirectoryLoadState::default())
+        .manage(TransferTaskState::default())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -1799,13 +3082,18 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::default().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            let log_dir = aether_log_dir(&app.path().home_dir()?);
+            install_panic_hook(log_dir.clone());
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .clear_targets()
+                    .level(log::LevelFilter::Info)
+                    .target(Target::new(TargetKind::Folder {
+                        path: log_dir,
+                        file_name: Some("aether".into()),
+                    }))
+                    .build(),
+            )?;
 
             // 设置 macOS 原生应用菜单与状态栏菜单
             #[cfg(target_os = "macos")]
@@ -1824,14 +3112,14 @@ pub fn run() {
                             });
                         }
                         "show-all-windows" => reveal_any_window(&app_handle),
-                        "reload-window" => {
-                            if let Some((_, window)) = app_handle.webview_windows().iter().next() {
-                                let _ = window.reload();
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
-                            }
-                        }
+                        "open-settings" => emit_native_menu_command(&app_handle, "open-settings"),
+                        "refresh-view" | "refresh-view-in-view-menu" => emit_native_menu_command(&app_handle, "refresh"),
+                        "view-list" => emit_native_menu_command(&app_handle, "display-mode:list"),
+                        "view-grid" => emit_native_menu_command(&app_handle, "display-mode:grid"),
+                        "view-column" => emit_native_menu_command(&app_handle, "display-mode:column"),
+                        "toggle-hidden-files" => emit_native_menu_command(&app_handle, "toggle-hidden-files"),
+                        "toggle-inspector" => emit_native_menu_command(&app_handle, "toggle-inspector"),
+                        "show-help" => show_help_message(&app_handle),
                         "check-updates" => check_updates_message(app_handle.clone()),
                         "force-quit-app" => app_handle.exit(0),
                         _ => {}
@@ -1844,8 +3132,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             list_directory,
+            cancel_directory_loads,
             get_home_dir,
             open_system_settings,
+            get_logs_dir,
+            get_config_dir,
+            open_logs_dir,
+            open_config_dir,
+            read_last_panic_log,
             start_window_drag,
             raise_window_at,
             debug_log,
@@ -1859,6 +3153,13 @@ pub fn run() {
             eject_volume,
             copy_file,
             copy_files,
+            preview_copy_file_conflicts,
+            preview_move_file_conflicts,
+            start_copy_files_task,
+            start_move_files_task,
+            list_transfer_tasks,
+            cancel_transfer_task,
+            clear_finished_transfer_tasks,
             move_file,
             set_file_clipboard,
             get_file_clipboard,
@@ -1878,6 +3179,7 @@ pub fn run() {
             get_app_icon,
             get_dir_size,
             get_child_count,
+            get_directory_signature,
             open_devtools,
             quick_look,
             reveal_in_finder,
@@ -1910,6 +3212,72 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── diagnostics logging ──
+    #[test]
+    fn aether_log_dir_uses_macos_user_logs_folder() {
+        let dir = aether_log_dir(Path::new("/Users/jane"));
+
+        assert_eq!(dir, PathBuf::from("/Users/jane/Library/Logs/Aether Explorer"));
+    }
+
+    #[test]
+    fn panic_log_path_uses_stable_file_name() {
+        let path = panic_log_path(Path::new("/tmp/aether-logs"));
+
+        assert_eq!(path, PathBuf::from("/tmp/aether-logs/panic.log"));
+    }
+
+    #[test]
+    fn settings_store_path_uses_stable_file_name() {
+        let path = settings_store_path(Path::new("/tmp/aether-config"));
+
+        assert_eq!(path, PathBuf::from("/tmp/aether-config/settings.json"));
+    }
+
+    #[test]
+    fn format_panic_report_includes_message_and_location() {
+        let location = std::panic::Location::caller();
+        let report = format_panic_report("boom", Some(location));
+
+        assert!(report.contains("RUST PANIC"));
+        assert!(report.contains("message: boom"));
+        assert!(report.contains("location: "));
+        assert!(report.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn write_panic_report_appends_to_panic_log() {
+        let temp = std::env::temp_dir().join(format!("aether-panic-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        write_panic_report(&temp, "first\n").unwrap();
+        write_panic_report(&temp, "second\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(panic_log_path(&temp)).unwrap(), "first\nsecond\n");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn read_last_panic_log_returns_none_when_missing() {
+        let temp = std::env::temp_dir().join(format!("aether-missing-panic-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        assert_eq!(read_last_panic_log_from_dir(&temp, 1024).unwrap(), None);
+    }
+
+    #[test]
+    fn read_last_panic_log_limits_large_files() {
+        let temp = std::env::temp_dir().join(format!("aether-large-panic-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        write_panic_report(&temp, "0123456789").unwrap();
+
+        assert_eq!(read_last_panic_log_from_dir(&temp, 4).unwrap(), Some("6789".to_string()));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 
     // ── format_size ──
     #[test]
@@ -2079,6 +3447,473 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp);
     }
 
+    #[test]
+    fn copy_files_skip_conflicts_preserves_existing_and_continues() {
+        let temp = std::env::temp_dir().join(format!("aether-copy-skip-{}", std::process::id()));
+        let src_dir = temp.join("src");
+        let dst_dir = temp.join("dst");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dst_dir).unwrap();
+
+        std::fs::write(src_dir.join("same.txt"), b"new").unwrap();
+        std::fs::write(src_dir.join("fresh.txt"), b"fresh").unwrap();
+        std::fs::write(dst_dir.join("same.txt"), b"existing").unwrap();
+
+        let result = copy_files(
+            vec![
+                src_dir.join("same.txt").to_string_lossy().into(),
+                src_dir.join("fresh.txt").to_string_lossy().into(),
+            ],
+            dst_dir.to_string_lossy().into(),
+            Some(MoveConflictStrategy::Skip),
+        ).unwrap();
+
+        assert_eq!(result.skipped_conflicts, 1);
+        assert_eq!(result.copied.len(), 1);
+        assert_eq!(std::fs::read_to_string(dst_dir.join("same.txt")).unwrap(), "existing");
+        assert_eq!(std::fs::read_to_string(dst_dir.join("fresh.txt")).unwrap(), "fresh");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn move_files_skip_conflicts_preserves_existing_and_moves_non_conflicts() {
+        let temp = std::env::temp_dir().join(format!("aether-move-skip-{}", std::process::id()));
+        let src_dir = temp.join("src");
+        let dst_dir = temp.join("dst");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dst_dir).unwrap();
+
+        let conflicting_src = src_dir.join("same.txt");
+        let fresh_src = src_dir.join("fresh.txt");
+        std::fs::write(&conflicting_src, b"new").unwrap();
+        std::fs::write(&fresh_src, b"fresh").unwrap();
+        std::fs::write(dst_dir.join("same.txt"), b"existing").unwrap();
+
+        let result = move_files(
+            vec![
+                conflicting_src.to_string_lossy().into(),
+                fresh_src.to_string_lossy().into(),
+            ],
+            dst_dir.to_string_lossy().into(),
+            Some(MoveConflictStrategy::Skip),
+        ).unwrap();
+
+        assert_eq!(result.skipped_conflicts, 1);
+        assert_eq!(result.moved.len(), 1);
+        assert!(conflicting_src.exists());
+        assert!(!fresh_src.exists());
+        assert_eq!(std::fs::read_to_string(dst_dir.join("same.txt")).unwrap(), "existing");
+        assert_eq!(std::fs::read_to_string(dst_dir.join("fresh.txt")).unwrap(), "fresh");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn clear_finished_transfer_tasks_retains_recent_finished_tasks() {
+        let now = now_unix_seconds();
+        let mut snapshot = TransferTaskSnapshot {
+            id: "recent-finished".into(),
+            kind: "copy".into(),
+            status: "completed".into(),
+            total_items: 1,
+            completed_items: 1,
+            total_bytes: 1,
+            completed_bytes: 1,
+            current_name: None,
+            error: None,
+            started_at: now,
+            finished_at: Some(now),
+            copied: 1,
+            moved: 0,
+            copied_cross_device: 0,
+            failed: 0,
+            conflicts: 0,
+            skipped: 0,
+            skipped_same_dir: 0,
+            skipped_conflicts: 0,
+        };
+
+        assert!(should_retain_transfer_task_after_clear(&snapshot, now));
+
+        snapshot.finished_at = Some(now.saturating_sub(FINISHED_TRANSFER_TASK_RETENTION_SECONDS + 1));
+        assert!(!should_retain_transfer_task_after_clear(&snapshot, now));
+
+        snapshot.status = "running".into();
+        assert!(should_retain_transfer_task_after_clear(&snapshot, now));
+    }
+
+    #[test]
+    fn finish_move_transfer_task_preserves_skipped_categories() {
+        let state = TransferTaskState::default();
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        state
+            .insert(
+                TransferTaskSnapshot {
+                    id: "move-skip-categories".into(),
+                    kind: "move".into(),
+                    status: "running".into(),
+                    total_items: 3,
+                    completed_items: 0,
+                    total_bytes: 0,
+                    completed_bytes: 0,
+                    current_name: None,
+                    error: None,
+                    started_at: now_unix_seconds(),
+                    finished_at: None,
+                    copied: 0,
+                    moved: 0,
+                    copied_cross_device: 0,
+                    failed: 0,
+                    conflicts: 0,
+                    skipped: 0,
+                    skipped_same_dir: 0,
+                    skipped_conflicts: 0,
+                },
+                cancel_requested,
+            )
+            .unwrap();
+
+        finish_move_transfer_task(
+            &state,
+            "move-skip-categories",
+            Ok(MoveResult {
+                moved: vec![],
+                copied_cross_device: vec![],
+                failed: vec![],
+                conflicts: vec![],
+                skipped_same_dir: 1,
+                skipped_conflicts: 2,
+            }),
+        );
+
+        let snapshot = state.list().unwrap().into_iter().next().unwrap();
+        assert_eq!(snapshot.skipped, 3);
+        assert_eq!(snapshot.skipped_same_dir, 1);
+        assert_eq!(snapshot.skipped_conflicts, 2);
+    }
+
+    #[test]
+    fn move_conflict_preview_treats_noncanonical_same_dir_as_same_dir() {
+        let temp = std::env::temp_dir().join(format!("aether-move-canonical-same-dir-{}", std::process::id()));
+        let src_dir = temp.join("src");
+        let dst_dir = temp.join("dst");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dst_dir).unwrap();
+
+        let file = dst_dir.join("same.txt");
+        std::fs::write(&file, b"same").unwrap();
+        let noncanonical_src = src_dir.join("..").join("dst").join("same.txt");
+
+        let conflicts = preview_move_file_conflicts(
+            vec![noncanonical_src.to_string_lossy().into()],
+            dst_dir.to_string_lossy().into(),
+        )
+        .unwrap();
+        let result = move_files(
+            vec![noncanonical_src.to_string_lossy().into()],
+            dst_dir.to_string_lossy().into(),
+            Some(MoveConflictStrategy::Abort),
+        )
+        .unwrap();
+
+        assert!(conflicts.is_empty());
+        assert_eq!(result.skipped_same_dir, 1);
+        assert_eq!(result.conflicts.len(), 0);
+        assert_eq!(result.moved.len(), 0);
+        assert!(file.exists());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn copy_files_rejects_noncanonical_copy_into_self() {
+        let temp = std::env::temp_dir().join(format!("aether-copy-canonical-self-{}", std::process::id()));
+        let src_dir = temp.join("src");
+        let dst_dir = src_dir.join("child");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&dst_dir).unwrap();
+        std::fs::write(src_dir.join("file.txt"), b"content").unwrap();
+
+        let noncanonical_src = temp.join(".").join("src");
+        let result = copy_files(
+            vec![noncanonical_src.to_string_lossy().into()],
+            dst_dir.to_string_lossy().into(),
+            Some(MoveConflictStrategy::Abort),
+        )
+        .unwrap();
+
+        assert_eq!(result.copied.len(), 0);
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].error, "目标在源目录内");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn copy_file_with_progress_updates_bytes_and_items() {
+        let temp = std::env::temp_dir().join(format!("aether-copy-progress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let src = temp.join("large.bin");
+        let dst = temp.join("large-copy.bin");
+        let content = vec![42_u8; 1024 * 1024 + 128];
+        std::fs::write(&src, &content).unwrap();
+
+        let state = TransferTaskState::default();
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        state
+            .insert(
+                TransferTaskSnapshot {
+                    id: "copy-test".into(),
+                    kind: "copy".into(),
+                    status: "running".into(),
+                    total_items: 1,
+                    completed_items: 0,
+                    total_bytes: content.len() as u64,
+                    completed_bytes: 0,
+                    current_name: None,
+                    error: None,
+                    started_at: now_unix_seconds(),
+                    finished_at: None,
+                    copied: 0,
+                    moved: 0,
+                    copied_cross_device: 0,
+                    failed: 0,
+                    conflicts: 0,
+                    skipped: 0,
+                    skipped_same_dir: 0,
+                    skipped_conflicts: 0,
+                },
+                cancel_requested.clone(),
+            )
+            .unwrap();
+        let progress = TransferProgress {
+            task_id: "copy-test".into(),
+            state: state.clone(),
+            cancel_requested,
+        };
+
+        copy_file_with_progress(&src, &dst, Some(&progress)).unwrap();
+
+        let snapshot = state.list().unwrap().into_iter().next().unwrap();
+        assert_eq!(snapshot.completed_items, 1);
+        assert_eq!(snapshot.completed_bytes, content.len() as u64);
+        assert_eq!(std::fs::read(&dst).unwrap(), content);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn copy_file_with_progress_removes_staged_target_on_cancel() {
+        let temp = std::env::temp_dir().join(format!("aether-copy-file-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let src = temp.join("source.bin");
+        let dst = temp.join("target.bin");
+        std::fs::write(&src, vec![7_u8; 1024]).unwrap();
+
+        let state = TransferTaskState::default();
+        let cancel_requested = Arc::new(AtomicBool::new(true));
+        let progress = TransferProgress {
+            task_id: "copy-cancel".into(),
+            state,
+            cancel_requested,
+        };
+
+        let result = copy_file_with_progress(&src, &dst, Some(&progress));
+
+        assert!(result.is_err());
+        assert!(!dst.exists());
+        assert!(std::fs::read_dir(&temp)
+            .unwrap()
+            .all(|entry| !entry.unwrap().file_name().to_string_lossy().contains("aether-copy-temp")));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn copy_dir_recursive_with_progress_removes_staged_tree_on_cancel() {
+        let temp = std::env::temp_dir().join(format!("aether-copy-dir-cancel-{}", std::process::id()));
+        let src = temp.join("src");
+        let dst = temp.join("dst");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(src.join("nested")).unwrap();
+        std::fs::write(src.join("nested").join("file.txt"), b"content").unwrap();
+
+        let state = TransferTaskState::default();
+        let cancel_requested = Arc::new(AtomicBool::new(true));
+        let progress = TransferProgress {
+            task_id: "copy-dir-cancel".into(),
+            state,
+            cancel_requested,
+        };
+
+        let result = copy_dir_recursive_with_progress(&src, &dst, Some(&progress));
+
+        assert!(result.is_err());
+        assert!(!dst.exists());
+        assert!(std::fs::read_dir(&temp)
+            .unwrap()
+            .all(|entry| !entry.unwrap().file_name().to_string_lossy().contains("aether-copy-dir-temp")));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn copy_dir_recursive_copies_symlink_without_following_target() {
+        let temp = std::env::temp_dir().join(format!("aether-copy-symlink-dir-{}", std::process::id()));
+        let src = temp.join("src");
+        let outside = temp.join("outside");
+        let dst = temp.join("dst");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+        unix_fs::symlink(&outside, src.join("outside-link")).unwrap();
+
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        let copied_link = dst.join("outside-link");
+        assert!(std::fs::symlink_metadata(&copied_link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&copied_link).unwrap(), outside);
+        assert!(!dst.join("outside").exists());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn copy_dir_recursive_copies_self_symlink_without_recursing() {
+        let temp = std::env::temp_dir().join(format!("aether-copy-self-symlink-{}", std::process::id()));
+        let src = temp.join("src");
+        let dst = temp.join("dst");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("file.txt"), b"content").unwrap();
+        unix_fs::symlink(&src, src.join("self-link")).unwrap();
+
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        let copied_link = dst.join("self-link");
+        assert!(std::fs::symlink_metadata(&copied_link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&copied_link).unwrap(), src);
+        assert_eq!(std::fs::read_to_string(dst.join("file.txt")).unwrap(), "content");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn copy_files_preserves_dangling_symlink() {
+        let temp = std::env::temp_dir().join(format!("aether-copy-dangling-symlink-{}", std::process::id()));
+        let src_dir = temp.join("src");
+        let dst_dir = temp.join("dst");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dst_dir).unwrap();
+        let missing_target = temp.join("missing-target");
+        let link = src_dir.join("dangling-link");
+        unix_fs::symlink(&missing_target, &link).unwrap();
+
+        let result = copy_files(
+            vec![link.to_string_lossy().into()],
+            dst_dir.to_string_lossy().into(),
+            Some(MoveConflictStrategy::Abort),
+        )
+        .unwrap();
+
+        let copied_link = dst_dir.join("dangling-link");
+        assert_eq!(result.copied.len(), 1);
+        assert!(std::fs::symlink_metadata(&copied_link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&copied_link).unwrap(), missing_target);
+        assert!(!copied_link.exists());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn copy_file_command_preserves_symlink() {
+        let temp = std::env::temp_dir().join(format!("aether-copy-command-symlink-{}", std::process::id()));
+        let src_dir = temp.join("src");
+        let dst_dir = temp.join("dst");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dst_dir).unwrap();
+        let real_file = src_dir.join("real.txt");
+        let link = src_dir.join("real-link.txt");
+        std::fs::write(&real_file, b"real").unwrap();
+        unix_fs::symlink(&real_file, &link).unwrap();
+
+        let copied = copy_file(link.to_string_lossy().into(), dst_dir.to_string_lossy().into()).unwrap();
+        let copied_link = PathBuf::from(copied);
+
+        assert!(std::fs::symlink_metadata(&copied_link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&copied_link).unwrap(), real_file);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn commit_staged_path_removes_staged_target_when_cancelled() {
+        let temp = std::env::temp_dir().join(format!("aether-commit-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let staged = temp.join(".target.aether-copy-temp-test");
+        let dst = temp.join("target.txt");
+        std::fs::write(&staged, b"partial").unwrap();
+
+        let state = TransferTaskState::default();
+        let cancel_requested = Arc::new(AtomicBool::new(true));
+        let progress = TransferProgress {
+            task_id: "commit-cancel".into(),
+            state,
+            cancel_requested,
+        };
+
+        let result = commit_staged_path(&staged, &dst, Some(&progress));
+
+        assert!(result.is_err());
+        assert!(!staged.exists());
+        assert!(!dst.exists());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn replace_existing_for_copy_restores_target_when_cancelled() {
+        let temp = std::env::temp_dir().join(format!("aether-replace-copy-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let src = temp.join("source.txt");
+        let dst = temp.join("target.txt");
+        std::fs::write(&src, b"new").unwrap();
+        std::fs::write(&dst, b"old").unwrap();
+
+        let state = TransferTaskState::default();
+        let cancel_requested = Arc::new(AtomicBool::new(true));
+        let progress = TransferProgress {
+            task_id: "replace-copy-cancel".into(),
+            state,
+            cancel_requested,
+        };
+
+        let result = replace_existing_for_copy_with_progress(&src, &dst, Some(&progress));
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "old");
+        assert!(std::fs::read_dir(&temp)
+            .unwrap()
+            .all(|entry| !entry.unwrap().file_name().to_string_lossy().contains("aether-replace-backup")));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
     // ── shell_quote ──
     #[test]
     fn shell_quote_wraps_simple() {
@@ -2136,6 +3971,18 @@ mod tests {
     }
 
     #[test]
+    fn validate_shell_fragment_allows_quoted_file_placeholders() {
+        assert_eq!(
+            validate_shell_fragment("code '/Users/jane/My Files/it'\\''s $(secret);.txt'").unwrap(),
+            "code '/Users/jane/My Files/it'\\''s $(secret);.txt'",
+        );
+        assert_eq!(
+            validate_shell_fragment("open '/tmp/name|with>meta<chars'").unwrap(),
+            "open '/tmp/name|with>meta<chars'",
+        );
+    }
+
+    #[test]
     fn validate_shell_fragment_rejects_injection() {
         assert!(validate_shell_fragment("rm -rf /; echo ok").is_err());
         assert!(validate_shell_fragment("cat x | grep y").is_err());
@@ -2146,6 +3993,11 @@ mod tests {
         assert!(validate_shell_fragment("x > /etc/passwd").is_err());
         assert!(validate_shell_fragment("x < secrets").is_err());
         assert!(validate_shell_fragment("a\nb").is_err());
+    }
+
+    #[test]
+    fn validate_shell_fragment_rejects_unclosed_quote() {
+        assert!(validate_shell_fragment("code '/tmp/unfinished").is_err());
     }
 
     #[test]
@@ -2171,6 +4023,21 @@ mod tests {
         assert!(!is_allowed_terminal(""));
         assert!(!is_allowed_terminal("SomeRandomApp"));
         assert!(!is_allowed_terminal("Terminal.app")); // 必须是不带后缀
+    }
+
+    #[test]
+    fn open_terminal_at_rejects_disallowed_terminal_with_structured_error() {
+        let err = open_terminal_at(
+            "/tmp".to_string(),
+            Some("Bad\"Terminal".to_string()),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind, AppErrorKind::InvalidPath);
+        assert!(err.message.contains("不允许的终端应用"));
     }
 
     // ── apple_quote ──
@@ -2202,5 +4069,289 @@ mod tests {
         assert!(!is_sensitive_for_preview(Path::new("/Users/x/notes.md")));
         assert!(!is_sensitive_for_preview(Path::new("/Users/x/.gitignore")));
         assert!(!is_sensitive_for_preview(Path::new("/Users/x/script.sh")));
+    }
+
+    #[test]
+    fn read_text_preview_rejects_sensitive_files_with_permission_error() {
+        let err = read_text_preview("/tmp/.env".to_string()).unwrap_err();
+
+        assert_eq!(err.kind, AppErrorKind::PermissionDenied);
+        assert_eq!(err.path.as_deref(), Some("/tmp/.env"));
+    }
+
+    #[test]
+    fn read_text_preview_rejects_invalid_utf8_with_invalid_path_error() {
+        let temp = std::env::temp_dir().join(format!("aether-preview-invalid-{}", std::process::id()));
+        let _ = std::fs::remove_file(&temp);
+        std::fs::write(&temp, [0xff, 0xfe, 0xfd]).unwrap();
+
+        let err = read_text_preview(temp.to_string_lossy().to_string()).unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::InvalidPath);
+        assert_eq!(err.path.as_deref(), Some(temp.to_string_lossy().as_ref()));
+
+        let _ = std::fs::remove_file(&temp);
+    }
+
+    #[test]
+    fn list_directory_entries_sorts_dirs_first_and_hides_dotfiles() {
+        let temp = std::env::temp_dir().join(format!("aether-list-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(temp.join("z-folder")).unwrap();
+        std::fs::create_dir_all(temp.join("a-folder")).unwrap();
+        std::fs::write(temp.join("b-file.txt"), b"b").unwrap();
+        std::fs::write(temp.join("a-file.txt"), b"a").unwrap();
+        std::fs::write(temp.join(".hidden"), b"x").unwrap();
+
+        let entries = list_directory_entries(temp.to_string_lossy().as_ref(), false, None).unwrap();
+        let names: Vec<String> = entries.into_iter().map(|entry| entry.name).collect();
+        assert_eq!(names, vec!["a-folder", "z-folder", "a-file.txt", "b-file.txt"]);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn list_directory_entries_can_include_hidden_files() {
+        let temp = std::env::temp_dir().join(format!("aether-list-hidden-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join(".hidden"), b"x").unwrap();
+
+        let entries = list_directory_entries(temp.to_string_lossy().as_ref(), true, None).unwrap();
+        assert!(entries.iter().any(|entry| entry.name == ".hidden"));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn list_directory_entries_stops_when_load_token_is_cancelled() {
+        let temp = std::env::temp_dir().join(format!("aether-list-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        for index in 0..8 {
+            std::fs::write(temp.join(format!("file-{}.txt", index)), b"x").unwrap();
+        }
+
+        let state = DirectoryLoadState::default();
+        let token = state.begin(Some("main".to_string()), Some(1)).unwrap().unwrap();
+        state.mark_latest("main".to_string(), 2).unwrap();
+
+        let err = list_directory_entries(temp.to_string_lossy().as_ref(), true, Some(token)).unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::Cancelled);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn directory_signature_changes_when_visible_entries_change() {
+        let temp = std::env::temp_dir().join(format!("aether-dir-signature-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join("a.txt"), b"a").unwrap();
+
+        let before = directory_signature_for_path(temp.to_string_lossy().as_ref(), false).unwrap();
+        std::fs::write(temp.join("b.txt"), b"b").unwrap();
+        let after = directory_signature_for_path(temp.to_string_lossy().as_ref(), false).unwrap();
+
+        assert_ne!(before.fingerprint, after.fingerprint);
+        assert_eq!(before.entry_count, 1);
+        assert_eq!(after.entry_count, 2);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn directory_signature_respects_hidden_file_filter() {
+        let temp = std::env::temp_dir().join(format!("aether-dir-signature-hidden-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let hidden_before = directory_signature_for_path(temp.to_string_lossy().as_ref(), false).unwrap();
+        std::fs::write(temp.join(".hidden"), b"x").unwrap();
+        let hidden_after = directory_signature_for_path(temp.to_string_lossy().as_ref(), false).unwrap();
+        let visible_hidden = directory_signature_for_path(temp.to_string_lossy().as_ref(), true).unwrap();
+
+        assert_eq!(hidden_before.fingerprint, hidden_after.fingerprint);
+        assert_eq!(hidden_after.entry_count, 0);
+        assert_eq!(visible_hidden.entry_count, 1);
+        assert_ne!(hidden_after.fingerprint, visible_hidden.fingerprint);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    // ── AppError ──
+    #[test]
+    fn app_error_from_io_classifies_common_kinds() {
+        let permission = std::io::Error::new(ErrorKind::PermissionDenied, "no");
+        let not_found = std::io::Error::new(ErrorKind::NotFound, "missing");
+        let busy = std::io::Error::other("resource busy");
+
+        let permission_error = AppError::from_io(&permission, Some("/secret"), "fallback");
+        let not_found_error = AppError::from_io(&not_found, Some("/missing"), "fallback");
+        let busy_error = AppError::from_io(&busy, Some("/tmp/file"), "fallback");
+
+        assert_eq!(permission_error.kind, AppErrorKind::PermissionDenied);
+        assert_eq!(permission_error.path.as_deref(), Some("/secret"));
+        assert_eq!(not_found_error.kind, AppErrorKind::NotFound);
+        assert_eq!(busy_error.kind, AppErrorKind::Busy);
+    }
+
+    #[test]
+    fn app_error_unavailable_is_structured_internal_error() {
+        let err = AppError::unavailable("文件剪贴板不可用");
+
+        assert_eq!(err.kind, AppErrorKind::Internal);
+        assert_eq!(err.message, "文件剪贴板不可用");
+        assert_eq!(err.path, None);
+    }
+
+    #[test]
+    fn app_error_internal_at_preserves_path_context() {
+        let err = AppError::internal_at("打开失败", Some("/tmp/demo.txt".to_string()));
+
+        assert_eq!(err.kind, AppErrorKind::Internal);
+        assert_eq!(err.message, "打开失败");
+        assert_eq!(err.path.as_deref(), Some("/tmp/demo.txt"));
+    }
+
+    #[test]
+    fn trash_delete_error_external_volume_is_explicitly_unsupported() {
+        let err = trash_delete_error("/Volumes/USB/a.txt", "unsupported");
+
+        assert_eq!(err.kind, AppErrorKind::TrashUnsupported);
+        assert_eq!(err.path.as_deref(), Some("/Volumes/USB/a.txt"));
+        assert!(err.message.contains("操作已取消"));
+        assert!(err.message.contains("不会改用永久删除"));
+    }
+
+    #[test]
+    fn trash_delete_error_regular_path_stays_internal_failure() {
+        let err = trash_delete_error("/Users/jane/a.txt", "boom");
+
+        assert_eq!(err.kind, AppErrorKind::Internal);
+        assert_eq!(err.path.as_deref(), Some("/Users/jane/a.txt"));
+        assert!(err.message.contains("移至废纸篓失败"));
+    }
+
+    #[test]
+    fn get_dir_size_rejects_non_directory_with_invalid_path_error() {
+        let temp = std::env::temp_dir().join(format!("aether-dir-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        let file = temp.join("file.txt");
+        std::fs::write(&file, b"x").unwrap();
+
+        let err = get_dir_size(file.to_string_lossy().to_string()).unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::InvalidPath);
+        assert_eq!(err.path.as_deref(), Some(file.to_string_lossy().as_ref()));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    // ── file operation safety ──
+    #[test]
+    fn validate_child_name_accepts_single_safe_name() {
+        assert_eq!(validate_child_name(" report.txt ").unwrap(), "report.txt");
+        assert_eq!(validate_child_name("新建文件夹").unwrap(), "新建文件夹");
+    }
+
+    #[test]
+    fn validate_child_name_rejects_paths_and_illegal_chars() {
+        assert!(validate_child_name("").is_err());
+        assert!(validate_child_name(".").is_err());
+        assert!(validate_child_name("..").is_err());
+        assert!(validate_child_name("../secret").is_err());
+        assert!(validate_child_name("/tmp/secret").is_err());
+        assert!(validate_child_name("a/b").is_err());
+        assert!(validate_child_name("a\\b").is_err());
+        assert!(validate_child_name("bad:name").is_err());
+        assert!(validate_child_name("bad\nname").is_err());
+    }
+
+    #[test]
+    fn validate_child_name_returns_invalid_path_error() {
+        let err = validate_child_name("../secret").unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::InvalidPath);
+        assert_eq!(err.path.as_deref(), Some("../secret"));
+    }
+
+    #[test]
+    fn eject_volume_rejects_non_volume_paths_with_invalid_path_error() {
+        let err = eject_volume("/".to_string()).unwrap_err();
+
+        assert_eq!(err.kind, AppErrorKind::InvalidPath);
+        assert_eq!(err.message, "只能弹出 /Volumes 下的外置磁盘");
+        assert_eq!(err.path.as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn replace_existing_for_copy_restores_target_on_failure() {
+        let temp = std::env::temp_dir().join(format!("aether-replace-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let src = temp.join("missing.txt");
+        let dst = temp.join("target.txt");
+        std::fs::write(&dst, b"original").unwrap();
+
+        assert!(replace_existing_for_copy(&src, &dst).is_err());
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "original");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn replace_existing_for_move_restores_target_on_failure() {
+        let temp = std::env::temp_dir().join(format!("aether-replace-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let src = temp.join("missing.txt");
+        let dst = temp.join("target.txt");
+        std::fs::write(&dst, b"original").unwrap();
+
+        assert!(replace_existing_for_move(&src, &dst).is_err());
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "original");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn cross_device_rename_error_detects_exdev() {
+        let err = std::io::Error::from_raw_os_error(18);
+        assert!(is_cross_device_rename_error(&err));
+    }
+
+    #[test]
+    fn decompress_file_rejects_existing_output_file() {
+        let temp = std::env::temp_dir().join(format!("aether-decompress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let zip_path = temp.join("archive.zip");
+        let output_dir = temp.join("out");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        std::fs::write(output_dir.join("same.txt"), b"original").unwrap();
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            writer
+                .start_file("same.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, b"new").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let result = decompress_file(
+            zip_path.to_string_lossy().to_string(),
+            output_dir.to_string_lossy().to_string(),
+        );
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::Conflict);
+        assert_eq!(err.path.as_deref(), Some(output_dir.join("same.txt").to_string_lossy().as_ref()));
+        assert_eq!(std::fs::read_to_string(output_dir.join("same.txt")).unwrap(), "original");
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

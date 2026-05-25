@@ -2,8 +2,8 @@
 
 [**中文**](./README.md) | [**English**](./README_EN.md)
 
-macOS 原生文件管理器，基于 Tauri v2 + React 19 + Rust 构建。
-兼具 Finder 的操作能力和现代设计语言，采用 Google **Material Design 3** 设计风格。
+macOS 本地优先文件工作台，基于 Tauri v2 + React 19 + Rust 构建。
+定位是 Finder 增强工具，而不是系统默认文件管理器替代品。
 
 <p align="center">
   <strong>随缘关注，有缘更新</strong>
@@ -38,7 +38,7 @@ macOS 原生文件管理器，基于 Tauri v2 + React 19 + Rust 构建。
 ### 文件浏览
 - 真实文件系统操作 — 浏览、打开、复制、移动、重命名、删除（移至废纸篓）
 - 三种视图模式 — 列表、网格、Miller Columns 分栏，布局参数可调
-- 文件预览 — 图片缩略图、文本预览、Quick Look 空格预览
+- 文件预览 — 图片缩略图、PDF 首页、视频缩略图与时长、文本预览、Quick Look 空格预览
 - 搜索与排序 — 实时搜索过滤、多字段排序、按类型/日期分组
 
 ### macOS 深度集成
@@ -46,24 +46,25 @@ macOS 原生文件管理器，基于 Tauri v2 + React 19 + Rust 构建。
 - Quick Look — 空格键调用系统原生预览
 - 废纸篓 — 删除操作只移入废纸篓，不做物理删除
 - 终端集成 — 右键在终端打开，支持 Terminal/iTerm 等
-- 完全磁盘访问 — 权限检测和引导授权
+- 完全磁盘访问 — 权限引导和结构化错误提示
 
 ### 窗口与标签页
 - 多窗口 — Cmd+N 新建窗口，跨窗口拖拽标签页
-- 标签页管理 — 拖拽分离、跨窗口合并、关闭保护
+- 标签页管理 — 拖拽分离、跨窗口合并、关闭保护、Cmd+W 关闭标签
 - 壁纸背景 — 自定义壁纸 URL 或本地图片，可调模糊度
 
 ### 设置与个性化
 - 外观 — 主题模式、强调色、字体、透明度、模糊强度
 - 右键菜单 — 可配置的扩展菜单，支持自定义终端命令
 - 语言 — 中/英双语，默认中文
+- AI 操作历史 — 真分页、按日期/文件名搜索、可配置保留期（默认 7 天，最长 90 天）
 
 ## 已知不足
 
-- 文件拖入文件夹移动尚未实现
-- 基础文件操作「复制 / 粘贴」尚未实现
-- 上下方向键选择文件尚未支持
-- 应用图标为占位图，需专业设计
+- 传输管理器已接入真实后台任务、进度、取消和冲突摘要；仍需继续打磨系统通知与极端目录性能
+- Aether 直接拖出到 Finder 目前只给明确 fallback 提示，原生拖出需要后续 native pasteboard 方案
+- 超大目录还需要分批返回或分批渲染，极端目录下仍需性能治理
+- 外接磁盘自动刷新、快速访问、AirDrop 入口仍待增强
 - 分栏模式下子分栏无法弹出预览框（[BUG.md](./BUG.md)）
 
 完整待办详见 [TODO.md](./TODO.md)。
@@ -136,36 +137,38 @@ aether-explorer/
 
 ## 功能清单
 
-详见 [FEATURES.md](./FEATURES.md)，共 84 项功能分 12 个层级。
+详见 [FEATURES.md](./FEATURES.md) 的完整状态表。
 
 ## 注意事项
 
 - 删除操作只会移至 macOS 废纸篓，不做物理删除
 - 颜色标签当前保存在本地设置中，不写入 macOS 扩展属性
+- 隐私和外发请求说明见 [docs/PRIVACY.md](./docs/PRIVACY.md)
+- 安全披露见 [SECURITY.md](./SECURITY.md)，贡献流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 ## 常见问题
 
-### 「已损坏，无法打开」
+### 未签名构建如何打开
 
-首次打开 DMG 安装的 Aether Explorer，macOS 可能会提示「已损坏，无法打开」。
+当前项目按公益分发维护，暂不把 Developer ID 签名 / notarization 作为路线阻塞项。首次打开 DMG 安装的 Aether Explorer，macOS 可能会提示「已损坏，无法打开」或拦截未签名应用。
 
-**原因：** 这是开发构建版本，没有 Apple Developer 签名认证。macOS Gatekeeper 会拦截未签名应用。
+**原因：** 当前构建没有 Apple Developer 签名认证，Gatekeeper 会按未签名应用处理。
 
-**解决方法：**
-
-```bash
-# 将应用拖入 Applications 文件夹后，终端执行：
-sudo xattr -rd com.apple.quarantine /Applications/Aether\ Explorer.app
-```
-
-或者：
+**建议方式：**
 
 1. 打开 **系统设置 → 隐私与安全性**
 2. 向下滚动到「安全性」部分
 3. 点击「仍要打开」按钮
 4. 在弹出的确认对话框中选择「打开」
 
-> 注意：如果你看不到「仍要打开」选项，请先运行上面的 xattr 命令。
+**高级用户备用方式：**
+
+```bash
+# 确认来源可信后再执行
+xattr -rd com.apple.quarantine /Applications/Aether\ Explorer.app
+```
+
+> 未签名应用不应被包装成正式可信分发。请只从项目发布页获取安装包，并在真实重要文件上操作前先用测试目录验证。
 
 ## License
 

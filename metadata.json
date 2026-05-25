@@ -1,6 +1,6 @@
 {
   "name": "Aether Explorer",
-  "description": "A premium macOS-style file manager with glassmorphic UI, featuring system-wide theme customization and fluid file browsing.",
+  "description": "A local-first macOS file workbench that enhances Finder workflows without cloud sync or commercial features.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

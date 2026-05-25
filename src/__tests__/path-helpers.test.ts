@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   getPathLeaf,
+  getParentPath,
   isVirtualPath,
   getInitialTabs,
   commonParent,
@@ -41,6 +42,16 @@ describe('isVirtualPath', () => {
   });
 });
 
+describe('getParentPath', () => {
+  it('returns parent directory for filesystem paths', () => {
+    expect(getParentPath('/Users/jane/Pictures')).toBe('/Users/jane');
+    expect(getParentPath('/Users/jane/Pictures/')).toBe('/Users/jane/Pictures');
+    expect(getParentPath('/Users')).toBe('/');
+    expect(getParentPath('/')).toBe('/');
+    expect(getParentPath('')).toBe('/');
+  });
+});
+
 describe('getInitialTabs', () => {
   it('uses URL ?path and ?label when provided', () => {
     const tabs = getInitialTabs('/home', new URLSearchParams('?path=/foo/bar&label=Custom'));
@@ -65,6 +76,20 @@ describe('getInitialTabs', () => {
   it('hides label for virtual home paths', () => {
     const tabs = getInitialTabs('aether://favorites', new URLSearchParams(''));
     expect(tabs[0].label).toBeUndefined();
+    expect(tabs[0].labelTranslationKey).toBe('tabs.favorites');
+
+    const recentTabs = getInitialTabs('aether://recent', new URLSearchParams(''));
+    expect(recentTabs[0].label).toBeUndefined();
+    expect(recentTabs[0].labelTranslationKey).toBe('tabs.recent');
+  });
+
+  it('does not expose unknown virtual paths as filesystem-style labels', () => {
+    const tabs = getInitialTabs('aether://tags/red', new URLSearchParams(''));
+
+    expect(tabs[0].label).toBeUndefined();
+    expect(tabs[0].labelTranslationKey).toBe('tabs.home');
+    expect(tabs[0].initialPath).toBe('aether://tags/red');
+    expect(tabs[0].currentPath).toBe('aether://tags/red');
   });
 });
 
@@ -82,6 +107,10 @@ describe('commonParent', () => {
     expect(commonParent([
       '/Users/jane/Pictures/a.jpg',
       '/Users/jane/Pictures/b.jpg',
+      '/Users/jane/Pictures/sub/c.jpg',
+    ])).toBe('/Users/jane/Pictures');
+    expect(commonParent([
+      '/Users/jane/Pictures/',
       '/Users/jane/Pictures/sub/c.jpg',
     ])).toBe('/Users/jane/Pictures');
   });

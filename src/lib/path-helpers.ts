@@ -34,6 +34,15 @@ export function isVirtualPath(path: string | undefined | null): boolean {
 }
 
 /**
+ * 返回真实文件系统路径的父目录。
+ *
+ * 保持 Explorer 键盘 Cmd+↑ 的既有语义：根目录和空路径都回到 `/`。
+ */
+export function getParentPath(path: string): string {
+  return path.split('/').slice(0, -1).join('/') || '/';
+}
+
+/**
  * 根据 URL search params 或默认首页路径返回初始 tabs 列表。
  *
  * - 含 `?path=...&label=...` → 用该路径打开单 tab

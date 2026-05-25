@@ -1,7 +1,7 @@
 # 自动发布带签名更新的 GitHub Release。
 #
 # 触发：
-#   - 推送 v* 形式的 tag（如 git tag v0.2.0 && git push --tags）
+#   - 推送 v* 形式的 tag（如 git tag v0.3.11 && git push --tags）
 #   - 手动 workflow_dispatch
 #
 # 所需 secrets（Settings → Secrets and variables → Actions）：
@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag, for example v0.2.0'
+        description: 'Release tag, for example v0.3.11'
         required: true
         type: string
 
@@ -40,13 +40,20 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm }
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
       - run: npm ci
       - run: npm run lint
+      - run: npm run lint:readme
+      - run: npm run lint:i18n
+      - run: npm run lint:ci-gates
       - run: npm test
       - run: npm run test:rust
+      - run: npm run lint:rust
+      - run: npm run build
 
   release:
     needs: test-gate
@@ -97,16 +104,29 @@ jobs:
 
           VERSION="${RELEASE_TAG#v}"
           TAURI_VERSION="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          PACKAGE_VERSION="$(jq -r '.version' package.json)"
+          LOCK_VERSION="$(jq -r '.version' package-lock.json)"
           CARGO_VERSION="$(awk -F ' *= *' '/^version = / { gsub(/\"/, "", $2); print $2; exit }' src-tauri/Cargo.toml)"
 
           [ "$TAURI_VERSION" = "$VERSION" ] || {
             echo "tauri.conf.json version $TAURI_VERSION does not match $RELEASE_TAG";
             exit 1;
           }
+          [ "$PACKAGE_VERSION" = "$VERSION" ] || {
+            echo "package.json version $PACKAGE_VERSION does not match $RELEASE_TAG";
+            exit 1;
+          }
+          [ "$LOCK_VERSION" = "$VERSION" ] || {
+            echo "package-lock.json version $LOCK_VERSION does not match $RELEASE_TAG";
+            exit 1;
+          }
           [ "$CARGO_VERSION" = "$VERSION" ] || {
             echo "Cargo.toml version $CARGO_VERSION does not match $RELEASE_TAG";
             exit 1;
           }
+
+      - name: Clean release artifacts
+        run: npm run clean:release
 
       - name: Build signed universal bundle
         env:
@@ -129,19 +149,20 @@ jobs:
             BUNDLE_DIR="src-tauri/target/release/bundle"
           fi
 
-          DMG="$(find "$BUNDLE_DIR/dmg" -type f -name '*.dmg' | head -n 1)"
-          APP_TAR="$(find "$BUNDLE_DIR/macos" -type f -name '*.app.tar.gz' | head -n 1)"
-          APP_SIG="$(find "$BUNDLE_DIR/macos" -type f -name '*.app.tar.gz.sig' | head -n 1)"
+          DMG="$(find "$BUNDLE_DIR/dmg" -type f -name '*.dmg' 2>/dev/null | head -n 1 || true)"
+          APP_TAR="$(find "$BUNDLE_DIR/macos" -type f -name '*.app.tar.gz' 2>/dev/null | head -n 1 || true)"
+          APP_SIG="$(find "$BUNDLE_DIR/macos" -type f -name '*.app.tar.gz.sig' 2>/dev/null | head -n 1 || true)"
 
-          [ -n "$DMG" ] || { echo "missing dmg artifact"; exit 1; }
-          [ -n "$APP_TAR" ] || { echo "missing app.tar.gz artifact"; exit 1; }
-          [ -n "$APP_SIG" ] || { echo "missing app.tar.gz.sig artifact"; exit 1; }
+          [ -f "$DMG" ] || { echo "missing dmg artifact"; exit 1; }
+          [ -f "$APP_TAR" ] || { echo "missing app.tar.gz artifact"; exit 1; }
+          [ -f "$APP_SIG" ] || { echo "missing app.tar.gz.sig artifact"; exit 1; }
 
           STAGING_DIR="$(mktemp -d -t release-assets)"
           DMG_NAME="Aether.Explorer_${VERSION}_universal.dmg"
           APP_TAR_NAME="Aether.Explorer_universal.app.tar.gz"
           APP_SIG_NAME="Aether.Explorer_universal.app.tar.gz.sig"
           LATEST_JSON="$STAGING_DIR/latest.json"
+          CHECKSUMS="$STAGING_DIR/SHA256SUMS"
 
           cp "$DMG" "$STAGING_DIR/$DMG_NAME"
           cp "$APP_TAR" "$STAGING_DIR/$APP_TAR_NAME"
@@ -178,6 +199,12 @@ jobs:
               }
             }' > "$LATEST_JSON"
 
+          (
+            cd "$STAGING_DIR"
+            shasum -a 256 "$DMG_NAME" "$APP_TAR_NAME" "$APP_SIG_NAME" latest.json > SHA256SUMS
+            shasum -a 256 -c SHA256SUMS
+          )
+
           cleanup_asset() {
             local name="$1"
             gh release delete-asset "$TAG" "$name" -R "$REPO" -y >/dev/null 2>&1 || true
@@ -186,6 +213,7 @@ jobs:
           cleanup_asset "Aether.Explorer.app.tar.gz"
           cleanup_asset "Aether.Explorer.app.tar.gz.sig"
           cleanup_asset "latest-json.y2Bv5nM25Z.json"
+          cleanup_asset "SHA256SUMS"
 
           if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" -R "$REPO" \
@@ -193,6 +221,7 @@ jobs:
               "$STAGING_DIR/$APP_TAR_NAME" \
               "$STAGING_DIR/$APP_SIG_NAME" \
               "$LATEST_JSON" \
+              "$CHECKSUMS" \
               --clobber
           else
             gh release create "$TAG" -R "$REPO" \
@@ -201,6 +230,22 @@ jobs:
               "$STAGING_DIR/$DMG_NAME" \
               "$STAGING_DIR/$APP_TAR_NAME" \
               "$STAGING_DIR/$APP_SIG_NAME" \
+              "$LATEST_JSON" \
+              "$CHECKSUMS"
+          fi
+
+          echo "Publishing stable updater manifest..."
+          if gh release view stable -R "$REPO" >/dev/null 2>&1; then
+            gh release upload stable -R "$REPO" "$LATEST_JSON" --clobber
+            gh release view stable -R "$REPO" --json assets -q '.assets[].name' \
+              | while IFS= read -r asset; do
+                  [ "$asset" = "latest.json" ] && continue
+                  gh release delete-asset stable "$asset" -R "$REPO" -y
+                done
+          else
+            gh release create stable -R "$REPO" \
+              --title "Stable updater manifest" \
+              --notes "Mutable updater channel manifest. Versioned assets remain on $TAG." \
               "$LATEST_JSON"
           fi
 
@@ -216,10 +261,32 @@ jobs:
                   and ($names | index($app))
                   and ($names | index($sig))
                   and ($names | index("latest.json"))
+                  and ($names | index("SHA256SUMS"))
                 ' >/dev/null; then
               break
             fi
             [ "$attempt" -lt 5 ] || { echo "release assets validation failed"; exit 1; }
+            sleep 2
+          done
+
+          echo "Validating uploaded checksum manifest..."
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL --retry 5 --retry-delay 2 \
+              "https://github.com/$REPO/releases/download/$TAG/SHA256SUMS" \
+              | cmp -s "$CHECKSUMS" -; then
+              break
+            fi
+            [ "$attempt" -lt 5 ] || { echo "checksum manifest validation failed"; exit 1; }
+            sleep 2
+          done
+
+          echo "Validating stable release asset set..."
+          for attempt in 1 2 3 4 5; do
+            if gh release view stable -R "$REPO" --json assets \
+              | jq -e '[.assets[].name] == ["latest.json"]' >/dev/null; then
+              break
+            fi
+            [ "$attempt" -lt 5 ] || { echo "stable release contains unexpected assets"; exit 1; }
             sleep 2
           done
 
@@ -239,6 +306,25 @@ jobs:
               break
             fi
             [ "$attempt" -lt 5 ] || { echo "updater manifest validation failed"; exit 1; }
+            sleep 2
+          done
+
+          echo "Validating stable updater manifest..."
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL --retry 5 --retry-delay 2 \
+              "https://github.com/$REPO/releases/download/stable/latest.json" \
+              | jq -e \
+                --arg version "$VERSION" \
+                --arg url "$APP_TAR_URL" '
+                  .version == $version
+                  and (.platforms["darwin-aarch64"].signature | length > 0)
+                  and (.platforms["darwin-x86_64"].signature | length > 0)
+                  and .platforms["darwin-aarch64"].url == $url
+                  and .platforms["darwin-x86_64"].url == $url
+                ' >/dev/null; then
+              break
+            fi
+            [ "$attempt" -lt 5 ] || { echo "stable updater manifest validation failed"; exit 1; }
             sleep 2
           done
 

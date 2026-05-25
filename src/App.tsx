@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import { useTranslation } from 'react-i18next';
-import { Terminal } from 'lucide-react';
+import { AlertTriangle, Keyboard, Terminal, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { emitTo, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -9,14 +9,25 @@ import { load } from '@tauri-apps/plugin-store';
 import Sidebar from './components/Sidebar';
 import TopBar, { TabTransferPayload } from './components/TopBar';
 import ExplorerView from './components/ExplorerView';
+import type { SettingsCategory } from './components/SettingsView';
 import { ThemeSettings, ViewMode, TabData } from './types';
 import {
   DEFAULT_THEME,
   FAVORITES_VIRTUAL_PATH,
   normalizeThemeSettings,
   loadThemeFromLocalStorage,
+  redactThemeSecrets,
 } from './lib/settings';
 import { getPathLeaf, getInitialTabs as buildInitialTabs } from './lib/path-helpers';
+import { normalizeAppError } from './lib/app-error';
+import { resolveAppShortcut } from './lib/keyboard-shortcuts';
+import { NATIVE_MENU_COMMAND_EVENT, type NativeMenuCommand } from './lib/native-menu';
+import { isValidWallpaperUrl } from './lib/url-guard';
+import {
+  STARTUP_PANIC_LOG_SEEN_KEY,
+  fingerprintPanicLog,
+  shouldShowStartupPanicPrompt,
+} from './lib/startup-diagnostics';
 
 const MAX_RECENT_ITEMS = 100;
 
@@ -71,6 +82,11 @@ function normalizeTransferredTab(tab: TabData): TabData {
   };
 }
 
+type StartupPanicPrompt = {
+  fingerprint: string;
+  preview: string;
+};
+
 export default function App() {
   const { t, i18n } = useTranslation();
   const [theme, setTheme] = useState<ThemeSettings>(loadThemeFromLocalStorage);
@@ -80,6 +96,9 @@ export default function App() {
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
   const [visibleItemCount, setVisibleItemCount] = useState(0);
   const [isTransferring, setIsTransferring] = useState(false);
+  const [settingsInitialCategory, setSettingsInitialCategory] = useState<SettingsCategory>('appearance');
+  const [startupPanicPrompt, setStartupPanicPrompt] = useState<StartupPanicPrompt | null>(null);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [storeReady, setStoreReady] = useState(false);
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(
     window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -90,6 +109,23 @@ export default function App() {
   const [recentItems, setRecentItems] = useState<string[]>(loadRecentItemsFromLocalStorage);
   const activeTab = useMemo(() => tabs.find(tab => tab.id === view), [tabs, view]);
   const activeTabPath = activeTab?.currentPath || activeTab?.initialPath;
+
+  const createLocalTab = useCallback((path?: string, label?: string) => {
+    const targetPath = path || theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
+    const labelTranslationKey =
+      targetPath === FAVORITES_VIRTUAL_PATH ? 'tabs.favorites' :
+      targetPath === 'aether://recent' ? 'tabs.recent' :
+      'tabs.volume';
+    const nextTab: TabData = {
+      id: `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      labelTranslationKey,
+      label: label || (targetPath.startsWith('aether://') ? undefined : getPathLeaf(targetPath)),
+      initialPath: targetPath,
+      currentPath: targetPath,
+    };
+    setTabs(prev => [...prev, nextTab]);
+    setView(nextTab.id as ViewMode);
+  }, [theme.defaultHomePath]);
 
   useEffect(() => {
     setTabs(prev => prev.map(tab => {
@@ -134,44 +170,41 @@ export default function App() {
     return () => document.removeEventListener('contextmenu', focusWindow, true);
   }, []);
 
-  const createNewWindow = useCallback((tab?: TabData) => {
-    // 关键：不传 tab 时（Cmd+N / 菜单 / 加号），把当前的默认首页带给新窗口，
-    // 否则新窗口的 ExplorerView 会因 initialPath 为空而走 fallback。
+  const resolveWindowTarget = useCallback((tab?: TabData) => {
     const fallbackPath = theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
     const path = tab?.currentPath || tab?.initialPath || fallbackPath;
     const label = tab?.label || (path && !path.startsWith('aether://') ? getPathLeaf(path) : undefined);
-    invoke<string>('create_app_window', { initialPath: path, tabLabel: label }).catch(err => {
-      console.error('创建新窗口失败:', err);
-    });
+    return { path, label };
   }, [theme.defaultHomePath]);
 
-  const removeTabAfterTransfer = useCallback((tabId: string) => {
-    console.log('=== removeTabAfterTransfer 被调用 ===');
-    console.log('要删除的 tabId:', tabId);
-    setTabs(prev => {
-      console.log('当前标签页列表:', prev);
-      console.log('当前标签页 IDs:', prev.map(t => t.id));
-      console.log('标签页数量:', prev.length);
+  const createStandaloneWindow = useCallback((path: string, label?: string) => {
+    return invoke<string>('create_app_window', { initialPath: path, tabLabel: label }).catch(err => {
+      console.error('创建新窗口失败:', normalizeAppError(err).userMessage);
+      throw err;
+    });
+  }, []);
 
-      // 检查 tabId 是否存在
+  const createNewWindow = useCallback((tab?: TabData) => {
+    // 关键：不传 tab 时（Cmd+N / 菜单 / 加号），把当前的默认首页带给新窗口，
+    // 否则新窗口的 ExplorerView 会因 initialPath 为空而走 fallback。
+    const { path, label } = resolveWindowTarget(tab);
+    if (!theme.enableMultiWindow) {
+      createLocalTab(path, label);
+      return;
+    }
+    void createStandaloneWindow(path, label);
+  }, [createLocalTab, createStandaloneWindow, resolveWindowTarget, theme.enableMultiWindow]);
+
+  const removeTabAfterTransfer = useCallback((tabId: string) => {
+    setTabs(prev => {
       const tabExists = prev.some(t => t.id === tabId);
-      console.log('要删除的标签页是否存在:', tabExists);
+      if (!tabExists) return prev;
 
       if (prev.length <= 1) {
-        console.log('只剩一个标签页，关闭窗口');
-        // 最后一个标签页被拖走，关闭窗口
         getCurrentWindow().close().catch(() => {});
         return prev;
       }
-      console.log('还有多个标签页，只删除被拖走的标签页');
-      const nextTabs = prev.filter(tab => {
-        const shouldKeep = tab.id !== tabId;
-        console.log(`标签页 ${tab.id}: ${shouldKeep ? '保留' : '删除'}`);
-        return shouldKeep;
-      });
-      console.log('删除后的标签页列表:', nextTabs);
-      console.log('删除后的标签页 IDs:', nextTabs.map(t => t.id));
-      console.log('删除后的标签页数量:', nextTabs.length);
+      const nextTabs = prev.filter(tab => tab.id !== tabId);
       setView(current => {
         if (current !== tabId) return current;
         return (nextTabs[nextTabs.length - 1]?.id || prev[0].id) as ViewMode;
@@ -181,49 +214,32 @@ export default function App() {
   }, []);
 
   const handleDetachTab = useCallback((tab: TabData) => {
-    createNewWindow(tab);
-    removeTabAfterTransfer(tab.id);
-  }, [createNewWindow, removeTabAfterTransfer]);
+    const { path, label } = resolveWindowTarget(tab);
+    createStandaloneWindow(path, label)
+      .then(() => removeTabAfterTransfer(tab.id))
+      .catch(() => {});
+  }, [createStandaloneWindow, removeTabAfterTransfer, resolveWindowTarget]);
 
   const handleAcceptDraggedTab = useCallback((payload: TabTransferPayload) => {
-    console.log('=== App.handleAcceptDraggedTab 被调用 ===');
-    console.log('payload:', payload);
     const sourceWindow = payload.sourceWindowLabel;
     const currentWindow = getCurrentWindow().label;
-    console.log('sourceWindow:', sourceWindow, 'currentWindow:', currentWindow);
 
     if (sourceWindow === currentWindow) {
-      console.log('同窗口，忽略');
       return;
     }
 
     const nextTab = normalizeTransferredTab(payload.tab);
-    console.log('准备添加标签页:', nextTab);
-    setTabs(prev => {
-      console.log('当前标签页:', prev);
-      const newTabs = [...prev, nextTab];
-      console.log('新标签页列表:', newTabs);
-      return newTabs;
-    });
+    setTabs(prev => [...prev, nextTab]);
     setView(nextTab.id as ViewMode);
 
-    console.log('发送接受确认事件到源窗口:', sourceWindow);
-    console.log('确认事件 payload:', {
-      transferId: payload.transferId,
-      tabId: payload.tab.id,
-      targetWindow: currentWindow,
-    });
     emitTo(sourceWindow, 'aether-tab-transfer-accepted', {
       transferId: payload.transferId,
       tabId: payload.tab.id,
-      targetWindow: currentWindow, // 添加目标窗口标识
+      targetWindow: currentWindow,
     }).then(() => {
-      console.log('确认事件发送成功');
-      // 取消源窗口的 detach timeout
       const timeoutKey = `detach-timeout-${payload.transferId}`;
       const detachTimeout = (window as any)[timeoutKey];
       if (detachTimeout) {
-        console.log('取消源窗口的 detach timeout');
         clearTimeout(detachTimeout);
         delete (window as any)[timeoutKey];
       }
@@ -275,7 +291,7 @@ export default function App() {
   // Save theme to Tauri store (with localStorage fallback)
   useEffect(() => {
     if (!storeReady) return;
-    localStorage.setItem('theme-settings', JSON.stringify(theme));
+    localStorage.setItem('theme-settings', JSON.stringify(redactThemeSecrets(theme)));
 
     loadSettingsStore().then(s => {
       s.set('theme', theme);
@@ -293,18 +309,18 @@ export default function App() {
   }, [favorites, storeReady]);
 
   useEffect(() => {
+    if (!storeReady) return;
     localStorage.setItem('aether-file-tags', JSON.stringify(fileTags));
 
-    if (!storeReady) return;
     loadSettingsStore().then(s => {
       s.set('fileTags', fileTags);
     }).catch(() => {});
   }, [fileTags, storeReady]);
 
   useEffect(() => {
+    if (!storeReady) return;
     localStorage.setItem('aether-recent-items', JSON.stringify(recentItems));
 
-    if (!storeReady) return;
     loadSettingsStore().then(s => {
       s.set('recentItems', recentItems);
     }).catch(() => {});
@@ -319,10 +335,33 @@ export default function App() {
     if (r) setRecentItems(r);
   }, []);
 
+  const handleResetAllSettingsData = useCallback(() => {
+    setTheme(normalizeThemeSettings({}));
+    setFavorites([]);
+    setFileTags({});
+    setRecentItems([]);
+    setSelectedFileIds([]);
+  }, []);
+
   const handleRecordRecent = useCallback((path: string) => {
     if (!path || path.startsWith('aether://')) return;
     setRecentItems(prev => [path, ...prev.filter(item => item !== path)].slice(0, MAX_RECENT_ITEMS));
   }, []);
+
+  const markStartupPanicPromptSeen = useCallback((fingerprint: string) => {
+    try {
+      localStorage.setItem(STARTUP_PANIC_LOG_SEEN_KEY, fingerprint);
+    } catch {
+      // Best-effort only; the prompt should still close if storage is unavailable.
+    }
+    setStartupPanicPrompt(null);
+  }, []);
+
+  const openDiagnosticsSettings = useCallback((fingerprint: string) => {
+    markStartupPanicPromptSeen(fingerprint);
+    setSettingsInitialCategory('about');
+    setView('settings');
+  }, [markStartupPanicPromptSeen]);
 
   // Apply theme to document
   useEffect(() => {
@@ -377,9 +416,33 @@ export default function App() {
     }
   }, [theme.language, theme.followSystemLanguage, i18n]);
 
+  useEffect(() => {
+    let cancelled = false;
+    invoke<string | null>('read_last_panic_log')
+      .then(log => {
+        let seenFingerprint: string | null = null;
+        try {
+          seenFingerprint = localStorage.getItem(STARTUP_PANIC_LOG_SEEN_KEY);
+        } catch {
+          seenFingerprint = null;
+        }
+        if (cancelled || !shouldShowStartupPanicPrompt(log, seenFingerprint)) return;
+        const panicLog = log || '';
+        setStartupPanicPrompt({
+          fingerprint: fingerprintPanicLog(panicLog),
+          preview: panicLog.slice(-900).trim(),
+        });
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // DevTools 打开
   const handleOpenDevTools = useCallback(() => {
-    invoke('open_devtools').catch(err => console.error('打开控制台失败:', err));
+    invoke('open_devtools').catch(err => console.error('打开控制台失败:', normalizeAppError(err).userMessage));
   }, []);
 
   // Listen for system theme changes when in auto mode
@@ -400,37 +463,23 @@ export default function App() {
     let unlistenAccepted: (() => void) | undefined;
 
     listen<{ transferId: string; tabId: string; targetWindow: string }>('aether-tab-transfer-accepted', (event) => {
-      console.log('=== 收到标签页接受确认事件 ===');
-      console.log('event.payload:', event.payload);
       const currentWindow = getCurrentWindow().label;
-      console.log('当前窗口:', currentWindow);
-      console.log('目标窗口:', event.payload.targetWindow);
-      console.log('transferId:', event.payload.transferId);
 
-      // 防止重复处理同一个 transfer
       if (processedTransfersRef.current.has(event.payload.transferId)) {
-        console.log('该 transfer 已处理过，忽略');
         return;
       }
 
-      // 只有当前窗口不是目标窗口时，才删除标签页
-      // 目标窗口刚刚添加了标签页，不应该删除
       if (currentWindow !== event.payload.targetWindow) {
-        console.log('当前窗口是源窗口，删除标签页');
         processedTransfersRef.current.add(event.payload.transferId);
 
-        // 取消 detach timeout（如果有的话）
         const timeoutKey = `detach-timeout-${event.payload.transferId}`;
         const detachTimeout = (window as any)[timeoutKey];
         if (detachTimeout) {
-          console.log('取消 detach timeout');
           clearTimeout(detachTimeout);
           delete (window as any)[timeoutKey];
         }
 
         removeTabAfterTransfer(event.payload.tabId);
-      } else {
-        console.log('当前窗口是目标窗口，不删除标签页');
       }
     }).then(unlisten => {
       unlistenAccepted = unlisten;
@@ -441,38 +490,67 @@ export default function App() {
     };
   }, [removeTabAfterTransfer]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
-      const isCmd = event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey;
-      if (!isCmd) return;
-
-      if (key === 'n') {
-        event.preventDefault();
-        createNewWindow();
-      } else if (key === 'w') {
-        event.preventDefault();
-        handleCloseTab(view);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tabs.length, view]); // 需要感知 tabs 变化
-
-  const handleCloseTab = (id: string) => {
-    if (tabs.length === 1) {
-      getCurrentWindow().close().catch(() => {});
-      return;
-    }
-
+  const handleCloseTab = useCallback((id: string) => {
     setTabs(prev => {
+      if (prev.length === 1) {
+        getCurrentWindow().close().catch(() => {});
+        return prev;
+      }
+
       const nextTabs = prev.filter(tab => tab.id !== id);
       if (view === id) {
         setView((nextTabs[nextTabs.length - 1]?.id || prev[0].id) as ViewMode);
       }
       return nextTabs;
     });
-  };
+  }, [view]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTyping = !!target?.closest('input, textarea, select, [contenteditable="true"]');
+      if (isTyping) return;
+
+      if (shortcutHelpOpen && event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setShortcutHelpOpen(false);
+        return;
+      }
+
+      const action = resolveAppShortcut(event);
+      if (!action) return;
+
+      event.preventDefault();
+      if (action === 'showShortcutHelp') {
+        event.stopImmediatePropagation();
+      }
+      if (action === 'newWindow') {
+        createNewWindow();
+      } else if (action === 'closeTab') {
+        handleCloseTab(view);
+      } else if (action === 'showShortcutHelp') {
+        setShortcutHelpOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [createNewWindow, handleCloseTab, shortcutHelpOpen, view]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<NativeMenuCommand>(NATIVE_MENU_COMMAND_EVENT, event => {
+      if (event.payload === 'open-settings') {
+        setView('settings');
+      }
+    }).then(fn => {
+      unlisten = fn;
+    }).catch(() => {});
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   const handleOpenTab = (id: string, labelTranslationKey: string, options?: { label?: string; initialPath?: string }) => {
     const uniqueId = `${id}-${Date.now()}`;
@@ -503,13 +581,75 @@ export default function App() {
 
   const resolvedThemeMode = theme.mode === 'auto' ? systemTheme : theme.mode;
 
-  const backgroundUrl = theme.wallpaperUrl || (theme.enableGradient
+  const safeWallpaperUrl = theme.wallpaperUrl && isValidWallpaperUrl(theme.wallpaperUrl)
+    ? theme.wallpaperUrl
+    : undefined;
+  const backgroundUrl = safeWallpaperUrl || (theme.enableGradient
     ? (resolvedThemeMode === 'light'
       ? "https://lh3.googleusercontent.com/aida-public/AB6AXuB9XaXmOrvTbEmkcGVQRTeI3kC1xcNNI9hs3iLUfwEmP9n4a8NBlhkuVjFfQQHJDbgc5-Hlu84crRzebo5m19DliX5ipgb9sdBh13reLuJDOlyYlkJo7pdUnYUTQbMfhTdIdErU6myMmdrUcyz1jC1_Zm6gK27RiLNAdjDNeAZHXpMzca9lHZFHKIvWwpSholpGfTPYSn3KLjl5aJg_IW4SpVHMDS7SLG8Vr1mGx7p0OKpvfUnm857Ege-iTZ6Oy3Lw1NgTOyJojb9O"
       : "https://lh3.googleusercontent.com/aida-public/AB6AXuB5rkbZYEmntgaSGeN7iqlRsjtR3W5ODpJVUMLqhdxav_8_-VdvCsdd4wypghvj96XDWyE48JagMP-B7V0x3U3asu3dsg1n034ddQ0OAmyCVv8dxrRxj95ASkdMKW9KSBHsY_j9nl5KvSSVu38q6ed-TvVStYA2QcFuskTmrbqbz9iT8CxblEDxGz3Xewr4wKDfnoxSxZz-ec7VLicJvF6p8Qpm7UhFoj4uZLTlrQE5-rihCK5xFZ66DT-bf92WmUxbngN82dckzps5")
     : undefined);
+  const shortcutHelpSections = [
+    {
+      title: t('shortcutHelp.sections.window'),
+      items: [
+        ['?', t('shortcutHelp.items.showHelp')],
+        ['Cmd+N', t('shortcutHelp.items.newWindow')],
+        ['Cmd+W', t('shortcutHelp.items.closeTab')],
+        ['Esc', t('shortcutHelp.items.dismiss')],
+      ],
+    },
+    {
+      title: t('shortcutHelp.sections.navigation'),
+      items: [
+        ['Cmd+[', t('shortcutHelp.items.back')],
+        ['Cmd+]', t('shortcutHelp.items.forward')],
+        ['Cmd+↑', t('shortcutHelp.items.parent')],
+        ['Cmd+↓', t('shortcutHelp.items.openFolder')],
+        ['Enter', t('shortcutHelp.items.openSelection')],
+      ],
+    },
+    {
+      title: t('shortcutHelp.sections.selection'),
+      items: [
+        ['↑ / ↓', t('shortcutHelp.items.moveSelection')],
+        ['← / →', t('shortcutHelp.items.moveSelection')],
+        ['Cmd+A', t('shortcutHelp.items.selectAll')],
+        ['A-Z / 0-9', t('shortcutHelp.items.typeahead')],
+        ['Esc', t('shortcutHelp.items.clearSelection')],
+      ],
+    },
+    {
+      title: t('shortcutHelp.sections.files'),
+      items: [
+        ['Cmd+C', t('shortcutHelp.items.copy')],
+        ['Cmd+X', t('shortcutHelp.items.cut')],
+        ['Cmd+V', t('shortcutHelp.items.paste')],
+        ['Delete', t('shortcutHelp.items.delete')],
+        ['Space', t('shortcutHelp.items.quickLook')],
+      ],
+    },
+    {
+      title: t('shortcutHelp.sections.view'),
+      items: [
+        ['Cmd+1', t('shortcutHelp.items.listView')],
+        ['Cmd+2', t('shortcutHelp.items.gridView')],
+        ['Cmd+3', t('shortcutHelp.items.columnView')],
+        ['Cmd+Shift+.', t('shortcutHelp.items.hiddenFiles')],
+        ['Cmd+R', t('shortcutHelp.items.refresh')],
+      ],
+    },
+    {
+      title: t('shortcutHelp.sections.tools'),
+      items: [
+        ['Cmd+I', t('shortcutHelp.items.info')],
+        ['Cmd+Shift+R', t('shortcutHelp.items.aiRename')],
+      ],
+    },
+  ];
 
   return (
+    <MotionConfig reducedMotion="user">
     <div
       className="h-screen w-screen overflow-hidden antialiased transition-all duration-700 flex rounded-[24px]"
       style={{ fontFamily: theme.fontFamily || 'unset' }}
@@ -556,10 +696,12 @@ export default function App() {
                   <SettingsView
                     theme={theme}
                     onThemeChange={setTheme}
+                    initialCategory={settingsInitialCategory}
                     favorites={favorites}
                     fileTags={fileTags}
                     recentItems={recentItems}
                     onImport={handleImportConfig}
+                    onResetAllData={handleResetAllSettingsData}
                     onNavigateToHome={() => setView('desktop')}
                   />
                 </Suspense>
@@ -586,6 +728,7 @@ export default function App() {
                     onTitleChange={handleTabTitleChange}
                     onPathChange={handleTabPathChange}
                     onOpenTab={handleOpenTab}
+                    onCreateWindow={createNewWindow}
                     onStartTransfer={() => setIsTransferring(true)}
                     favorites={favorites}
                     onToggleFavorite={(id) => {
@@ -639,6 +782,110 @@ export default function App() {
       </div>
 
       <AnimatePresence>
+        {shortcutHelpOpen && (
+          <motion.div
+            className="fixed inset-0 z-[130] flex items-center justify-center bg-black/35 backdrop-blur-sm px-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onMouseDown={() => setShortcutHelpOpen(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.96, y: 12, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.96, y: 12, opacity: 0 }}
+              className="w-full max-w-[780px] max-h-[82vh] overflow-hidden rounded-3xl border border-primary/15 bg-surface/95 shadow-2xl shadow-black/20"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 p-6 border-b border-primary/10">
+                <div className="flex items-start gap-4 min-w-0">
+                  <div className="w-11 h-11 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0">
+                    <Keyboard className="w-5 h-5 text-primary" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-[18px] font-black text-on-surface">{t('shortcutHelp.title')}</h3>
+                    <p className="text-[13px] text-on-surface/55 mt-2 leading-relaxed">{t('shortcutHelp.description')}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShortcutHelpOpen(false)}
+                  className="p-2 rounded-xl hover:bg-primary/10 transition-colors shrink-0"
+                  title={t('common.cancel')}
+                >
+                  <X className="w-4 h-4 text-on-surface/45" />
+                </button>
+              </div>
+              <div className="max-h-[calc(82vh-104px)] overflow-auto p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                {shortcutHelpSections.map(section => (
+                  <section key={section.title} className="rounded-2xl border border-primary/10 bg-primary/5 p-4">
+                    <h4 className="text-[12px] font-black text-on-surface/45 uppercase tracking-widest mb-3">{section.title}</h4>
+                    <div className="space-y-2">
+                      {section.items.map(([keys, label]) => (
+                        <div key={`${section.title}-${keys}`} className="flex items-center justify-between gap-4">
+                          <span className="text-[13px] font-bold text-on-surface/70 leading-relaxed">{label}</span>
+                          <kbd className="shrink-0 rounded-lg border border-on-surface/10 bg-on-surface/[0.04] px-2.5 py-1 text-[11px] font-black text-on-surface/65 shadow-sm">{keys}</kbd>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+        {startupPanicPrompt && (
+          <motion.div
+            className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 backdrop-blur-sm px-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              initial={{ scale: 0.96, y: 12, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.96, y: 12, opacity: 0 }}
+              className="w-full max-w-[520px] rounded-3xl border border-primary/15 bg-surface/95 shadow-2xl shadow-black/20 overflow-hidden"
+            >
+              <div className="flex items-start gap-4 p-6">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/15 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-amber-500" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[17px] font-black text-on-surface">{t('appDiagnostics.startupPanicTitle')}</h3>
+                  <p className="text-[13px] text-on-surface/55 mt-2 leading-relaxed">
+                    {t('appDiagnostics.startupPanicDescription')}
+                  </p>
+                </div>
+                <button
+                  onClick={() => markStartupPanicPromptSeen(startupPanicPrompt.fingerprint)}
+                  className="p-2 rounded-xl hover:bg-primary/10 transition-colors shrink-0"
+                  title={t('common.cancel')}
+                >
+                  <X className="w-4 h-4 text-on-surface/45" />
+                </button>
+              </div>
+              {startupPanicPrompt.preview && (
+                <pre className="mx-6 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded-2xl bg-on-surface/[0.04] border border-primary/10 p-4 text-[11px] leading-relaxed text-on-surface/55 font-mono">
+                  {startupPanicPrompt.preview}
+                </pre>
+              )}
+              <div className="flex items-center justify-end gap-3 p-6">
+                <button
+                  onClick={() => markStartupPanicPromptSeen(startupPanicPrompt.fingerprint)}
+                  className="px-5 py-3 rounded-2xl bg-primary/10 text-primary text-[12px] font-black hover:bg-primary/20 transition-colors"
+                >
+                  {t('appDiagnostics.dismiss')}
+                </button>
+                <button
+                  onClick={() => openDiagnosticsSettings(startupPanicPrompt.fingerprint)}
+                  className="px-5 py-3 rounded-2xl bg-primary text-on-primary text-[12px] font-black shadow-lg shadow-primary/20 hover:bg-primary/90 transition-colors"
+                >
+                  {t('appDiagnostics.viewDiagnostics')}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
         {isTransferring && (
           <Suspense fallback={null}>
             <TransferModal onClose={() => setIsTransferring(false)} theme={theme} />
@@ -646,5 +893,6 @@ export default function App() {
         )}
       </AnimatePresence>
     </div>
+    </MotionConfig>
   );
 }

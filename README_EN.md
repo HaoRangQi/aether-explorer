@@ -1,7 +1,7 @@
 # Aether Explorer
 
-A macOS native file manager built with Tauri v2 + React 19 + Rust.
-Combining Finder's operational capabilities with a modern design language — powered by Google **Material Design 3** visual language.
+A local-first macOS file workspace built with Tauri v2 + React 19 + Rust.
+It is positioned as a Finder enhancement tool, not a replacement for the system file manager.
 
 <p align="center">
   <strong>Casual follow, fateful updates</strong>
@@ -36,7 +36,7 @@ Combining Finder's operational capabilities with a modern design language — po
 ### File Browsing
 - Real filesystem operations — browse, open, copy, move, rename, delete (to Trash)
 - Three view modes — List, Grid, Miller Columns, with adjustable layout parameters
-- File preview — thumbnails, text preview, Quick Look (Space key)
+- File preview — image thumbnails, PDF first page, video thumbnail and duration, text preview, Quick Look (Space key)
 - Search & sort — real-time filtering, multi-column sorting, group by type/date
 
 ### macOS Deep Integration
@@ -44,24 +44,25 @@ Combining Finder's operational capabilities with a modern design language — po
 - Quick Look — Space key triggers system native preview
 - Trash — delete moves to Trash only, no physical deletion
 - Terminal integration — open in Terminal via right-click, supports Terminal/iTerm etc.
-- Full Disk Access — permission detection and guided authorization
+- Full Disk Access — permission guidance and structured error messages
 
 ### Windows & Tabs
 - Multi-window — Cmd+N new window, cross-window tab drag & drop
-- Tab management — detach, merge across windows, close protection
+- Tab management — detach, merge across windows, close protection, Cmd+W close tab
 - Wallpaper background — custom URL or local image, adjustable blur
 
 ### Settings & Customization
 - Appearance — theme mode, accent color, font, transparency, blur intensity
 - Context menu — configurable extensions with custom terminal commands
 - Language — Chinese/English, default Chinese
+- AI operation history — true pagination, search by date/filename, configurable retention (default 7 days, max 90 days)
 
 ## Known Limitations
 
-- File drag into folder not implemented yet
-- Copy / Paste for files not implemented yet
-- Arrow key navigation not supported yet
-- App icon is a placeholder, needs professional design
+- Transfer manager now uses real background tasks, progress, cancellation, and conflict summaries; system notifications and extreme-directory performance still need polish
+- Direct drag-out from Aether to Finder currently shows an explicit fallback; native drag-out requires a future pasteboard integration
+- Very large directories still need chunked loading or chunked rendering for extreme cases
+- External disk auto-refresh, Quick Access, and AirDrop entry points still need more work
 - Column view sub-column cannot show preview panel ([BUG.md](./BUG.md))
 
 Full task list at [TODO.md](./TODO.md).
@@ -126,7 +127,7 @@ aether-explorer/
 │   └── tauri.conf.json     # Tauri config
 ├── assets/images/          # Screenshots
 ├── design/                 # Design resources
-├── FEATURES.md             # Full feature list (84 items)
+├── FEATURES.md             # Full feature list
 ├── TODO.md                 # Upcoming features
 ├── BUG.md                  # Known bugs
 └── package.json
@@ -134,36 +135,38 @@ aether-explorer/
 
 ## Feature List
 
-See [FEATURES.md](./FEATURES.md) — 84 features across 12 tiers.
+See [FEATURES.md](./FEATURES.md) for the full status table.
 
 ## Notes
 
 - Delete operations only move files to macOS Trash, never physically delete
 - Color tags are stored locally, not written to macOS extended attributes
+- Privacy and outbound request notes are documented in [docs/PRIVACY.md](./docs/PRIVACY.md)
+- Security reporting is documented in [SECURITY.md](./SECURITY.md), and contribution workflow is documented in [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 ## Troubleshooting
 
-### "App is damaged and can't be opened"
+### Opening unsigned builds
 
-When opening Aether Explorer for the first time, macOS may show "Aether Explorer.app is damaged and can't be opened. You should move it to the Trash."
+This project is maintained as a community, non-commercial distribution. Developer ID signing and notarization are intentionally not current roadmap blockers. When opening Aether Explorer for the first time, macOS may show "Aether Explorer.app is damaged and can't be opened" or block the unsigned app.
 
-**Cause:** This is a development build without Apple Developer code signing. macOS Gatekeeper blocks unsigned apps.
+**Cause:** Current builds do not use Apple Developer code signing, so Gatekeeper treats them as unsigned apps.
 
-**Fix:**
-
-```bash
-# After moving the app to /Applications, run in Terminal:
-sudo xattr -rd com.apple.quarantine /Applications/Aether\ Explorer.app
-```
-
-Or via System Settings:
+**Recommended path:**
 
 1. Open **System Settings → Privacy & Security**
 2. Scroll down to the **Security** section
 3. Click the **Open Anyway** button
 4. Click **Open** in the confirmation dialog
 
-> Note: If you don't see the "Open Anyway" option, run the xattr command above first.
+**Advanced fallback:**
+
+```bash
+# Only run this after verifying the download source.
+xattr -rd com.apple.quarantine /Applications/Aether\ Explorer.app
+```
+
+> Unsigned builds should not be presented as fully trusted signed distribution. Only download from the project release page, and test on a disposable folder before operating on important files.
 
 ## License
 

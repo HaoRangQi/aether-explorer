@@ -602,6 +602,8 @@ Tauri 没暴露 wkwebview 的 dragging delegate。需要：
 
 **短期替代**：在 ExplorerView 加"导出到 Finder"按钮 — 调 `reveal_in_finder` 打开父目录并选中，让用户继续在 Finder 操作。不优雅但能用。
 
+当前分支已验证该方向：真正系统拖出暂不做 native pasteboard；拖出 Aether 窗口且未被其它 Aether 窗口接收时，会明确提示用户改用"在 Finder 中显示"继续操作，避免静默失败。
+
 ---
 
 ## 六、方案 C：Finder → Aether（已部分工作，需完善）

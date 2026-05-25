@@ -1,0 +1,18 @@
+name: Security report
+description: Do not publish exploit details here. Use SECURITY.md for private reporting.
+title: "[Security]: private report needed"
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not post exploit details, tokens, private paths, or file contents in a public issue.
+
+        Follow `SECURITY.md` and use private vulnerability reporting when available.
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: Confirmation
+      options:
+        - label: I will follow SECURITY.md and avoid public exploit details.
+          required: true
