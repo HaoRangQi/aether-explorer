@@ -4,32 +4,21 @@
 
 ## [Unreleased]
 
+- 暂无
+
+## [4.0.1] - 2026-05-25
+
 ### 新增
-- 设置页“关于”新增诊断与反馈入口：支持复制脱敏诊断信息、打开本地日志目录、打开配置文件夹、读取最近 Rust 崩溃日志，并保持本地优先、不自动上传。
-- 启动后若发现新的 Rust 崩溃日志，会提示用户打开诊断页查看；提示确认后记录日志指纹，避免重复打扰。
-- 新增 `?` 快捷键列表弹窗，集中展示窗口、导航、选择、文件操作、视图和工具类快捷键。
-- 设置备份恢复新增版本化 JSON schema，并提供二次确认的“重置全部配置”入口。
+- AI 操作历史升级为真分页加载，支持按文件名关键词与日期范围检索，并增加保留期策略（默认 7 天、最长 90 天）。
+- 设置页新增 AI 操作历史保留期配置项，历史面板同步展示当前保留策略。
+- 增加 `ai-ops-log` 自动化测试，覆盖历史迁移、分页、检索、保留期清理与删除一致性。
 
 ### 改进
-- AI 文件助手面板接入 `aiRename.*` 国际化命名空间，标题、预设、占位符、错误提示、操作类型和执行进度支持中英文切换。
-- `lint:i18n` 扩展覆盖 `AIRenamePanel` 高风险用户可见文案，避免后续回退成硬编码中文。
-- `lint:i18n` 继续覆盖 `SettingsView` 的分类、页头、权限、扩展和清理缓存高风险文案。
-- 新增 `lint:eslint`，并让 `npm run lint` 串联 TypeScript 与 ESLint，覆盖前端 `console`、浏览器 `prompt/alert/confirm` 和基础 Hooks 风险门禁。
-- 分批收口 `react-hooks/exhaustive-deps` 历史 warning，先稳定 App 快捷键关闭标签页、Explorer 路径映射、收藏 / 最近 / 标签解析、应用图标 hydration 和分组 helper 链路。
-- ExplorerView 拖拽、外部导入、键盘快捷键和刷新链路的 `react-hooks/exhaustive-deps` warning 已清零，并将该规则升级为 error 门禁防回退。
-- Vite production build 增加 `manualChunks`，拆出 React、Tauri、icons、i18n 和通用 vendor chunk，主入口 chunk 从约 683 KB 降到约 258 KB。
-- 新增 `lint:rust`，并把 `cargo clippy --lib -- -D warnings` 接入 test / release workflow 与 `lint:ci-gates`。
-- `?` 快捷键帮助在输入框、重命名和路径编辑时不会触发，避免打断用户输入。
-- 减少动态效果兼容性收口：CSS 动画、motion/react 弹窗 / 面板、Loader、传输进度和存储圆环会尊重系统 reduced-motion 设置。
-- 配置导入 / 导出 / 重置改为设置页内状态反馈，导入失败不再使用 `alert`。
-- 配置和右键扩展导入复用 sanitizer：过滤畸形 / deprecated / 重复扩展、危险或空白 URL 模板，规范化 `id` / `label` / `workingDirectory`，校验导入枚举值，并强制 terminal / shell 扩展保留执行确认。
-- 设置导入 / 重置 / 扩展删除确认迁移到 Tauri dialog，避免继续使用浏览器 `confirm`。
-- release 流程在打包前清理旧 `dist` / Tauri bundle，并为 versioned release 上传和远程验收 `SHA256SUMS`。
+- 跨窗口拖拽与文件传输链路稳定性提升：冲突跳过语义更清晰、取消后残留清理更完整、symlink 复制行为统一。
+- 设置导入/导出、诊断反馈、快捷键帮助和 AI 面板文案继续收口国际化与安全校验。
 
-### 文档
-- 新增 `SECURITY.md`、`CONTRIBUTING.md` 与 GitHub issue templates，补齐公益社区维护入口。
-- 校准审计、路线图和 smoke 文档中已经过期的完成状态。
-- 发版门禁补齐 production build smoke，并新增 `lint:ci-gates` 防止 CI / release 关键检查被误删、关键 npm scripts 退化为空命令、Codex 工作分支失去 CI 触发、release job 绕过 `test-gate` 或发布版本一致性校验退化。
+### 工程质量
+- `lint` / `test` / `build` / release gate 全链路门禁强化，CI 与本地发版流程对齐并默认校验版本一致性、`latest.json` 与 `SHA256SUMS` 产物。
 
 ## [0.3.11] - 2026-05-23
 
