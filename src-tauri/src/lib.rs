@@ -4,12 +4,13 @@ use std::fs;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::hash::{Hash, Hasher};
 use std::os::unix::fs as unix_fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_liquid_glass::{GlassMaterialVariant, LiquidGlassConfig, LiquidGlassExt};
 use tauri_plugin_log::{Target, TargetKind};
 
 #[cfg(target_os = "macos")]
@@ -70,6 +71,23 @@ struct VolumeInfo {
 struct DirectorySignature {
     fingerprint: String,
     entry_count: u64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LiquidGlassStatus {
+    requested: bool,
+    supported: bool,
+    applied: bool,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PermissionPreflightResult {
+    path: String,
+    ok: bool,
+    error: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -486,12 +504,207 @@ fn format_kib(kib: &str) -> String {
         .unwrap_or_else(|_| kib.into())
 }
 
+fn format_storage_size(bytes: u64) -> String {
+    const KB: f64 = 1000.0;
+    const MB: f64 = KB * 1000.0;
+    const GB: f64 = MB * 1000.0;
+
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+fn storage_capacity_value(used: u64, size: u64) -> u8 {
+    if size == 0 {
+        return 0;
+    }
+
+    (((used as f64 / size as f64) * 100.0).round() as u8).min(100)
+}
+
+fn parse_plist_integer(text: &str, key: &str) -> Option<u64> {
+    let key_tag = format!("<key>{}</key>", key);
+    let after_key = text.split_once(&key_tag)?.1;
+    let after_open = after_key.split_once("<integer>")?.1;
+    let value = after_open.split_once("</integer>")?.0.trim();
+    value.parse::<u64>().ok()
+}
+
+fn decode_plist_string(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+}
+
+fn parse_plist_string(text: &str, key: &str) -> Option<String> {
+    let key_tag = format!("<key>{}</key>", key);
+    let after_key = text.split_once(&key_tag)?.1;
+    let after_open = after_key.split_once("<string>")?.1;
+    let value = after_open.split_once("</string>")?.0.trim();
+    Some(decode_plist_string(value))
+}
+
+fn build_primary_apfs_disk_info(data_plist: &str, system_plist: Option<&str>) -> Option<DiskInfo> {
+    let size = parse_plist_integer(data_plist, "APFSContainerSize")
+        .or_else(|| parse_plist_integer(data_plist, "TotalSize"))
+        .or_else(|| parse_plist_integer(data_plist, "Size"))?;
+    let data_used = parse_plist_integer(data_plist, "CapacityInUse")?;
+    let system_used = system_plist
+        .and_then(|plist| parse_plist_integer(plist, "CapacityInUse"))
+        .unwrap_or(0);
+    let used = data_used.saturating_add(system_used).min(size);
+    let available = size.saturating_sub(used);
+    let capacity_value = storage_capacity_value(used, size);
+    let filesystem = parse_plist_string(data_plist, "FilesystemUserVisibleName")
+        .or_else(|| parse_plist_string(data_plist, "FilesystemName"))
+        .unwrap_or_else(|| "APFS".to_string());
+
+    Some(DiskInfo {
+        filesystem,
+        size: format_storage_size(size),
+        used: format_storage_size(used),
+        available: format_storage_size(available),
+        capacity: format!("{}%", capacity_value),
+        capacity_value,
+        mount: "/".to_string(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn diskutil_info_plist(path: &str) -> Option<String> {
+    let output = std::process::Command::new("diskutil")
+        .args(["info", "-plist", path])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn get_primary_apfs_disk_info(path: &str) -> Option<DiskInfo> {
+    if path != "/" {
+        return None;
+    }
+
+    let data_plist = diskutil_info_plist("/System/Volumes/Data")?;
+    let system_plist = diskutil_info_plist("/");
+    build_primary_apfs_disk_info(&data_plist, system_plist.as_deref())
+}
+
 fn parse_df_line(line: &str) -> Result<(&str, &str, &str, &str, &str, String), String> {
     let cols: Vec<&str> = line.split_whitespace().collect();
     if cols.len() < 6 {
         return Err(format!("磁盘信息格式异常: {}", line));
     }
     Ok((cols[0], cols[1], cols[2], cols[3], cols[4], cols[5..].join(" ")))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DfRow {
+    filesystem: String,
+    size: String,
+    used: String,
+    available: String,
+    capacity: String,
+    mount: String,
+}
+
+fn parse_df_row(line: &str) -> Result<DfRow, String> {
+    let (filesystem, size, used, available, capacity, mount) = parse_df_line(line)?;
+    Ok(DfRow {
+        filesystem: filesystem.into(),
+        size: size.into(),
+        used: used.into(),
+        available: available.into(),
+        capacity: capacity.into(),
+        mount,
+    })
+}
+
+fn parse_df_rows(text: &str) -> Vec<DfRow> {
+    text.lines()
+        .skip(1)
+        .filter_map(|line| parse_df_row(line).ok())
+        .collect()
+}
+
+fn root_storage_row(rows: &[DfRow]) -> Option<&DfRow> {
+    rows.iter()
+        .find(|row| row.mount == "/System/Volumes/Data")
+        .or_else(|| rows.iter().find(|row| row.mount == "/"))
+}
+
+fn disk_info_from_df_row(row: &DfRow, mount: Option<&str>) -> DiskInfo {
+    DiskInfo {
+        filesystem: row.filesystem.clone(),
+        size: format_kib(&row.size),
+        used: format_kib(&row.used),
+        available: format_kib(&row.available),
+        capacity: row.capacity.clone(),
+        capacity_value: parse_capacity(&row.capacity),
+        mount: mount.unwrap_or(&row.mount).to_string(),
+    }
+}
+
+fn volume_info_from_df_row(row: &DfRow, is_root: bool) -> VolumeInfo {
+    let path = if is_root { "/".to_string() } else { row.mount.clone() };
+    let name = if is_root {
+        "Macintosh HD".to_string()
+    } else {
+        Path::new(&row.mount)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&row.mount)
+            .to_string()
+    };
+
+    VolumeInfo {
+        name,
+        path: path.clone(),
+        filesystem: row.filesystem.clone(),
+        size: format_kib(&row.size),
+        used: format_kib(&row.used),
+        available: format_kib(&row.available),
+        capacity: row.capacity.clone(),
+        capacity_value: parse_capacity(&row.capacity),
+        is_root,
+        is_external: path.starts_with("/Volumes/"),
+        is_ejectable: path.starts_with("/Volumes/"),
+    }
+}
+
+fn volume_infos_from_df_rows(rows: &[DfRow]) -> Vec<VolumeInfo> {
+    let root_mount = root_storage_row(rows).map(|row| row.mount.as_str());
+    let mut seen_mounts = std::collections::HashSet::new();
+    let mut volumes = Vec::new();
+
+    for row in rows {
+        let is_root = root_mount == Some(row.mount.as_str());
+        if !is_root && !row.mount.starts_with("/Volumes") {
+            continue;
+        }
+
+        let volume = volume_info_from_df_row(row, is_root);
+        if !seen_mounts.insert(volume.path.clone()) {
+            continue;
+        }
+        volumes.push(volume);
+    }
+
+    volumes.sort_by(|a, b| b.is_root.cmp(&a.is_root).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    volumes
 }
 
 fn detect_mime(name: &str, is_dir: bool) -> String {
@@ -840,6 +1053,38 @@ fn dirs_fun() -> String {
 }
 
 #[tauri::command]
+fn preflight_file_permissions() -> Vec<PermissionPreflightResult> {
+    let home = dirs_fun();
+    let paths = [
+        format!("{}/Desktop", home),
+        format!("{}/Documents", home),
+        format!("{}/Downloads", home),
+        format!("{}/Library/Mobile Documents", home),
+        format!("{}/.Trash", home),
+        "/Applications".to_string(),
+    ];
+
+    paths
+        .iter()
+        .map(|path| match fs::read_dir(path) {
+            Ok(mut entries) => {
+                let _ = entries.next();
+                PermissionPreflightResult {
+                    path: path.clone(),
+                    ok: true,
+                    error: None,
+                }
+            }
+            Err(error) => PermissionPreflightResult {
+                path: path.clone(),
+                ok: false,
+                error: Some(error.to_string()),
+            },
+        })
+        .collect()
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! Welcome to Aether Explorer.", name)
 }
@@ -1010,6 +1255,83 @@ fn debug_log(message: String) {
     println!("[DEBUG-dnd] {}", message);
 }
 
+#[tauri::command]
+fn get_native_liquid_glass_status(app: tauri::AppHandle) -> LiquidGlassStatus {
+    let supported = app.liquid_glass().is_supported();
+    LiquidGlassStatus {
+        requested: false,
+        supported,
+        applied: false,
+        reason: if supported {
+            None
+        } else {
+            Some("当前系统不支持原生 Liquid Glass，需要 macOS 26 或更新版本。".to_string())
+        },
+    }
+}
+
+#[tauri::command]
+fn set_native_liquid_glass_enabled(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    enabled: bool,
+    appearance: Option<String>,
+) -> Result<LiquidGlassStatus, AppError> {
+    let supported = app.liquid_glass().is_supported();
+
+    if !enabled {
+        app.liquid_glass()
+            .set_effect(
+                &window,
+                LiquidGlassConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| AppError::internal(format!("关闭原生 Liquid Glass 失败: {}", e)))?;
+
+        return Ok(LiquidGlassStatus {
+            requested: false,
+            supported,
+            applied: false,
+            reason: None,
+        });
+    }
+
+    if !supported {
+        return Ok(LiquidGlassStatus {
+            requested: true,
+            supported: false,
+            applied: false,
+            reason: Some("当前系统不支持原生 Liquid Glass，需要 macOS 26 或更新版本。".to_string()),
+        });
+    }
+
+    let tint_color = match appearance.as_deref() {
+        Some("dark") => "#080B1080",
+        _ => "#ffffff10",
+    };
+
+    app.liquid_glass()
+        .set_effect(
+            &window,
+            LiquidGlassConfig {
+                enabled: true,
+                corner_radius: 24.0,
+                tint_color: Some(tint_color.to_string()),
+                variant: GlassMaterialVariant::ControlCenter,
+            },
+        )
+        .map_err(|e| AppError::internal(format!("启用原生 Liquid Glass 失败: {}", e)))?;
+
+    Ok(LiquidGlassStatus {
+        requested: true,
+        supported: true,
+        applied: true,
+        reason: None,
+    })
+}
+
 fn encode_query_component(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
@@ -1148,6 +1470,43 @@ fn unique_destination(path: &Path) -> std::path::PathBuf {
     }
 
     path.to_path_buf()
+}
+
+fn alias_duplicate_destination(path: &Path, is_dir: bool) -> Result<PathBuf, AppError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::invalid_path("无法确定替身目标目录", Some(path.to_string_lossy().into_owned())))?;
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| AppError::invalid_path("无法确定替身名称", Some(path.to_string_lossy().into_owned())))?;
+
+    let (stem, ext) = if is_dir {
+        (name, None)
+    } else {
+        (
+            path.file_stem().and_then(|s| s.to_str()).unwrap_or(name),
+            path.extension().and_then(|s| s.to_str()),
+        )
+    };
+
+    for index in 1..1000 {
+        let suffix = if index == 1 {
+            "-替身".to_string()
+        } else {
+            format!("-替身 {}", index)
+        };
+        let file_name = match ext {
+            Some(ext) if !ext.is_empty() => format!("{}{}.{}", stem, suffix, ext),
+            _ => format!("{}{}", stem, suffix),
+        };
+        let candidate = parent.join(file_name);
+        if !path_exists_no_follow(&candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    Err(AppError::internal_at("无法生成可用的替身名称", Some(path.to_string_lossy().into_owned())))
 }
 
 fn validate_child_name(name: &str) -> Result<String, AppError> {
@@ -2149,21 +2508,16 @@ fn create_folder(parent_dir: String, name: String) -> Result<String, AppError> {
 }
 
 #[tauri::command]
-fn make_alias(path: String) -> Result<String, AppError> {
-    let parent = Path::new(&path).parent().unwrap_or(Path::new("/"));
-    let name = Path::new(&path).file_name().unwrap_or_default().to_string_lossy();
-    let alias_name = format!("{} 的替身", name);
-    let alias_path = parent.join(&alias_name);
+fn duplicate_as_alias(path: String) -> Result<String, AppError> {
+    let src_path = Path::new(&path);
+    let metadata = fs::symlink_metadata(src_path)
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("读取源元数据失败: {}", e)))?;
+    let dst_path = alias_duplicate_destination(src_path, metadata.is_dir() && !metadata.file_type().is_symlink())?;
 
-    #[cfg(target_os = "macos")]
-    std::os::unix::fs::symlink(&path, &alias_path)
-        .map_err(|e| AppError::from_io(&e, Some(&path), format!("创建替身失败: {}", e)))?;
+    copy_path_with_progress(src_path, &dst_path, None)
+        .map_err(|e| AppError::internal_at(format!("创建替身失败: {}", e), Some(path.clone())))?;
 
-    #[cfg(not(target_os = "macos"))]
-    fs::write(&alias_path, format!("alias: {}", path))
-        .map_err(|e| AppError::from_io(&e, Some(&path), format!("创建替身失败: {}", e)))?;
-
-    Ok(alias_path.to_string_lossy().into())
+    Ok(dst_path.to_string_lossy().into())
 }
 
 #[tauri::command]
@@ -2258,39 +2612,57 @@ fn decompress_file(path: String, output_dir: String) -> Result<String, AppError>
     Ok(output_dir)
 }
 
-fn dir_size_recursive(dir: &Path) -> (u64, u64) {
-    let mut total_bytes: u64 = 0;
-    let mut file_count: u64 = 0;
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct DirectorySizeSummary {
+    bytes: u64,
+    allocated_bytes: u64,
+    file_count: u64,
+    skipped_count: u64,
+}
+
+fn dir_size_recursive(dir: &Path) -> DirectorySizeSummary {
+    let mut summary = DirectorySizeSummary::default();
     let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
 
     while let Some(current) = stack.pop() {
         let entries = match fs::read_dir(&current) {
             Ok(entries) => entries,
-            Err(_) => continue, // 跳过无权限的目录
+            Err(_) => {
+                summary.skipped_count = summary.skipped_count.saturating_add(1);
+                continue;
+            }
         };
         for entry in entries {
             let entry = match entry {
                 Ok(e) => e,
-                Err(_) => continue,
+                Err(_) => {
+                    summary.skipped_count = summary.skipped_count.saturating_add(1);
+                    continue;
+                }
             };
             let path = entry.path();
-            if path.is_symlink() {
-                continue;
-            }
-            match entry.metadata() {
+            match fs::symlink_metadata(&path) {
                 Ok(meta) => {
-                    if meta.is_dir() {
+                    let file_type = meta.file_type();
+                    if file_type.is_symlink() {
+                        summary.skipped_count = summary.skipped_count.saturating_add(1);
+                    } else if file_type.is_dir() {
                         stack.push(path);
                     } else {
-                        total_bytes += meta.len();
-                        file_count += 1;
+                        summary.bytes = summary.bytes.saturating_add(meta.len());
+                        summary.allocated_bytes = summary
+                            .allocated_bytes
+                            .saturating_add(meta.blocks().saturating_mul(512));
+                        summary.file_count = summary.file_count.saturating_add(1);
                     }
                 }
-                Err(_) => continue,
+                Err(_) => {
+                    summary.skipped_count = summary.skipped_count.saturating_add(1);
+                }
             }
         }
     }
-    (total_bytes, file_count)
+    summary
 }
 
 #[tauri::command]
@@ -2299,11 +2671,15 @@ fn get_dir_size(path: String) -> Result<serde_json::Value, AppError> {
     if !dir.is_dir() {
         return Err(AppError::invalid_path("不是一个目录", Some(path)));
     }
-    let (bytes, file_count) = dir_size_recursive(dir);
+    let summary = dir_size_recursive(dir);
     Ok(serde_json::json!({
-        "bytes": bytes,
-        "formatted": format_size(bytes),
-        "file_count": file_count
+        "path": path,
+        "bytes": summary.bytes,
+        "formatted": format_size(summary.bytes),
+        "allocated_bytes": summary.allocated_bytes,
+        "formatted_allocated": format_size(summary.allocated_bytes),
+        "file_count": summary.file_count,
+        "skipped_count": summary.skipped_count
     }))
 }
 
@@ -2486,27 +2862,32 @@ fn open_path(path: String) -> Result<(), AppError> {
 
 #[tauri::command]
 fn get_disk_info(path: String) -> Result<DiskInfo, AppError> {
-    let output = std::process::Command::new("df")
-        .args(["-k", "-P", &path])
+    #[cfg(target_os = "macos")]
+    if let Some(info) = get_primary_apfs_disk_info(&path) {
+        return Ok(info);
+    }
+
+    let mut command = std::process::Command::new("df");
+    command.args(["-k", "-P"]);
+    if path != "/" {
+        command.arg(&path);
+    }
+
+    let output = command
         .output()
         .map_err(|e| AppError::internal_at(format!("获取磁盘信息失败: {}", e), Some(path.clone())))?;
     let text = String::from_utf8(output.stdout)
         .map_err(|e| AppError::internal_at(format!("解析磁盘信息失败: {}", e), Some(path.clone())))?;
-    let line = text
-        .lines()
-        .nth(1)
+
+    let rows = parse_df_rows(&text);
+    let row = if path == "/" {
+        root_storage_row(&rows)
+    } else {
+        rows.first()
+    }
         .ok_or_else(|| AppError::internal_at("磁盘信息为空", Some(path.clone())))?;
-    let (filesystem, size, used, available, capacity, mount) = parse_df_line(line)
-        .map_err(|e| AppError::internal_at(e, Some(path.clone())))?;
-    Ok(DiskInfo {
-        filesystem: filesystem.into(),
-        size: format_kib(size),
-        used: format_kib(used),
-        available: format_kib(available),
-        capacity: capacity.into(),
-        capacity_value: parse_capacity(capacity),
-        mount,
-    })
+
+    Ok(disk_info_from_df_row(row, if path == "/" { Some("/") } else { None }))
 }
 
 fn parse_capacity(value: &str) -> u8 {
@@ -2526,47 +2907,7 @@ fn list_volumes() -> Result<Vec<VolumeInfo>, AppError> {
 
     let text = String::from_utf8(output.stdout)
         .map_err(|e| AppError::internal(format!("解析卷信息失败: {}", e)))?;
-    let mut volumes = Vec::new();
-    let mut seen_mounts = std::collections::HashSet::new();
-
-    for line in text.lines().skip(1) {
-        let Ok((filesystem, size, used, available, capacity, mount)) = parse_df_line(line) else {
-            continue;
-        };
-        if mount != "/" && !mount.starts_with("/Volumes") {
-            continue;
-        }
-        if !seen_mounts.insert(mount.clone()) {
-            continue;
-        }
-
-        let name = if mount == "/" {
-            "Macintosh HD".to_string()
-        } else {
-            Path::new(&mount)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(&mount)
-                .to_string()
-        };
-
-        volumes.push(VolumeInfo {
-            name,
-            path: mount.clone(),
-            filesystem: filesystem.into(),
-            size: format_kib(size),
-            used: format_kib(used),
-            available: format_kib(available),
-            capacity: capacity.into(),
-            capacity_value: parse_capacity(capacity),
-            is_root: mount == "/",
-            is_external: mount.starts_with("/Volumes/"),
-            is_ejectable: mount.starts_with("/Volumes/"),
-        });
-    }
-
-    volumes.sort_by(|a, b| b.is_root.cmp(&a.is_root).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-    Ok(volumes)
+    Ok(volume_infos_from_df_rows(&parse_df_rows(&text)))
 }
 
 #[tauri::command]
@@ -3081,6 +3422,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::default().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_liquid_glass::init())
         .setup(|app| {
             let log_dir = aether_log_dir(&app.path().home_dir()?);
             install_panic_hook(log_dir.clone());
@@ -3134,6 +3476,7 @@ pub fn run() {
             list_directory,
             cancel_directory_loads,
             get_home_dir,
+            preflight_file_permissions,
             open_system_settings,
             get_logs_dir,
             get_config_dir,
@@ -3143,6 +3486,8 @@ pub fn run() {
             start_window_drag,
             raise_window_at,
             debug_log,
+            get_native_liquid_glass_status,
+            set_native_liquid_glass_enabled,
             list_fonts,
             list_terminal_apps,
             open_terminal_at,
@@ -3172,7 +3517,7 @@ pub fn run() {
             delete_to_trash,
             create_file,
             create_folder,
-            make_alias,
+            duplicate_as_alias,
             compress_files,
             decompress_file,
             get_file_info,
@@ -3315,6 +3660,66 @@ mod tests {
         assert_eq!(format_kib(""), "");
     }
 
+    #[test]
+    fn format_storage_size_uses_decimal_units_for_system_storage() {
+        assert_eq!(format_storage_size(494_384_795_648), "494.4 GB");
+        assert_eq!(format_storage_size(12_546_826_240), "12.5 GB");
+    }
+
+    #[test]
+    fn parse_plist_values_from_diskutil_output() {
+        let plist = r#"
+<plist version="1.0">
+<dict>
+    <key>APFSContainerSize</key>
+    <integer>494384795648</integer>
+    <key>FilesystemUserVisibleName</key>
+    <string>APFS &amp; Local</string>
+</dict>
+</plist>
+"#;
+
+        assert_eq!(parse_plist_integer(plist, "APFSContainerSize"), Some(494_384_795_648));
+        assert_eq!(parse_plist_string(plist, "FilesystemUserVisibleName").as_deref(), Some("APFS & Local"));
+        assert_eq!(parse_plist_integer(plist, "Missing"), None);
+    }
+
+    #[test]
+    fn build_primary_apfs_disk_info_combines_data_and_system_usage() {
+        let data_plist = r#"
+<plist version="1.0">
+<dict>
+    <key>APFSContainerFree</key>
+    <integer>101154271232</integer>
+    <key>APFSContainerSize</key>
+    <integer>494384795648</integer>
+    <key>CapacityInUse</key>
+    <integer>348680560640</integer>
+    <key>FilesystemUserVisibleName</key>
+    <string>APFS</string>
+</dict>
+</plist>
+"#;
+        let system_plist = r#"
+<plist version="1.0">
+<dict>
+    <key>CapacityInUse</key>
+    <integer>12546826240</integer>
+</dict>
+</plist>
+"#;
+
+        let info = build_primary_apfs_disk_info(data_plist, Some(system_plist)).unwrap();
+
+        assert_eq!(info.filesystem, "APFS");
+        assert_eq!(info.size, "494.4 GB");
+        assert_eq!(info.used, "361.2 GB");
+        assert_eq!(info.available, "133.2 GB");
+        assert_eq!(info.capacity, "73%");
+        assert_eq!(info.capacity_value, 73);
+        assert_eq!(info.mount, "/");
+    }
+
     // ── parse_df_line ──
     #[test]
     fn parse_df_line_simple_mount() {
@@ -3333,6 +3738,41 @@ mod tests {
         let line = "/dev/disk2s1 1000 500 500 50% /Volumes/My Drive";
         let (_, _, _, _, _, mount) = parse_df_line(line).unwrap();
         assert_eq!(mount, "/Volumes/My Drive");
+    }
+
+    #[test]
+    fn root_storage_row_prefers_macos_data_volume() {
+        let text = "\
+Filesystem   1024-blocks      Used Available Capacity  Mounted on
+/dev/disk3s3s1   482797652  12252760  98786224    12%    /
+/dev/disk3s1     482797652 340505604  98786224    78%    /System/Volumes/Data
+";
+        let rows = parse_df_rows(text);
+        let row = root_storage_row(&rows).unwrap();
+
+        assert_eq!(row.mount, "/System/Volumes/Data");
+        assert_eq!(row.used, "340505604");
+        assert_eq!(row.capacity, "78%");
+    }
+
+    #[test]
+    fn volume_infos_use_macos_data_volume_for_root_storage() {
+        let text = "\
+Filesystem   1024-blocks      Used Available Capacity  Mounted on
+/dev/disk3s3s1   482797652  12252760  98786224    12%    /
+/dev/disk3s1     482797652 340505604  98786224    78%    /System/Volumes/Data
+/dev/disk5s1         38780     25924     12224    68%    /Volumes/Codex++
+";
+        let volumes = volume_infos_from_df_rows(&parse_df_rows(text));
+        let root = volumes.iter().find(|volume| volume.is_root).unwrap();
+
+        assert_eq!(root.name, "Macintosh HD");
+        assert_eq!(root.path, "/");
+        assert_eq!(root.used, "324.7 GB");
+        assert_eq!(root.capacity, "78%");
+        assert_eq!(root.capacity_value, 78);
+        assert_eq!(volumes.iter().filter(|volume| volume.is_root).count(), 1);
+        assert!(volumes.iter().any(|volume| volume.path == "/Volumes/Codex++"));
     }
 
     #[test]
@@ -3443,6 +3883,46 @@ mod tests {
         std::fs::write(&f, b"").unwrap();
         let next = unique_destination(&f);
         assert_eq!(next.file_name().unwrap().to_str().unwrap(), "Makefile copy");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn duplicate_as_alias_copies_file_with_alias_suffix() {
+        let temp = std::env::temp_dir().join(format!("aether-alias-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let src = temp.join("note.txt");
+        std::fs::write(&src, "hello").unwrap();
+
+        let duplicated = duplicate_as_alias(src.to_string_lossy().into()).unwrap();
+        let duplicated_path = Path::new(&duplicated);
+
+        assert_eq!(duplicated_path.file_name().unwrap().to_str().unwrap(), "note-替身.txt");
+        assert_eq!(std::fs::read_to_string(duplicated_path).unwrap(), "hello");
+        assert!(!std::fs::symlink_metadata(duplicated_path).unwrap().file_type().is_symlink());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn duplicate_as_alias_copies_folder_as_real_folder() {
+        let temp = std::env::temp_dir().join(format!("aether-alias-dir-{}", std::process::id()));
+        let src = temp.join("Project");
+        let nested = src.join("nested");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("readme.md"), "folder copy").unwrap();
+
+        let duplicated = duplicate_as_alias(src.to_string_lossy().into()).unwrap();
+        let duplicated_path = Path::new(&duplicated);
+        let metadata = std::fs::symlink_metadata(duplicated_path).unwrap();
+
+        assert_eq!(duplicated_path.file_name().unwrap().to_str().unwrap(), "Project-替身");
+        assert!(metadata.is_dir());
+        assert!(!metadata.file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(duplicated_path.join("nested/readme.md")).unwrap(), "folder copy");
 
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -4243,6 +4723,44 @@ mod tests {
         let err = get_dir_size(file.to_string_lossy().to_string()).unwrap_err();
         assert_eq!(err.kind, AppErrorKind::InvalidPath);
         assert_eq!(err.path.as_deref(), Some(file.to_string_lossy().as_ref()));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn get_dir_size_includes_nested_files_and_disk_size_fields() {
+        let temp = std::env::temp_dir().join(format!("aether-dir-size-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let nested = temp.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(temp.join("a.txt"), b"abc").unwrap();
+        std::fs::write(nested.join("b.txt"), b"12345").unwrap();
+
+        let result = get_dir_size(temp.to_string_lossy().to_string()).unwrap();
+        assert_eq!(result["path"].as_str(), Some(temp.to_string_lossy().as_ref()));
+        assert_eq!(result["bytes"].as_u64(), Some(8));
+        assert_eq!(result["formatted"].as_str(), Some("8 B"));
+        assert_eq!(result["file_count"].as_u64(), Some(2));
+        assert_eq!(result["skipped_count"].as_u64(), Some(0));
+        assert!(result["allocated_bytes"].as_u64().is_some());
+        assert!(result["formatted_allocated"].as_str().is_some());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn dir_size_recursive_skips_symlinks_without_following_them() {
+        let temp = std::env::temp_dir().join(format!("aether-dir-size-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        let real_file = temp.join("real.txt");
+        std::fs::write(&real_file, b"real").unwrap();
+        unix_fs::symlink(&real_file, temp.join("real-link")).unwrap();
+
+        let summary = dir_size_recursive(&temp);
+        assert_eq!(summary.bytes, 4);
+        assert_eq!(summary.file_count, 1);
+        assert_eq!(summary.skipped_count, 1);
 
         let _ = std::fs::remove_dir_all(&temp);
     }

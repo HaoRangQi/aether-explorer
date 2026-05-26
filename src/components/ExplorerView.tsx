@@ -10,7 +10,7 @@ import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, emitTo, listen } from '@tauri-apps/api/event';
-import { listDirectory, cancelDirectoryLoads, getHomeDir, getFileInfo, getAppIcon, getDirectorySignature, previewCopyFileConflicts, previewMoveFileConflicts, startCopyFilesTask, startMoveFilesTask, listTransferTasks, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, makeAlias, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload } from '../api/filesystem';
+import { listDirectory, cancelDirectoryLoads, getHomeDir, getFileInfo, getAppIcon, getDirectorySignature, previewCopyFileConflicts, previewMoveFileConflicts, startCopyFilesTask, startMoveFilesTask, listTransferTasks, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, duplicateAsAlias, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload } from '../api/filesystem';
 import type { FileTransferPayload, MoveConflict, MoveConflictStrategy, TransferTaskSnapshot } from '../api/filesystem';
 import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction } from '../types';
 import { QUICK_ACCESS } from '../constants';
@@ -37,8 +37,14 @@ import {
   navigateHistory,
   type NavigationHistory,
 } from '../lib/navigation-history';
+import {
+  resolveColumnActionDirectory,
+  resolveColumnPaneDirectory,
+  resolveColumnPathsAfterFileSelection,
+  resolveColumnPathsAfterFolderSelection,
+} from '../lib/column-navigation';
 import { resolveExplorerShortcut, resolveNextTypeaheadQuery, resolveTypeaheadTarget } from '../lib/keyboard-shortcuts';
-import { getParentPath } from '../lib/path-helpers';
+import { getParentPath, isVirtualPath } from '../lib/path-helpers';
 import {
   NATIVE_MENU_COMMAND_EVENT,
   resolveNativeMenuDisplayMode,
@@ -154,6 +160,16 @@ interface FileOperationOptions {
   useTransferTask?: boolean;
 }
 
+interface DirectorySizeInfo {
+  path: string;
+  bytes: number;
+  formatted: string;
+  allocated_bytes?: number;
+  formatted_allocated?: string;
+  file_count: number;
+  skipped_count?: number;
+}
+
 interface TransferTaskWaitMessages {
   success: string;
   failed: string;
@@ -255,7 +271,8 @@ interface ExplorerViewProps {
 
 export default function ExplorerView({ view, isActive = false, currentTabLabelKey, initialPath, theme, selectedFileIds, onSelectFiles, onSelectionCountChange, onStartTransfer, onOpenTab, onCreateWindow, favorites, onToggleFavorite, fileTags, onFileTagsChange, recentItems, onRecordRecent, onClearRecent, onThemeChange, onViewChange, onTitleChange, onPathChange }: ExplorerViewProps) {
   const { t } = useTranslation();
-  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, fileIds: string[], isBlank?: boolean } | null>(null);
+  const liquidGlassEnabled = theme.enableLiquidGlass === true;
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, fileIds: string[], isBlank?: boolean, targetDir?: string } | null>(null);
   const [displayMode, setDisplayMode] = useState<DisplayMode>('list');
   const [currentPath, setCurrentPath] = useState<string>('');
   const [navigationHistory, setNavigationHistory] = useState<NavigationHistory>(EMPTY_NAVIGATION_HISTORY);
@@ -277,6 +294,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [appIconMap, setAppIconMap] = useState<Record<string, string>>({});
   const [mediaDurationMap, setMediaDurationMap] = useState<Record<string, string>>({});
   const [columnFilesCache, setColumnFilesCache] = useState<Record<string, FileItem[]>>({});
+  const [columnLoadErrors, setColumnLoadErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [directoryErrorKind, setDirectoryErrorKind] = useState<DirectoryErrorKind | null>(null);
@@ -319,6 +337,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const fileDragActivityTimerRef = useRef<number | null>(null);
   const fileDragClearTimerRef = useRef<number | null>(null);
   const externalDragFallbackTimerRef = useRef<number | null>(null);
+  const localFileDropHandledRef = useRef(false);
   const draggedFileIdRef = useRef<string | null>(null);
   const activeTransferRef = useRef<{ transferId: string; paths: string[] } | null>(null);
   const incomingDragTimerRef = useRef<number | null>(null);
@@ -337,7 +356,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const findFileByIdRef = useRef<(id: string) => FileItem | undefined>(() => undefined);
   const getFolderIdFromPointRef = useRef<(clientX: number, clientY: number, draggedFileId?: string) => string | null>(() => null);
   const moveDraggedFilesRef = useRef<(draggedFileId: string, targetFolderId: string) => Promise<void>>(async () => {});
-  const refreshCurrentDirRef = useRef<(fullRefresh?: boolean) => Promise<FileItem[]>>(async () => []);
+  const refreshCurrentDirRef = useRef<(fullRefresh?: boolean, targetPath?: string) => Promise<FileItem[]>>(async () => []);
   const showFeedbackRef = useRef<(message: string) => void>(() => {});
   const importExternalPathsRef = useRef<(paths: string[], targetPath?: string) => Promise<boolean>>(async () => false);
   const navigateToPathRef = useRef<(path: string, options?: { replace?: boolean }) => void>(() => {});
@@ -346,7 +365,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const focusFileByPrefixRef = useRef<(prefix: string) => void>(() => {});
   const handleCopyToClipboardRef = useRef<(items?: FileItem[]) => Promise<void>>(async () => {});
   const handleCutToClipboardRef = useRef<(items?: FileItem[]) => Promise<void>>(async () => {});
-  const handlePasteFromClipboardRef = useRef<() => Promise<void>>(async () => {});
+  const handlePasteFromClipboardRef = useRef<(targetPath?: string) => Promise<void>>(async () => {});
   const handleOpenFileRef = useRef<(file: FileItem) => void>(() => {});
   const handleDeleteFileRef = useRef<(file: FileItem) => Promise<void>>(async () => {});
   const handleQuickLookRef = useRef<(file?: FileItem) => Promise<void>>(async () => {});
@@ -364,8 +383,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   onThemeChangeRef.current = onThemeChange;
   selectedFileIdsRef.current = selectedFileIds;
   dragOverFolderIdRef.current = dragOverFolderId;
-  const loadRequestSeqRef = useRef(0);
-  const columnLoadGenerationRef = useRef(0);
+  // Rust 端的目录取消状态会跨 WebView reload 保留。
+  // 用时间戳作为起点，避免 reload 后请求号从 1 重来，被旧页面的最新请求号判定为过期。
+  const loadRequestSeqRef = useRef(Date.now());
+  const columnLoadGenerationRef = useRef(Date.now());
   const pendingColumnLoadsRef = useRef<Map<string, number>>(new Map());
   const pendingAppIconPathsRef = useRef<Set<string>>(new Set());
   const failedAppIconPathsRef = useRef<Set<string>>(new Set());
@@ -375,8 +396,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const iconFlushTimerRef = useRef<number | null>(null);
   const [contextMenuSize, setContextMenuSize] = useState<{ key: string; width: number; height: number } | null>(null);
 
-  const [dirSize, setDirSize] = useState<{ bytes: number; formatted: string; file_count: number } | null>(null);
+  const [dirSize, setDirSize] = useState<DirectorySizeInfo | null>(null);
   const [dirSizeLoading, setDirSizeLoading] = useState(false);
+  const [dirSizeError, setDirSizeError] = useState('');
   const [inspectorOverride, setInspectorOverride] = useState(false); // 一次性弹出
 
   // 关闭面板（手动关闭或选中文件时）
@@ -386,6 +408,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (!theme.showPreviewPanel) {
       setDirSize(null);
       setDirSizeLoading(false);
+      setDirSizeError('');
     }
   };
 
@@ -420,8 +443,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     void cancelDirectoryLoads(directoryLoadScopes.column, columnLoadGenerationRef.current).catch(() => {});
     setColumnPaths([]);
     setColumnFilesCache({});
+    setColumnLoadErrors({});
   }, [directoryLoadScopes.column]);
   resetColumnStateRef.current = resetColumnState;
+
+  const activeDirectoryPath = useMemo(() => (
+    resolveColumnActionDirectory(currentPath, displayMode, columnPaths)
+  ), [currentPath, displayMode, columnPaths]);
+
+  const getActionDirectory = useCallback((preferredPath?: string) => {
+    if (preferredPath && !isVirtualPath(preferredPath)) return preferredPath;
+    return activeDirectoryPath;
+  }, [activeDirectoryPath]);
 
   const confirmLargeBatchOperation = useCallback(async (count: number) => {
     if (count <= LARGE_BATCH_OPERATION_THRESHOLD) return true;
@@ -482,7 +515,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const isProtectedPathBlocked = protectedRoot
     ? blockedProtectedRoots.includes(protectedRoot.path)
     : false;
-  const needsProtectedPathConsent = Boolean(protectedRoot && !isProtectedPathApproved && !isProtectedPathBlocked);
+  const needsProtectedPathConsent = false;
 
   const approveProtectedRoot = useCallback(() => {
     if (!protectedRoot) return;
@@ -703,6 +736,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     const sourceWindow = getCurrentWindow().label;
     const transferId = `xfer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const previewName = paths.length === 1 ? file.name : `${file.name} 等 ${paths.length} 项`;
+    localFileDropHandledRef.current = false;
     if (fileDragClearTimerRef.current) {
       window.clearTimeout(fileDragClearTimerRef.current);
       fileDragClearTimerRef.current = null;
@@ -772,22 +806,27 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
   handleCutToClipboardRef.current = handleCutToClipboard;
 
-  const handlePasteFromClipboard = async () => {
+  const handlePasteFromClipboard = async (targetPath?: string) => {
     const payload = await refreshFileClipboardState();
     const paths = payload?.paths ?? [];
     if (paths.length === 0) {
       showFeedback(t('messages.clipboardEmpty'));
       return;
     }
+    const targetDir = getActionDirectory(targetPath || contextMenu?.targetDir);
+    if (!targetDir) {
+      showFeedback(t('messages.crossWindowNoTarget', { defaultValue: '当前没有可作为目标的真实目录' }));
+      return;
+    }
     setContextMenu(null);
     try {
       if (payload?.cut) {
-        await executeMoveFiles(makeFileItemsFromPaths(paths), makeFolderItemFromPath(currentPath), 'abort', {
+        await executeMoveFiles(makeFileItemsFromPaths(paths), makeFolderItemFromPath(targetDir), 'abort', {
           clearClipboardOnSuccess: true,
           useTransferTask: true,
         });
       } else {
-        await executeCopyFiles(makeFileItemsFromPaths(paths), makeFolderItemFromPath(currentPath), 'abort');
+        await executeCopyFiles(makeFileItemsFromPaths(paths), makeFolderItemFromPath(targetDir), 'abort');
       }
     } catch (e) {
       showFeedback(t('messages.operationFailed', { error: formatAppError(e) }));
@@ -796,36 +835,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   handlePasteFromClipboardRef.current = handlePasteFromClipboard;
 
   const handleShowInspector = (useCurrentDir = false) => {
-    const calcAndOpen = () => {
+    const openInspector = () => {
+      if (useCurrentDir) onSelectFiles([]);
       setInspectorOverride(true);
       setContextMenu(null);
-      const target = useCurrentDir ? null : lastSelectedFile;
-      if (target) {
-        if (target.type === 'folder') {
-          setDirSizeLoading(true);
-          setDirSize(null);
-          invoke<{ bytes: number; formatted: string; file_count: number }>('get_dir_size', { path: target.path })
-            .then(result => { setDirSize(result); setDirSizeLoading(false); })
-            .catch(() => { setDirSizeLoading(false); });
-        } else {
-          setDirSizeLoading(false);
-          setDirSize(null);
-        }
-      } else {
-        setDirSizeLoading(true);
-        setDirSize(null);
-        invoke<{ bytes: number; formatted: string; file_count: number }>('get_dir_size', { path: currentPath })
-          .then(result => { setDirSize(result); setDirSizeLoading(false); })
-          .catch(() => { setDirSizeLoading(false); });
-      }
     };
     // 空白调用且面板已开：先关再开（强制刷新内容）
     if (useCurrentDir && inspectorOverride) {
       setInspectorOverride(false);
-      setTimeout(calcAndOpen, 150);
+      setTimeout(openInspector, 150);
       return;
     }
-    calcAndOpen();
+    openInspector();
   };
   const [lastActivatedFileId, setLastActivatedFileId] = useState<string | null>(null);
   const [pulseFileId, setPulseFileId] = useState<string | null>(null);
@@ -1073,13 +1094,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   useEffect(() => {
     let cancelled = false;
     if (!currentPath || isVirtualRoot) return;
-    if (needsProtectedPathConsent) {
-      setFiles([]);
-      setLoading(false);
-      setLoadError('');
-      setDirectoryErrorKind(null);
-      return () => { cancelled = true; };
-    }
     if (isProtectedPathBlocked) {
       setFiles([]);
       setLoading(false);
@@ -1278,6 +1292,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       const folderId = getFolderIdFromPointRef.current(event.clientX, event.clientY, dragState.id);
       logDragDebug(`mouseDrop draggedId=${dragState.id} folderId=${folderId ?? ''}`);
       if (folderId) {
+        if (localFileDropHandledRef.current) {
+          finishSharedFileDragRef.current();
+          return;
+        }
+        localFileDropHandledRef.current = true;
         await moveDraggedFilesRef.current(dragState.id, folderId);
       }
       finishSharedFileDragRef.current();
@@ -1298,18 +1317,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   }, [view, onSelectFiles, resetColumnState]);
   
   const displayedFiles = isFavoritesRoot ? favoriteFiles : isRecentRoot ? recentFiles : isTagRoot ? taggedFiles : files;
-  const filesWithDeferredProtectedPreviews = useMemo(() => displayedFiles.map(file => {
-    if (!getProtectedRootForPath(file.path)) return file;
-    if (file.type === 'image' || file.type === 'video' || file.type === 'application') {
-      return { ...file, thumbnail: undefined };
-    }
-    return file;
-  }), [displayedFiles, getProtectedRootForPath]);
-  const filesWithAppIcons = useMemo(() => filesWithDeferredProtectedPreviews.map(file => (
-    file.type === 'application' && !getProtectedRootForPath(file.path) && appIconMap[file.path]
+  const filesWithAppIcons = useMemo(() => displayedFiles.map(file => (
+    file.type === 'application' && appIconMap[file.path]
       ? { ...file, thumbnail: appIconMap[file.path] }
       : file
-  )), [filesWithDeferredProtectedPreviews, appIconMap, getProtectedRootForPath]);
+  )), [displayedFiles, appIconMap]);
   const filesWithMediaMetadata = useMemo(() => filesWithAppIcons.map(file => (
     file.type === 'video' && mediaDurationMap[file.path]
       ? { ...file, duration: mediaDurationMap[file.path] }
@@ -1317,19 +1329,25 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   )), [filesWithAppIcons, mediaDurationMap]);
 
   useEffect(() => {
-    hydrateAppIcons(filesWithDeferredProtectedPreviews.filter(file => !getProtectedRootForPath(file.path)));
-  }, [filesWithDeferredProtectedPreviews, getProtectedRootForPath, hydrateAppIcons]);
+    hydrateAppIcons(displayedFiles);
+  }, [displayedFiles, hydrateAppIcons]);
 
-  const fileLookup = useMemo(() => buildFileLookup(filesWithMediaMetadata), [filesWithMediaMetadata]);
+  const selectableFiles = useMemo(() => {
+    const filesById = new Map<string, FileItem>();
+    filesWithMediaMetadata.forEach(file => filesById.set(file.id, file));
+    Object.keys(columnFilesCache).forEach(columnPath => {
+      const columnFiles = columnFilesCache[columnPath];
+      columnFiles.forEach(file => filesById.set(file.id, file));
+    });
+    return Array.from(filesById.values());
+  }, [columnFilesCache, filesWithMediaMetadata]);
+  const fileLookup = useMemo(() => buildFileLookup(selectableFiles), [selectableFiles]);
   const selectedFiles = useMemo(() => (
     resolveSelectedFiles(selectedFileIds, fileLookup)
   ), [selectedFileIds, fileLookup]);
   const lastSelectedFile = useMemo(() => (
     resolveLastSelectedFile(selectedFileIds, fileLookup)
   ), [selectedFileIds, fileLookup]);
-  const selectedFileAutoPreviewDeferred = useMemo(() => (
-    lastSelectedFile ? Boolean(getProtectedRootForPath(lastSelectedFile.path)) : false
-  ), [lastSelectedFile, getProtectedRootForPath]);
   const isAdminContextMenuEmpty = useMemo(() => !(theme.contextMenuExtensions || []).some(ext => ext.enabled), [theme.contextMenuExtensions]);
   const enabledContextExtensions = useMemo(() => (theme.contextMenuExtensions || []).filter(ext => ext.enabled), [theme.contextMenuExtensions]);
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 150);
@@ -1568,12 +1586,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     };
   }, [isActive, t]);
 
-  // Aether↔Aether 跨窗口接收：执行 copy/move 到 currentPath
+  // Aether↔Aether 跨窗口接收：执行 copy/move 到当前可写的真实目录。
   // 来源可能是 ① banner 上的显式按钮点击 ② 源端 dragEnd 携带坐标命中本窗口
   const acceptIncomingFileDrag = async (op: 'copy' | 'move') => {
     const drag = incomingFileDragRef.current;
     if (!drag) return;
-    if (!currentPath) {
+    const targetDir = getActionDirectory();
+    if (!targetDir) {
       showFeedback(t('messages.crossWindowNoTarget', {
         defaultValue: '当前没有可作为目标的真实目录',
       }));
@@ -1585,7 +1604,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       incomingDragTimerRef.current = null;
     }
 
-    const targetFolder = makeFolderItemFromPath(currentPath);
+    const targetFolder = makeFolderItemFromPath(targetDir);
 
     try {
       let acceptedOp: FileDropAcceptedPayload['op'] = op;
@@ -1628,16 +1647,24 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   // 把最新版本的 accept 函数挂到 ref 上供 Tauri event listener 调用
   acceptIncomingFileDragRef.current = acceptIncomingFileDrag;
 
-  async function importExternalPaths(paths: string[], targetPath = currentPath) {
+  async function importExternalPaths(paths: string[], targetPath?: string) {
     const cleanPaths = paths.filter(Boolean);
-    if (cleanPaths.length === 0 || !targetPath) return false;
+    if (cleanPaths.length === 0) return false;
+
+    const targetDir = getActionDirectory(targetPath);
+    if (!targetDir) {
+      showFeedback(t('messages.crossWindowNoTarget', {
+        defaultValue: '当前没有可作为目标的真实目录',
+      }));
+      return false;
+    }
 
     try {
       const shouldContinue = await confirmLargeBatchOperation(cleanPaths.length);
       if (!shouldContinue) return false;
 
-      const targetFolder = makeFolderItemFromPath(targetPath);
-      const conflicts = await previewCopyFileConflicts(cleanPaths, targetPath);
+      const targetFolder = makeFolderItemFromPath(targetDir);
+      const conflicts = await previewCopyFileConflicts(cleanPaths, targetDir);
       if (conflicts.length > 0) {
         setMoveConflictDialog({
           filesToMove: makeFileItemsFromPaths(cleanPaths),
@@ -1648,14 +1675,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         return true;
       }
 
-      const taskId = await startCopyFilesTask(cleanPaths, targetPath, 'abort');
+      const taskId = await startCopyFilesTask(cleanPaths, targetDir, 'abort');
       onStartTransfer();
       showFeedback(t('messages.importStarted', { count: cleanPaths.length }));
       void waitForTransferTask(taskId, cleanPaths.length, {
         success: 'messages.importedFromFinder',
         failed: 'messages.finderImportFailed',
         failedDefaultValue: '导入失败：{{error}}',
-      });
+      }, targetDir);
       return true;
     } catch (err) {
       showFeedback(t('messages.finderImportFailed', {
@@ -1667,21 +1694,26 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   }
   importExternalPathsRef.current = importExternalPaths;
 
-  async function waitForTransferTaskResult(taskId: string): Promise<TransferTaskSnapshot | null> {
+  async function waitForTransferTaskResult(taskId: string, refreshTargetPath?: string): Promise<TransferTaskSnapshot | null> {
     for (;;) {
       const task = (await listTransferTasks()).find(item => item.id === taskId);
       if (!task) return null;
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
-        await refreshCurrentDir();
+        await refreshCurrentDir(false, refreshTargetPath);
         return task;
       }
       await new Promise(resolve => window.setTimeout(resolve, 800));
     }
   }
 
-  async function waitForTransferTask(taskId: string, expectedCount: number, messages: TransferTaskWaitMessages) {
+  async function waitForTransferTask(
+    taskId: string,
+    expectedCount: number,
+    messages: TransferTaskWaitMessages,
+    refreshTargetPath?: string,
+  ) {
     try {
-      const task = await waitForTransferTaskResult(taskId);
+      const task = await waitForTransferTaskResult(taskId, refreshTargetPath);
       if (!task) {
         showFeedback(t(messages.failed, {
           error: t('messages.transferTaskUnavailable', { defaultValue: '传输任务记录已清理' }),
@@ -1714,9 +1746,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   }
 
-  async function waitForCrossWindowTask(taskId: string): Promise<TransferTaskSnapshot | null> {
+  async function waitForCrossWindowTask(taskId: string, refreshTargetPath?: string): Promise<TransferTaskSnapshot | null> {
     try {
-      const task = await waitForTransferTaskResult(taskId);
+      const task = await waitForTransferTaskResult(taskId, refreshTargetPath);
       if (!task) {
         showFeedback(t('messages.operationFailed', {
           error: t('messages.transferTaskUnavailable', { defaultValue: '传输任务记录已清理' }),
@@ -1759,7 +1791,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     logDragDebug(`crossWindowCopyTaskStarted taskId=${taskId} count=${paths.length}`);
     onStartTransfer();
     showFeedback(t('messages.copyStarted', { count: paths.length }));
-    return waitForCrossWindowTask(taskId);
+    return waitForCrossWindowTask(taskId, targetFolder.path);
   }
 
   async function startCrossWindowMoveTask(
@@ -1782,7 +1814,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     logDragDebug(`crossWindowMoveTaskStarted taskId=${taskId} count=${paths.length}`);
     onStartTransfer();
     showFeedback(t('messages.moveStarted', { count: paths.length }));
-    const task = await waitForCrossWindowTask(taskId);
+    const task = await waitForCrossWindowTask(taskId, targetFolder.path);
     if (task) {
       showMoveTaskCompletedFeedback(task, paths.length);
     }
@@ -1910,21 +1942,22 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       setIsReceivingExternalDrag(false);
       const paths = Array.isArray(payload?.paths) ? payload.paths.filter(Boolean) : [];
       if (paths.length === 0) return;
-      if (!currentPath) return;
+      const targetDir = getActionDirectory();
+      if (!targetDir) return;
       // 系统拖入和 HTML5 拖入可能同时触发；用 surface 元素 onDrop 也会收到 e.dataTransfer.files。
       // 这里只处理"webview onDrop 没拿到"的兜底场景：检查 paths 是否已被处理过。
       if (recentExternalDropRef.current.has(paths[0])) return;
       recentExternalDropRef.current.add(paths[0]);
       window.setTimeout(() => recentExternalDropRef.current.delete(paths[0]), 1500);
 
-      await importExternalPathsRef.current(paths, currentPath);
+      await importExternalPathsRef.current(paths, targetDir);
     }).then(fn => unlistens.push(fn)).catch(() => {});
 
     return () => {
       cancelled = true;
       unlistens.forEach(fn => fn());
     };
-  }, [isActive, currentPath]);
+  }, [getActionDirectory, isActive]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -1947,12 +1980,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     pulseTimerRef.current = window.setTimeout(() => setPulseFileId(null), 260);
     if (next.type === 'folder') {
       if (displayMode === 'column') {
-        const parent = next.path.substring(0, next.path.lastIndexOf('/'));
-        const parentIndex = columnPaths.indexOf(parent);
-        const newPaths = parentIndex >= 0
-          ? columnPaths.slice(0, parentIndex + 1)
-          : columnPaths;
-        setColumnPaths([...newPaths, next.path]);
+        setColumnPaths(paths => resolveColumnPathsAfterFolderSelection(paths, next.path, 0));
       }
     }
     scrollFileIntoView(next.id, currentLevelFiles.findIndex(file => file.id === next.id));
@@ -2048,7 +2076,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       } else if (action === 'showInfo') {
         onThemeChangeRef.current({ ...theme, showPreviewPanel: true });
       } else if (action === 'refresh') {
-        void refreshCurrentDirRef.current(true);
+        void refreshCurrentDirRef.current(true, getActionDirectory() || undefined);
       } else if (action === 'showListView') {
         setDisplayMode('list');
       } else if (action === 'showGridView') {
@@ -2064,8 +2092,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       } else if (action === 'forward') {
         navigateForward();
       } else if (action === 'navigateParent') {
-        const parent = getParentPath(currentPath);
-        if (parent !== currentPath) navigateToPathRef.current(parent);
+        const parentSource = getActionDirectory() || currentPath;
+        if (!parentSource || isVirtualPath(parentSource)) return;
+        const parent = getParentPath(parentSource);
+        if (parent !== parentSource) navigateToPathRef.current(parent);
       } else if ((action === 'openFolder' || action === 'openSelection') && lastSelectedFile) {
         handleOpenFileRef.current(lastSelectedFile);
       } else if (action === 'deleteSelection' && selectedFiles.length > 0) {
@@ -2096,7 +2126,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isActive, currentLevelFiles, onSelectFiles, selectedFiles, lastSelectedFile, theme, typeaheadQuery, displayMode, currentPath, navigateBack, navigateForward]);
+  }, [isActive, currentLevelFiles, onSelectFiles, selectedFiles, lastSelectedFile, theme, typeaheadQuery, displayMode, currentPath, navigateBack, navigateForward, getActionDirectory]);
 
   useEffect(() => () => {
     if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
@@ -2132,7 +2162,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setContextMenu(null);
   };
 
-  const handleSelectFile = (file: FileItem, e?: React.MouseEvent | React.KeyboardEvent) => {
+  const handleSelectFile = (file: FileItem, e?: React.MouseEvent | React.KeyboardEvent, sourceColumnIndex?: number) => {
     if (e) {
       const isCmd = e.metaKey || e.ctrlKey;
       const isShift = e.shiftKey;
@@ -2167,14 +2197,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     if (displayMode === 'column') {
       if (file.type === 'folder') {
-        // 找到这个文件夹所在列：父目录是 currentPath（第一列）还是 columnPaths 里的某一项。
-        // 之前实现错把"file.path 是否在 columnPaths"当判断，导致每次新点都清空 → 永远只有 2 列。
-        const parent = file.path.substring(0, file.path.lastIndexOf('/'));
-        const parentIndex = columnPaths.indexOf(parent);
-        const newPaths = parentIndex >= 0
-          ? columnPaths.slice(0, parentIndex + 1)
-          : columnPaths;
-        setColumnPaths([...newPaths, file.path]);
+        setColumnPaths(paths => resolveColumnPathsAfterFolderSelection(paths, file.path, sourceColumnIndex));
+      } else {
+        setColumnPaths(paths => resolveColumnPathsAfterFileSelection(paths, file.path, sourceColumnIndex));
       }
     }
   };
@@ -2269,7 +2294,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     });
   };
 
-  const handleExternalDrop = async (e: React.DragEvent, targetPath = currentPath) => {
+  const handleExternalDrop = async (e: React.DragEvent, targetPath?: string) => {
     const rawFiles = Array.from(e.dataTransfer.files || []);
     const paths = rawFiles
       .map(file => (file as File & { path?: string }).path)
@@ -2330,8 +2355,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     const payload = await readTransferPayload(e.dataTransfer);
     if (payload?.paths.length) {
+      const targetDir = getActionDirectory();
+      if (!targetDir) {
+        showFeedback(t('messages.crossWindowNoTarget', {
+          defaultValue: '当前没有可作为目标的真实目录',
+        }));
+        return;
+      }
       e.preventDefault();
-      await executeMoveFiles(makeFileItemsFromPaths(payload.paths), makeFolderItemFromPath(currentPath), 'abort', {
+      localFileDropHandledRef.current = true;
+      await executeMoveFiles(makeFileItemsFromPaths(payload.paths), makeFolderItemFromPath(targetDir), 'abort', {
         clearDragPayloadOnSuccess: true,
         useTransferTask: true,
       });
@@ -2542,6 +2575,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleDragStart = (e: React.DragEvent, file: FileItem) => {
     draggedFileIdRef.current = file.id;
+    localFileDropHandledRef.current = false;
     const paths = writeDragPayload(file);
     const payload: FileTransferPayload = { paths, cut: true };
     const serialized = JSON.stringify(payload);
@@ -2588,10 +2622,28 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     stopCursorRaiseTracking();
 
+    const activeDraggedId = draggedFileIdRef.current;
+    const pointTarget = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    const endedInsideApp = Boolean(pointTarget);
+    const pointFolderId = getFolderIdFromPointRef.current(e.clientX, e.clientY, activeDraggedId || undefined);
+
     // 松手即触发：广播屏幕坐标 + 修饰键到所有窗口。
     // 目标窗口收到后判定坐标是否落在自己范围内，落入则立刻执行 copy/move。
     const active = activeTransferRef.current;
-    if (active) {
+    const localDropHandled = localFileDropHandledRef.current;
+    if (active && !localDropHandled && pointFolderId) {
+      localFileDropHandledRef.current = true;
+      draggedFileIdRef.current = null;
+      setDragPreview(null);
+      if (dragOverFolderId !== null) setDragOverFolderId(null);
+      clearExternalDragFallback();
+      void moveDraggedFiles(activeDraggedId || '', pointFolderId).finally(() => {
+        finishSharedFileDrag(400);
+      });
+      return;
+    }
+
+    if (active && !localDropHandled) {
       void emit(FILE_DRAG_END_AT_EVENT, {
         transferId: active.transferId,
         screenX: e.screenX,
@@ -2609,7 +2661,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     // 松手后立刻清理本地状态。目标窗口若接收，会反向 emit drop-accepted。
     // 给一个短暂宽限期等 drop-accepted 回来再发 END（避免目标窗口 listener 还没就绪）。
     clearExternalDragFallback();
-    if (active && !dragOverFolderId) {
+    if (localDropHandled) {
+      finishSharedFileDrag(400);
+    } else if (active && !dragOverFolderId && !endedInsideApp) {
       externalDragFallbackTimerRef.current = window.setTimeout(() => {
         externalDragFallbackTimerRef.current = null;
         if (!activeTransferRef.current || activeTransferRef.current.transferId !== active.transferId) return;
@@ -2630,6 +2684,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     e.preventDefault();
     e.stopPropagation();
+    if (localFileDropHandledRef.current) {
+      finishSharedFileDrag();
+      return;
+    }
+    localFileDropHandledRef.current = true;
     setDragOverFolderId(null);
 
     const payload = await readTransferPayload(e.dataTransfer);
@@ -2782,8 +2841,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     return `${base.substring(0, 25)}...${ext}`;
   };
 
-  const renderFileItem = (file: FileItem, isColumnItem = false, sortIndex?: number) => {
-    const isSelected = selectedFileIds.includes(file.id) || (isColumnItem && columnPaths.includes(file.id));
+  const renderFileItem = (file: FileItem, isColumnItem = false, sortIndex?: number, sourceColumnIndex?: number) => {
+    const isColumnBranchSelected = isColumnItem
+      && file.type === 'folder'
+      && typeof sourceColumnIndex === 'number'
+      && columnPaths[sourceColumnIndex] === file.path;
+    const isSelected = selectedFileIds.includes(file.id) || isColumnBranchSelected;
     const isPulsing = pulseFileId === file.id;
     const isDropTarget = dragOverFolderId === file.id && file.type === 'folder';
     const formattedName = formatFileName(file.name);
@@ -2816,7 +2879,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           onDragLeave={file.type === 'folder' ? (e) => handleDragLeave(e, file.id) : undefined}
           onDragEnd={handleDragEnd}
           onDrop={file.type === 'folder' ? (e) => handleDrop(e, file.id) : undefined}
-          onClick={(e) => { e.stopPropagation(); handleSelectFile(file, e); }}
+          onClick={(e) => { e.stopPropagation(); handleSelectFile(file, e, sourceColumnIndex); }}
           onDoubleClick={() => handleDoubleClick(file)}
           title={isLongName ? file.name : undefined}
           onContextMenu={(e) => { void handleContextMenu(e, [file.id]); }}
@@ -2909,7 +2972,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           onDragEnd={handleDragEnd}
           onDrop={file.type === 'folder' ? (e) => handleDrop(e, file.id) : undefined}
           title={isLongName ? file.name : undefined}
-          onClick={(e) => { e.stopPropagation(); handleSelectFile(file, e); }}
+          onClick={(e) => { e.stopPropagation(); handleSelectFile(file, e, sourceColumnIndex); }}
           onDoubleClick={() => handleDoubleClick(file)}
           onContextMenu={(e) => { void handleContextMenu(e, [file.id]); }}
           animate={isPulsing ? { scale: [1, 0.985, 1.01, 1] } : undefined}
@@ -3062,30 +3125,58 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
   findFileByIdRef.current = findFileById;
 
-  const loadColumnFiles = (colPath: string) => {
+  const loadColumnFiles = useCallback((colPath: string) => {
+    if (!colPath || isVirtualPath(colPath)) return;
     if (columnFilesCache[colPath]) return;
     const generation = columnLoadGenerationRef.current;
     if (pendingColumnLoadsRef.current.get(colPath) === generation) return;
     pendingColumnLoadsRef.current.set(colPath, generation);
+    setColumnLoadErrors(prev => {
+      if (!prev[colPath]) return prev;
+      const next = { ...prev };
+      delete next[colPath];
+      return next;
+    });
     listDirectory(colPath, theme.showHiddenFiles, {
       requestScope: directoryLoadScopes.column,
       requestId: generation,
     }).then(entries => {
       if (generation !== columnLoadGenerationRef.current) return;
       setColumnFilesCache(prev => ({ ...prev, [colPath]: entries }));
-    }).catch(() => {}).finally(() => {
+      setColumnLoadErrors(prev => {
+        if (!prev[colPath]) return prev;
+        const next = { ...prev };
+        delete next[colPath];
+        return next;
+      });
+    }).catch(err => {
+      if (generation !== columnLoadGenerationRef.current) return;
+      const appError = normalizeAppError(err);
+      if (appError.kind === 'Cancelled') return;
+      setColumnLoadErrors(prev => ({ ...prev, [colPath]: appError.userMessage }));
+    }).finally(() => {
       if (pendingColumnLoadsRef.current.get(colPath) === generation) {
         pendingColumnLoadsRef.current.delete(colPath);
       }
     });
-  };
+  }, [columnFilesCache, directoryLoadScopes.column, theme.showHiddenFiles]);
+
+  useEffect(() => {
+    if (displayMode !== 'column') return;
+    columnPaths.forEach(path => loadColumnFiles(path));
+  }, [columnPaths, displayMode, loadColumnFiles]);
 
   const getColumnFiles = (parentPath: string | undefined) => {
-    if (!parentPath) return displayedFiles;
+    if (!parentPath) return currentLevelFiles;
     if (columnFilesCache[parentPath]) return columnFilesCache[parentPath];
-    loadColumnFiles(parentPath);
     return [];
   };
+
+  const getDirectoryEntries = useCallback((targetPath: string) => {
+    if (!targetPath) return [] as FileItem[];
+    if (targetPath === currentPath && !isVirtualRoot) return files;
+    return columnFilesCache[targetPath] || [];
+  }, [columnFilesCache, currentPath, files, isVirtualRoot]);
 
   const groupOptions: Array<{ id: GroupBy; label: string }> = [
     { id: 'none', label: t('explorer.groupNone', '不分组') },
@@ -3184,13 +3275,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     let cancelled = false;
     setImagePreviewFailed(false);
     setPdfPreviewFailed(false);
-    setPdfPreviewLoading(Boolean(f && f.type === 'pdf' && !getProtectedRootForPath(f.path)));
-    if (f && getProtectedRootForPath(f.path)) {
-      setTextPreview('');
-      setTextPreviewLoading(false);
-      setPdfPreviewLoading(false);
-      return () => { cancelled = true; };
-    }
+    setPdfPreviewLoading(Boolean(f && f.type === 'pdf'));
     if (f && (f.type === 'text' || f.type === 'code')) {
       setTextPreviewLoading(true);
       invoke<string>('read_text_preview', { path: f.path })
@@ -3208,7 +3293,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       setTextPreviewLoading(false);
     }
     return () => { cancelled = true; };
-  }, [lastSelectedFile, getProtectedRootForPath]);
+  }, [lastSelectedFile]);
 
   const pathSegments = useMemo(() => {
     if (!currentPath) return [];
@@ -3244,7 +3329,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   // ── File Operation Handlers ──
 
   // Context menu helper — respects system menu preference
-  const openSystemContextMenu = async (targetFiles: FileItem[], isBlank = false, position?: { x: number; y: number }) => {
+  const openSystemContextMenu = async (
+    targetFiles: FileItem[],
+    isBlank = false,
+    position?: { x: number; y: number },
+    targetDir?: string,
+  ) => {
     await focusCurrentWindow();
     const currentWindow = getCurrentWindow();
     const primary = targetFiles[0] ?? null;
@@ -3262,17 +3352,17 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       // 第1分组: 新建文件夹 + 新建文件
       items.push(await MenuItem.new({
         text: t('explorer.newFolder', '新建文件夹'),
-        action: () => { void handleNewFolder(); },
+        action: () => { void handleNewFolder(targetDir); },
       }));
       items.push(await MenuItem.new({
         text: t('explorer.newFile', '新建文件'),
-        action: () => { void handleNewFile(); },
+        action: () => { void handleNewFile(targetDir); },
       }));
       await addSeparator();
       // 第2分组: 刷新 + 排序
       items.push(await MenuItem.new({
         text: t('explorer.refresh', '刷新'),
-        action: () => { void refreshCurrentDir(true); },
+        action: () => { void refreshCurrentDir(true, targetDir); },
       }));
       items.push(await MenuItem.new({
         text: t('explorer.sortByName', '按名称排序'),
@@ -3289,7 +3379,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       items.push(await MenuItem.new({
         text: t('explorer.paste', '粘贴'),
         enabled: canPaste,
-        action: () => { void handlePasteFromClipboard(); },
+        action: () => { void handlePasteFromClipboard(targetDir); },
       }));
       // 第4分组: 设为首页
       await addSeparator();
@@ -3424,24 +3514,25 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     await menu.popup(theme.useSystemContextMenu ? undefined : (position ? new PhysicalPosition(position.x, position.y) : undefined), currentWindow);
   };
 
-  const handleContextMenu = async (e: React.MouseEvent, fileIds: string[], isBlank = false) => {
+  const handleContextMenu = async (e: React.MouseEvent, fileIds: string[], isBlank = false, targetDir?: string) => {
     e.preventDefault();
     e.stopPropagation();
     await focusCurrentWindow();
     const newSelection = isBlank ? selectedFileIds : (selectedFileIds.includes(fileIds[0]) ? selectedFileIds : fileIds);
     if (!isBlank && !selectedFileIds.includes(fileIds[0])) onSelectFiles(newSelection);
+    const blankTargetDir = isBlank ? getActionDirectory(targetDir) : undefined;
 
     if (theme.useSystemContextMenu) {
       const targetFiles = newSelection
         .map(id => findFileById(id))
         .filter((file): file is FileItem => Boolean(file));
-      await openSystemContextMenu(targetFiles, isBlank, { x: e.clientX, y: e.clientY });
+      await openSystemContextMenu(targetFiles, isBlank, { x: e.clientX, y: e.clientY }, blankTargetDir);
       return;
     }
 
     if (isBlank) void refreshFileClipboardState();
     setContextSubmenu(null);
-    setContextMenu({ x: e.clientX, y: e.clientY, fileIds: newSelection, isBlank });
+    setContextMenu({ x: e.clientX, y: e.clientY, fileIds: newSelection, isBlank, targetDir: blankTargetDir });
   };
 
   const openFileActionsMenu = async (e: React.MouseEvent, file: FileItem) => {
@@ -3459,17 +3550,30 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setContextMenu({ x: e.clientX, y: e.clientY, fileIds: [file.id] });
   };
 
-  const refreshCurrentDir = useCallback(async (fullRefresh = false) => {
-    const requestId = ++loadRequestSeqRef.current;
+  const refreshCurrentDir = useCallback(async (fullRefresh = false, targetPath?: string) => {
+    const refreshPath = targetPath && !isVirtualPath(targetPath) ? targetPath : '';
+    const refreshColumnPath = Boolean(refreshPath && refreshPath !== currentPath);
+    const requestId = refreshColumnPath ? 0 : ++loadRequestSeqRef.current;
     if (protectedRoot) {
       setBlockedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
       setApprovedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
     }
-    if (fullRefresh) {
+    if (fullRefresh && !refreshColumnPath) {
       setLoading(true);
       resetTabTransientState();
     }
     try {
+      if (refreshColumnPath) {
+        const generation = columnLoadGenerationRef.current;
+        const entries = await listDirectory(refreshPath, theme.showHiddenFiles, {
+          requestScope: directoryLoadScopes.column,
+          requestId: generation,
+        });
+        if (generation !== columnLoadGenerationRef.current) return [] as FileItem[];
+        setColumnFilesCache(prev => ({ ...prev, [refreshPath]: entries }));
+        if (fullRefresh) showFeedback(t('messages.refreshed'));
+        return entries;
+      }
       if (isFavoritesRoot) {
         const entries = await resolveFavoriteItems(favorites);
         if (requestId !== loadRequestSeqRef.current) return [] as FileItem[];
@@ -3512,10 +3616,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
       return entries;
     } catch (err) {
-      if (fullRefresh) setLoading(false);
+      if (fullRefresh && !refreshColumnPath) setLoading(false);
       const appError = normalizeAppError(err);
       if (appError.kind === 'Cancelled') return [] as FileItem[];
-      if (requestId === loadRequestSeqRef.current) {
+      if (refreshColumnPath || requestId === loadRequestSeqRef.current) {
         setLoadError(appError.userMessage);
         setDirectoryErrorKind(classifyDirectoryError(appError));
         if (fullRefresh) {
@@ -3529,7 +3633,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   }, [
     baseView,
+    columnLoadGenerationRef,
     currentPath,
+    directoryLoadScopes.column,
     favorites,
     fileTags,
     isFavoritesRoot,
@@ -3854,10 +3960,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setContextMenu(null);
   };
 
-  const handleNewFile = async () => {
+  const handleNewFile = async (targetPath?: string) => {
     setActiveDropdown(null);
+    const targetDir = getActionDirectory(targetPath || contextMenu?.targetDir);
+    if (!targetDir) {
+      showFeedback(t('messages.crossWindowNoTarget', {
+        defaultValue: '当前没有可作为目标的真实目录',
+      }));
+      setContextMenu(null);
+      return;
+    }
     const baseName = t('filenames.newFile', { defaultValue: '新建文件.txt' });
-    const existing = new Set(files.map(file => file.name));
+    const existing = new Set(getDirectoryEntries(targetDir).map(file => file.name));
     let name = baseName;
     let index = 2;
     while (existing.has(name)) {
@@ -3869,8 +3983,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     try {
-      const createdPath = await createFile(currentPath, name);
-      const entries = await refreshCurrentDir();
+      const createdPath = await createFile(targetDir, name);
+      const entries = await refreshCurrentDir(false, targetDir);
       const created = entries.find(file => file.path === createdPath);
       if (created) {
         onSelectFiles([created.id]);
@@ -3916,10 +4030,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setContextMenu(null);
   };
 
-  const handleNewFolder = async () => {
+  const handleNewFolder = async (targetPath?: string) => {
     setActiveDropdown(null);
+    const targetDir = getActionDirectory(targetPath || contextMenu?.targetDir);
+    if (!targetDir) {
+      showFeedback(t('messages.crossWindowNoTarget', {
+        defaultValue: '当前没有可作为目标的真实目录',
+      }));
+      setContextMenu(null);
+      return;
+    }
     const baseName = t('filenames.newFolder', { defaultValue: '新建文件夹' });
-    const existing = new Set(files.map(file => file.name));
+    const existing = new Set(getDirectoryEntries(targetDir).map(file => file.name));
     let name = baseName;
     let index = 2;
     while (existing.has(name)) {
@@ -3931,8 +4053,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     try {
-      const createdPath = await createFolder(currentPath, name);
-      const entries = await refreshCurrentDir();
+      const createdPath = await createFolder(targetDir, name);
+      const entries = await refreshCurrentDir(false, targetDir);
       const created = entries.find(file => file.path === createdPath);
       if (created) {
         onSelectFiles([created.id]);
@@ -4023,7 +4145,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleAlias = async (file: FileItem) => {
     try {
-      await makeAlias(file.path);
+      await duplicateAsAlias(file.path);
       refreshCurrentDir();
       showFeedback(t('messages.aliasCreated', { name: file.name, defaultValue: `已创建替身：${file.name}` }));
     } catch (e) { showFeedback(t('messages.aliasCreateFailed', { error: formatAppError(e), defaultValue: `创建替身失败：${formatAppError(e)}` })); }
@@ -4111,7 +4233,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       const selected = await openDialog({ multiple: true, directory: false });
       const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
       if (paths.length === 0) return;
-      await importExternalPaths(paths, currentPath);
+      await importExternalPaths(paths, getActionDirectory());
     } catch (e) {
       showFeedback(`导入失败：${formatAppError(e)}`);
     }
@@ -4133,9 +4255,53 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     ? [undefined, ...columnPaths]
     : [];
   const inspectorFile = lastSelectedFile ?? (currentPath ? makeFolderItemFromPath(currentPath) : null);
+  const inspectorVisible = Boolean((inspectorOverride || (lastSelectedFile && theme.showPreviewPanel)) && inspectorFile);
   const inspectorFileType = inspectorFile ? getFileTypeLabel(inspectorFile.type) : t('explorer.folder', '文件夹');
   const inspectorTags = inspectorFile ? getTagsForItem(inspectorFile) : [];
   const inspectorIsFavorite = inspectorFile ? favorites.includes(inspectorFile.path) : false;
+  const inspectorSizeInfo = inspectorFile?.type === 'folder' && dirSize?.path === inspectorFile.path
+    ? dirSize
+    : null;
+  const inspectorPath = inspectorFile?.path || '';
+  const inspectorType = inspectorFile?.type;
+
+  useEffect(() => {
+    if (!inspectorVisible || !inspectorPath) {
+      setDirSize(null);
+      setDirSizeLoading(false);
+      setDirSizeError('');
+      return;
+    }
+
+    if (inspectorType !== 'folder' || isVirtualPath(inspectorPath)) {
+      setDirSize(null);
+      setDirSizeLoading(false);
+      setDirSizeError('');
+      return;
+    }
+
+    let cancelled = false;
+    const path = inspectorPath;
+    setDirSize(null);
+    setDirSizeError('');
+    setDirSizeLoading(true);
+    invoke<DirectorySizeInfo>('get_dir_size', { path })
+      .then(result => {
+        if (cancelled) return;
+        setDirSize({ ...result, path: result.path || path });
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setDirSizeError(normalizeAppError(error).userMessage);
+      })
+      .finally(() => {
+        if (!cancelled) setDirSizeLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [inspectorVisible, inspectorPath, inspectorType]);
 
   return (
       <div className="h-full flex overflow-hidden">
@@ -4146,8 +4312,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
          }
       }} onContextMenu={(e) => {
         if (e.target === e.currentTarget || (e.target as HTMLElement).closest('[data-explorer-surface]')) {
-           e.preventDefault();
-           setContextMenu({ x: e.clientX, y: e.clientY, fileIds: [], isBlank: true });
+           void handleContextMenu(e, [], true, getActionDirectory());
         }
       }}>
         <div className="flex-1 overflow-hidden px-8 py-4 min-h-0">
@@ -4225,7 +4390,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
                     {/* Home root */}
                     <button
-                      onClick={() => { setCurrentPath(homeDir); setSearchQuery(''); }}
+                      onClick={() => navigateToPath(homeDir)}
                       className="shrink-0 hover:text-primary hover:underline transition-colors cursor-pointer"
                     >
                       {homeDir ? homeDir.split('/').pop() : t('explorer.localStorage')}
@@ -4438,7 +4603,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                                 const selected = await openDialog({ multiple: true, directory: true });
                                 const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
                                 if (paths.length > 0) {
-                                  await importExternalPaths(paths, currentPath);
+                                  await importExternalPaths(paths, getActionDirectory());
                                 }
                                 setActiveDropdown(null);
                               }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('transfer.uploadFolder', 'Upload Folder')}</button>
@@ -4477,8 +4642,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                           )}
                           {activeDropdown === 'more' && (
                             <div className="p-2 space-y-1">
-                              <button onClick={handleNewFolder} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.newFolder', '新建文件夹')}</button>
-                              <button onClick={handleNewFile} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.newFile', '新建文件')}</button>
+                              <button onClick={() => handleNewFolder()} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.newFolder', '新建文件夹')}</button>
+                              <button onClick={() => handleNewFile()} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.newFile', '新建文件')}</button>
                               <button onClick={() => openCurrentInNewTab(lastSelectedFile)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.openInNewTab', '在新标签页中打开')}</button>
                               <div className="my-1 h-px bg-primary/10" />
                               <button onClick={() => { onThemeChange({ ...theme, showPreviewPanel: true }); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.showInspector', '显示检查器')}</button>
@@ -4577,6 +4742,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   currentPath={currentPath}
                   defaultMode={theme.crossWindowDropDefault || 'copy'}
                   visibleMs={INCOMING_DRAG_VISIBLE_MS}
+                  liquidGlassEnabled={liquidGlassEnabled}
                   t={t}
                 />
               )}
@@ -4841,44 +5007,68 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               )}
 
               {displayMode === 'column' && currentLevelFiles.length > 0 && (
-                <div ref={scrollContainerRef} className="flex gap-0 flex-1 min-h-0 overflow-x-auto overflow-y-hidden pb-4">
-                  {allColumns.map((parentId, colIndex) => {
-                    const filesInCol = getColumnFiles(parentId);
-                    const groupedColumnFiles: { [key: string]: FileItem[] } = {};
-                    if (groupBy === 'none') {
-                      groupedColumnFiles[t('explorer.groupAllFiles', '全部项目')] = filesInCol;
-                    } else {
-                      filesInCol.forEach(file => {
-                        const key = getGroupKey(file, groupBy);
-                        if (!groupedColumnFiles[key]) groupedColumnFiles[key] = [];
-                        groupedColumnFiles[key].push(file);
-                      });
-                    }
+                <div ref={scrollContainerRef} className="relative flex-1 min-h-0 overflow-x-auto overflow-y-hidden pb-4 custom-scrollbar">
+                  <div className="flex h-full min-w-max flex-nowrap">
+                    {allColumns.map((parentId, colIndex) => {
+                      const filesInCol = getColumnFiles(parentId);
+                      const columnTargetDir = resolveColumnPaneDirectory(currentPath, parentId);
+                      const columnError = parentId ? columnLoadErrors[parentId] : '';
+                      const columnHasLoaded = !parentId || Object.prototype.hasOwnProperty.call(columnFilesCache, parentId);
+                      const columnIsLoading = Boolean(parentId && !columnHasLoaded && !columnError);
+                      const groupedColumnFiles: { [key: string]: FileItem[] } = {};
+                      if (groupBy === 'none') {
+                        groupedColumnFiles[t('explorer.groupAllFiles', '全部项目')] = filesInCol;
+                      } else {
+                        filesInCol.forEach(file => {
+                          const key = getGroupKey(file, groupBy);
+                          if (!groupedColumnFiles[key]) groupedColumnFiles[key] = [];
+                          groupedColumnFiles[key].push(file);
+                        });
+                      }
 
-                    return (
-                      <div 
-                        key={`col-${colIndex}-${parentId || 'root'}`} 
-                        className="shrink-0 flex flex-col border-r border-on-surface/10 h-full bg-primary/5"
-                        style={{ width: `${theme.columnWidth || 280}px` }}
-                      >
-                        <h4 className="text-[12px] font-black text-on-surface uppercase tracking-[0.15em] px-4 py-3 shrink-0">
-                          {parentId ? parentId.split('/').pop() : t('explorer.localStorage')}
-                        </h4>
-                        <div className="flex-1 overflow-y-auto custom-scrollbar px-2 space-y-1">
-                          {Object.entries(groupedColumnFiles).map(([groupName, files]) => (
-                            <React.Fragment key={groupName}>
-                              {groupBy !== 'none' && (
-                                <div className="text-[10px] font-black text-primary px-3 py-1 mt-2 mb-1 bg-primary/10 rounded uppercase tracking-wider">
-                                  {groupName}
-                                </div>
-                              )}
-                              {files.map(file => renderFileItem(file, true))}
-                            </React.Fragment>
-                          ))}
+                      return (
+                        <div
+                          key={`col-${colIndex}-${parentId || 'root'}`}
+                          className="h-full min-w-0 shrink-0 flex flex-col border-r border-on-surface/10 bg-primary/5"
+                          style={{ width: `${theme.columnWidth || 280}px` }}
+                          onContextMenu={(e) => {
+                            if ((e.target as HTMLElement).closest('.file-item')) return;
+                            void handleContextMenu(e, [], true, columnTargetDir);
+                          }}
+                        >
+                          <h4 className="text-[12px] font-black text-on-surface uppercase tracking-[0.15em] px-4 py-3 shrink-0 truncate">
+                            {parentId ? parentId.split('/').pop() : t('explorer.localStorage')}
+                          </h4>
+                          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden custom-scrollbar px-2 space-y-1">
+                            {columnError ? (
+                              <div className="px-3 py-4 text-[12px] font-bold leading-relaxed text-red-400/80">
+                                {t('messages.loadFailed', { error: columnError, defaultValue: `读取失败：${columnError}` })}
+                              </div>
+                            ) : columnIsLoading ? (
+                              <div className="px-3 py-4 text-[12px] font-bold text-on-surface/35">
+                                {t('explorer.loading', '正在加载...')}
+                              </div>
+                            ) : filesInCol.length === 0 ? (
+                              <div className="px-3 py-4 text-[12px] font-bold text-on-surface/30">
+                                {t('explorer.emptyFolder', '此文件夹为空')}
+                              </div>
+                            ) : (
+                              Object.entries(groupedColumnFiles).map(([groupName, files]) => (
+                                <React.Fragment key={groupName}>
+                                  {groupBy !== 'none' && (
+                                    <div className="text-[10px] font-black text-primary px-3 py-1 mt-2 mb-1 bg-primary/10 rounded uppercase tracking-wider">
+                                      {groupName}
+                                    </div>
+                                  )}
+                                  {files.map(file => renderFileItem(file, true, undefined, colIndex))}
+                                </React.Fragment>
+                              ))
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
@@ -4889,12 +5079,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
       {/* Inspector Panel */}
       <AnimatePresence>
-        {(inspectorOverride || (lastSelectedFile && theme.showPreviewPanel)) && inspectorFile && (
+        {inspectorVisible && inspectorFile && (
           <motion.aside
             initial={{ x: 360, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: 360, opacity: 0 }}
-            className="w-[336px] my-3 mr-3 ml-2 rounded-2xl glass-panel border border-primary/20 bg-primary/5 flex flex-col shrink-0 shadow-xl overflow-hidden relative backdrop-blur-2xl"
+            className={`${liquidGlassEnabled ? 'liquid-glass' : 'bg-surface/95 border border-primary/10 backdrop-blur-xl'} w-[336px] my-3 mr-3 ml-2 rounded-2xl flex flex-col shrink-0 shadow-xl overflow-hidden relative`}
           >
             {/* 关闭按钮（一次性弹出模式时显示） */}
             {inspectorOverride && !theme.showPreviewPanel && (
@@ -4907,11 +5097,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 {!lastSelectedFile ? (
                   <div className="w-full h-full flex items-center justify-center">
                     {getFileIcon('folder')}
-                  </div>
-                ) : selectedFileAutoPreviewDeferred ? (
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-[12px] text-on-surface/35 font-bold leading-relaxed">
-                    {getFileIcon(lastSelectedFile.type, lastSelectedFile.thumbnail)}
-                    {t('explorer.protectedPreviewDisabled', '受保护目录中已关闭自动预览，避免重复触发 macOS 权限请求')}
                   </div>
                 ) : lastSelectedFile.type === 'image' && lastSelectedFile.thumbnail && !imagePreviewFailed ? (
                   <img
@@ -4999,10 +5184,25 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   <div className="text-on-surface col-span-2">
                     {dirSizeLoading ? (
                       <span className="inline-block h-4 w-24 rounded bg-gradient-to-r from-primary/20 via-primary/40 to-primary/20 bg-[length:200%_100%] animate-shimmer" />
-                    ) : dirSize ? (
-                      <span>{dirSize.formatted} <span className="text-on-surface/40 text-[11px]">({t('explorer.filesCount', { count: dirSize.file_count, defaultValue: `${dirSize.file_count} 个文件` })})</span></span>
+                    ) : inspectorSizeInfo ? (
+                      <span>
+                        {inspectorSizeInfo.formatted}
+                        <span className="text-on-surface/40 text-[11px]"> ({t('explorer.filesCount', { count: inspectorSizeInfo.file_count, defaultValue: `${inspectorSizeInfo.file_count} 个文件` })})</span>
+                        {inspectorSizeInfo.formatted_allocated && inspectorSizeInfo.formatted_allocated !== inspectorSizeInfo.formatted && (
+                          <span className="block text-on-surface/35 text-[11px]">
+                            {t('explorer.diskSize', { size: inspectorSizeInfo.formatted_allocated, defaultValue: `磁盘占用 ${inspectorSizeInfo.formatted_allocated}` })}
+                          </span>
+                        )}
+                        {inspectorSizeInfo.skipped_count ? (
+                          <span className="block text-on-surface/30 text-[11px]">
+                            {t('explorer.sizeSkippedCount', { count: inspectorSizeInfo.skipped_count, defaultValue: `已跳过 ${inspectorSizeInfo.skipped_count} 项` })}
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : dirSizeError ? (
+                      <span className="text-on-surface/40 text-[11px]" title={dirSizeError}>--</span>
                     ) : inspectorFile.type === 'folder' ? (
-                      <span className="text-on-surface/40 text-[11px]">{t('explorer.clickForInfo')}</span>
+                      '--'
                     ) : (
                       inspectorFile.size || '--'
                     )}
@@ -5134,9 +5334,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <div
           ref={contextMenuRef}
           className={`fixed z-[100] w-56 shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-visible ${
-            theme.useSystemContextMenu
+            theme.useSystemContextMenu || !liquidGlassEnabled
               ? 'rounded-xl bg-surface/95 border border-on-surface/10 text-on-surface backdrop-blur-xl'
-              : 'glass-panel bg-primary/10 border border-primary/20 rounded-2xl backdrop-blur-3xl'
+              : 'liquid-glass rounded-2xl'
           }`}
           style={contextMenuPosition || undefined}
         >
@@ -5144,15 +5344,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             {contextMenu.isBlank ? (
               <>
                 {/* 第1分组: 新建文件夹 + 新建文件 */}
-                <button onClick={handleNewFolder} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => handleNewFolder(contextMenu.targetDir)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Folder className="w-4 h-4" /> {t('explorer.newFolder', '新建文件夹')}
                 </button>
-                <button onClick={handleNewFile} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => handleNewFile(contextMenu.targetDir)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                    <Upload className="w-4 h-4" /> {t('explorer.newFile', '新建文件')}
                 </button>
                 <div className="my-1 h-px bg-primary/10" />
                 {/* 第2分组: 刷新 + 排序 */}
-                <button onClick={() => { refreshCurrentDir(true); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => { refreshCurrentDir(true, contextMenu.targetDir); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <RefreshCw className="w-4 h-4" /> {t('explorer.refresh', '刷新')}
                 </button>
                 <button className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[13px] font-bold transition-all text-on-surface hover:text-primary" onClick={() => handleSort('name')}>
@@ -5164,7 +5364,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   <Info className="w-4 h-4" /> {t('explorer.getInfo', '查看简介')}
                 </button>
                 <button
-                  onClick={handlePasteFromClipboard}
+                  onClick={() => handlePasteFromClipboard(contextMenu.targetDir)}
                   disabled={!hasFileClipboard}
                   className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-bold transition-all ${
                     !hasFileClipboard
@@ -5264,7 +5464,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   <Edit2 className="w-4 h-4" /> {t('explorer.cut', '剪切')}
                 </button>
                 <button onClick={() => handleAlias(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
-                  <ExternalLink className="w-4 h-4" /> {t('explorer.alias', '制作替身')}
+                  <Copy className="w-4 h-4" /> {t('explorer.alias', '制作替身')}
                 </button>
                 <div className="my-1 h-px bg-primary/10" />
                 {/* 第3分组: 解压/压缩 + 在终端打开 + 查看简介 */}
@@ -5521,6 +5721,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           onClose={() => setShowAIHistory(false)}
           onRollbackComplete={() => { setShowAIHistory(false); refreshCurrentDir(); }}
           retentionDays={theme.aiOpsHistoryRetentionDays}
+          liquidGlassEnabled={liquidGlassEnabled}
         />
       )}
 

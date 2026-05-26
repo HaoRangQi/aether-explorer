@@ -17,6 +17,7 @@ interface Props {
   currentPath: string;
   defaultMode: 'copy' | 'move' | 'ask';
   visibleMs: number;
+  liquidGlassEnabled?: boolean;
   t: TFunction;
 }
 
@@ -33,6 +34,7 @@ export default function CrossWindowDropBanner({
   currentPath,
   defaultMode,
   visibleMs,
+  liquidGlassEnabled = false,
   t,
 }: Props) {
   const [remainingPct, setRemainingPct] = useState(100);
@@ -63,7 +65,7 @@ export default function CrossWindowDropBanner({
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-primary/15 backdrop-blur-md border-2 border-dashed border-primary/70 rounded-2xl m-2 pointer-events-none animate-in fade-in duration-150">
-      <div className="bg-surface/95 rounded-2xl px-7 py-6 shadow-2xl text-center max-w-lg relative overflow-hidden">
+      <div className={`${liquidGlassEnabled ? 'liquid-glass' : 'bg-surface/95 border border-primary/10 backdrop-blur-xl'} rounded-2xl px-7 py-6 shadow-2xl text-center max-w-lg relative overflow-hidden`}>
         {/* 倒计时进度条（兜底，正常松手前就会消失） */}
         <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary/10">
           <div

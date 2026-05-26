@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { useTranslation } from 'react-i18next';
 import { Archive, CheckCircle2, Copy, Square, Trash2, X } from 'lucide-react';
@@ -12,6 +12,8 @@ import {
 import { normalizeAppError } from '../lib/app-error';
 import { usePrefersReducedMotion } from '../lib/use-prefers-reduced-motion';
 import Loader from './Loader';
+
+const AUTO_CLOSE_DELAY_MS = 1500;
 
 interface TransferModalProps {
   onClose: () => void;
@@ -63,12 +65,17 @@ function resultSummary(task: TransferTaskSnapshot, t: (key: string, options?: Re
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-export default function TransferModal({ onClose, theme: _theme }: TransferModalProps) {
+export default function TransferModal({ onClose, theme }: TransferModalProps) {
   const { t } = useTranslation();
   const prefersReducedMotion = usePrefersReducedMotion();
+  const liquidGlassEnabled = theme.enableLiquidGlass === true;
   const [tasks, setTasks] = useState<TransferTaskSnapshot[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [autoCloseProgress, setAutoCloseProgress] = useState(0);
+  const autoCloseTimeoutRef = useRef<number | null>(null);
+  const autoCloseRafRef = useRef<number | null>(null);
+  const autoCloseStartedAtRef = useRef<number | null>(null);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -109,9 +116,62 @@ export default function TransferModal({ onClose, theme: _theme }: TransferModalP
 
   const activeCount = tasks.filter(isActiveTask).length;
   const finishedCount = tasks.length - activeCount;
+  const canAutoClose = !isLoading && activeCount === 0 && (finishedCount > 0 || tasks.length === 0);
   const radius = 45;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (overallProgress / 100) * circumference;
+
+  const clearAutoClose = useCallback(() => {
+    if (autoCloseTimeoutRef.current) {
+      window.clearTimeout(autoCloseTimeoutRef.current);
+      autoCloseTimeoutRef.current = null;
+    }
+    if (autoCloseRafRef.current) {
+      window.cancelAnimationFrame(autoCloseRafRef.current);
+      autoCloseRafRef.current = null;
+    }
+    autoCloseStartedAtRef.current = null;
+    setAutoCloseProgress(0);
+  }, []);
+
+  const scheduleAutoClose = useCallback(() => {
+    clearAutoClose();
+    if (!canAutoClose) return;
+
+    const startedAt = performance.now();
+    autoCloseStartedAtRef.current = startedAt;
+
+    const tick = () => {
+      if (autoCloseStartedAtRef.current !== startedAt) return;
+      const elapsed = performance.now() - startedAt;
+      setAutoCloseProgress(Math.min(1, elapsed / AUTO_CLOSE_DELAY_MS));
+      if (elapsed < AUTO_CLOSE_DELAY_MS) {
+        autoCloseRafRef.current = window.requestAnimationFrame(tick);
+      }
+    };
+
+    tick();
+    autoCloseTimeoutRef.current = window.setTimeout(() => {
+      autoCloseTimeoutRef.current = null;
+      onClose();
+    }, AUTO_CLOSE_DELAY_MS);
+  }, [canAutoClose, clearAutoClose, onClose]);
+
+  useEffect(() => {
+    if (!canAutoClose) {
+      clearAutoClose();
+      return;
+    }
+
+    scheduleAutoClose();
+    window.addEventListener('mousemove', scheduleAutoClose, { passive: true });
+    return () => {
+      window.removeEventListener('mousemove', scheduleAutoClose);
+      clearAutoClose();
+    };
+  }, [canAutoClose, clearAutoClose, scheduleAutoClose]);
+
+  useEffect(() => clearAutoClose, [clearAutoClose]);
 
   const handleCancel = async (taskId: string) => {
     try {
@@ -154,7 +214,7 @@ export default function TransferModal({ onClose, theme: _theme }: TransferModalP
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.9, y: 20 }}
-        className="relative w-full max-w-2xl glass-panel bg-surface-container-high/90 border border-transparent rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+        className={`${liquidGlassEnabled ? 'liquid-glass' : 'glass-panel bg-surface-container-high/90 border border-transparent'} relative w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col`}
       >
         <header className="px-8 py-6 border-b border-transparent flex justify-between items-center bg-white/[0.02]">
           <div className="space-y-1 min-w-0">
@@ -266,6 +326,22 @@ export default function TransferModal({ onClose, theme: _theme }: TransferModalP
         </div>
 
         <footer className="px-8 py-6 border-t border-transparent bg-white/[0.02] flex justify-end gap-3">
+          <div className="mr-auto flex min-w-0 flex-col justify-center gap-2">
+            {canAutoClose && (
+              <>
+                <span className="text-[11px] font-bold text-on-surface/40">
+                  {t('transfer.autoCloseCountdown')}
+                </span>
+                <div className="h-1 w-36 overflow-hidden rounded-full bg-on-surface/[0.06]">
+                  <motion.div
+                    className="h-full rounded-full bg-primary"
+                    animate={{ width: `${autoCloseProgress * 100}%` }}
+                    transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.08 }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
           <button
             onClick={() => void handleClearFinished()}
             disabled={finishedCount === 0}
@@ -279,6 +355,12 @@ export default function TransferModal({ onClose, theme: _theme }: TransferModalP
             className="px-6 py-2 rounded-full bg-red-400 text-white text-[13px] font-bold hover:bg-red-500 transition-all flex items-center gap-2 shadow-lg shadow-red-400/20 disabled:opacity-40 disabled:pointer-events-none"
           >
             <Square className="w-4 h-4" /> {t('transfer.cancelAll')}
+          </button>
+          <button
+            onClick={onClose}
+            className="px-6 py-2 rounded-full bg-primary text-on-primary text-[13px] font-bold hover:bg-primary/90 transition-all flex items-center gap-2 shadow-lg shadow-primary/20"
+          >
+            <X className="w-4 h-4" /> {t('transfer.close')}
           </button>
         </footer>
       </motion.div>

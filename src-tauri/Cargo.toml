@@ -1,6 +1,6 @@
 [package]
 name = "aether-explorer"
-version = "4.0.1"
+version = "0.4.2"
 description = "A local-first macOS file workbench"
 authors = ["Aether Team"]
 license = "MIT"
@@ -31,3 +31,4 @@ trash = "5"
 zip = "2"
 tauri-plugin-http = "2.5.9"
 tauri-plugin-fs = "2.5.1"
+tauri-plugin-liquid-glass = "0.1.6"

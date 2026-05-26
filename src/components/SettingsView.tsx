@@ -38,6 +38,20 @@ interface SettingsViewProps {
 
 export type SettingsCategory = 'appearance' | 'files' | 'permissions' | 'extensions' | 'features' | 'ai' | 'about';
 
+type NativeLiquidGlassStatus = {
+  requested: boolean;
+  supported: boolean;
+  applied: boolean;
+  reason?: string | null;
+};
+
+type ResolvedAppearance = 'light' | 'dark';
+
+function resolveCurrentAppearance(mode: ThemeSettings['mode']): ResolvedAppearance {
+  if (mode !== 'auto') return mode;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
 const CURATED_PALETTES = [
   { name: 'Default', colors: ['#007aff', '#EBE0FF', '#FFD8E4', '#C2E7FF'] },
   { name: 'Aurora', colors: ['#5eead4', '#2dd4bf', '#0d9488', '#042f2e'] },
@@ -173,6 +187,9 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
   const [lastPanicLog, setLastPanicLog] = useState<string | null>(null);
   const [wallpaperUrlError, setWallpaperUrlError] = useState('');
   const [wallpaperUrlDraft, setWallpaperUrlDraft] = useState(theme.wallpaperUrl || '');
+  const [liquidGlassStatus, setLiquidGlassStatus] = useState<NativeLiquidGlassStatus | null>(null);
+  const [liquidGlassMessage, setLiquidGlassMessage] = useState('');
+  const [isTogglingLiquidGlass, setIsTogglingLiquidGlass] = useState(false);
 
   const getActionTypeMeta = useCallback((type: NonNullable<ContextMenuAction['actionType']>) => ({
     label: t(`settings.extensions.actionTypes.${type}.label`),
@@ -826,8 +843,76 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
     onThemeChange({ ...theme, followSystemLanguage: nextFollow, language: nextLanguage, languageOptions });
   };
 
+  const handleLiquidGlassToggle = async () => {
+    const nextEnabled = theme.enableLiquidGlass !== true;
+    const appearance = resolveCurrentAppearance(theme.mode);
+    setIsTogglingLiquidGlass(true);
+    setLiquidGlassMessage('');
+
+    try {
+      const status = await invoke<NativeLiquidGlassStatus>('set_native_liquid_glass_enabled', {
+        enabled: nextEnabled,
+        appearance,
+      });
+      setLiquidGlassStatus(status);
+
+      if (nextEnabled && !status.applied) {
+        setLiquidGlassMessage(status.reason || t('settings.liquidGlassUnsupported', '当前系统不支持原生 Liquid Glass，需要 macOS 26 或更新版本。'));
+        onThemeChange({ ...theme, enableLiquidGlass: false });
+        return;
+      }
+
+      setLiquidGlassMessage(nextEnabled
+        ? t('settings.liquidGlassApplied', '原生 Liquid Glass 已启用。')
+        : t('settings.liquidGlassDisabled', '原生 Liquid Glass 已关闭。'));
+      onThemeChange({ ...theme, enableLiquidGlass: nextEnabled });
+    } catch (err) {
+      setLiquidGlassMessage(t('settings.liquidGlassToggleFailed', {
+        error: normalizeAppError(err).userMessage,
+        defaultValue: '切换原生 Liquid Glass 失败：{{error}}',
+      }));
+      if (nextEnabled) {
+        onThemeChange({ ...theme, enableLiquidGlass: false });
+      }
+    } finally {
+      setIsTogglingLiquidGlass(false);
+    }
+  };
+
   const renderAppearanceCategory = () => (
     <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
+      <section className="bg-primary/5 rounded-[32px] p-8 border border-primary/10 space-y-6">
+        <div className="flex items-center justify-between gap-6">
+          <div className="min-w-0 space-y-2">
+            <h3 className="text-[20px] font-black text-on-surface flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-primary" />
+              {t('settings.liquidGlassTheme', '液态玻璃主题')}
+            </h3>
+            <p className="text-[13px] text-on-surface/45 leading-relaxed max-w-2xl">
+              {t('settings.liquidGlassThemeDesc', '开启后调用 macOS 原生 Liquid Glass；浅色、深色、自动仍会决定玻璃明暗。')}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleLiquidGlassToggle}
+            disabled={isTogglingLiquidGlass}
+            className={`relative w-14 h-8 rounded-full transition-colors duration-200 shrink-0 ${theme.enableLiquidGlass ? 'bg-primary' : 'bg-on-surface/20'} ${isTogglingLiquidGlass ? 'opacity-60 cursor-wait' : ''}`}
+            aria-pressed={theme.enableLiquidGlass === true}
+          >
+            <span className={`absolute top-1 left-1 w-6 h-6 rounded-full bg-white shadow transition-transform duration-200 ${theme.enableLiquidGlass ? 'translate-x-6' : 'translate-x-0'}`} />
+          </button>
+        </div>
+        {(theme.enableLiquidGlass || liquidGlassMessage) && (
+          <div className={`rounded-2xl border px-5 py-4 text-[12px] font-bold leading-relaxed ${
+            liquidGlassStatus && !liquidGlassStatus.applied && liquidGlassStatus.requested
+              ? 'border-red-500/20 bg-red-500/10 text-red-700'
+              : 'border-primary/15 bg-primary/5 text-on-surface/55'
+          }`}>
+            {liquidGlassMessage || t('settings.liquidGlassThemeActiveHint', '原生 Liquid Glass 已接管窗口材质；浅色、深色、自动会切换玻璃明暗。应用内壁纸与渐变背景会暂停渲染。')}
+          </div>
+        )}
+      </section>
+
       {/* Mode & materials */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         <section className="bg-primary/5 rounded-3xl p-8 border border-primary/10 space-y-6">
@@ -844,19 +929,30 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
               return (
                 <button
                   key={mode.id}
-                  onClick={() => onThemeChange({
-                    ...theme,
-                    mode: mode.id as any,
-                    accentColor: mode.id === 'light' ? DEFAULT_LIGHT_ACCENT : mode.id === 'dark' ? DEFAULT_DARK_ACCENT : (document.documentElement.classList.contains('dark') ? DEFAULT_DARK_ACCENT : DEFAULT_LIGHT_ACCENT),
-                  })}
+                  type="button"
+                  onClick={() => {
+                    const nextMode = mode.id as ThemeSettings['mode'];
+                    const nextAppearance = resolveCurrentAppearance(nextMode);
+                    onThemeChange({
+                      ...theme,
+                      mode: nextMode,
+                      accentColor: nextAppearance === 'dark' ? DEFAULT_DARK_ACCENT : DEFAULT_LIGHT_ACCENT,
+                    });
+                  }}
                   className={`flex-1 py-4 rounded-xl flex items-center justify-center gap-2 text-[13px] font-bold transition-all relative
-                    ${isActive ? 'text-on-primary' : 'text-on-surface/40 hover:text-on-surface/80 hover:bg-primary/10'}
+                    ${theme.enableLiquidGlass
+                      ? isActive ? 'text-on-surface' : 'text-on-surface/45 hover:text-on-surface hover:bg-white/10'
+                      : isActive ? 'text-on-primary' : 'text-on-surface/40 hover:text-on-surface/80 hover:bg-primary/10'}
                   `}
                 >
                   {isActive && (
                     <motion.div
                       layoutId="active-mode-pill"
-                      className="absolute inset-0 bg-primary rounded-xl z-0 shadow-lg shadow-primary/20"
+                      className={`absolute inset-0 rounded-xl z-0 shadow-lg ${
+                        theme.enableLiquidGlass
+                          ? 'bg-white/20 border border-white/20 shadow-black/10'
+                          : 'bg-primary shadow-primary/20'
+                      }`}
                     />
                   )}
                   <mode.icon className="w-4 h-4 relative z-10" />

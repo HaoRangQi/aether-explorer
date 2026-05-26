@@ -25,6 +25,7 @@
 | 11 | [AI 文件助手系统 (AI-File-Assistant)](./11-ai-file-assistant.md) | ✅ | 2026-05-21 |
 | 12 | [macOS TCC 权限管理 (macOS-TCC-Permissions)](./12-macos-tcc-permissions.md) | ✅ | 2026-05-21 |
 | 13 | [文件操作 UX (File-Operation-UX)](./13-file-operation-ux.md) | ✅ | 2026-05-21 |
+| 14 | [原生玻璃与文件工作台治理 (Liquid-Glass-File-Workbench)](./14-liquid-glass-file-workbench.md) | ✅ | 2026-05-26 |
 | — | [草稿池 SCRATCH](./scratch.md) | — | — |
 
 新增章节时：在本表追加一行，文件命名为 `NN-<域名小写连字符>.md`，NN 取下一个未用编号。

@@ -265,8 +265,8 @@ export async function createFolder(parentDir: string, name: string): Promise<str
   return invokeFs('create_folder', { parentDir, name });
 }
 
-export async function makeAlias(path: string): Promise<string> {
-  return invokeFs('make_alias', { path });
+export async function duplicateAsAlias(path: string): Promise<string> {
+  return invokeFs('duplicate_as_alias', { path });
 }
 
 export async function compressFiles(paths: string[], output: string): Promise<string> {

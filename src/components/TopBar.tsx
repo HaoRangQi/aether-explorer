@@ -29,6 +29,7 @@ const TAB_TRANSFER_STORAGE_KEY = 'aether-dragging-tab';
 
 export default function TopBar({ currentView, onViewChange, theme, tabs, onCloseTab, onDetachTab, onAcceptDraggedTab, onCreateWindow }: TopBarProps) {
   const { t } = useTranslation();
+  const liquidGlassEnabled = theme.enableLiquidGlass === true;
   const [isDragOver, setIsDragOver] = useState(false);
   const [globalDragData, setGlobalDragData] = useState<TabTransferPayload | null>(null);
   const clearTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -176,7 +177,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
 
   return (
     <header
-      className="border-b border-transparent flex flex-col z-50 shrink-0 select-none"
+      className={`${liquidGlassEnabled ? 'liquid-nav border-white/10' : 'border-transparent'} border-b flex flex-col z-50 shrink-0 select-none`}
       onMouseDown={handleDragStart}
       data-tauri-drag-region
     >
@@ -237,8 +238,10 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
                 draggable
                 onDragStart={(event) => handleTabDragStart(event, tab)}
                 onDragEnd={(event) => handleTabDragEnd(event, tab)}
-                className={`relative flex items-center justify-center shrink-0 group rounded-full transition-all cursor-grab active:cursor-grabbing
-                  ${isActive ? 'text-primary bg-primary/40 shadow-[0_2px_10px_rgba(var(--primary-rgb),0.3)] border border-primary/60' : 'text-on-surface/70 hover:text-on-surface bg-primary/20 hover:bg-primary/30 border border-transparent'}
+                className={`relative flex items-center justify-center shrink-0 group rounded-full transition-all cursor-grab active:cursor-grabbing border
+                  ${liquidGlassEnabled
+                    ? isActive ? 'liquid-tab-active text-primary' : 'liquid-tab text-on-surface/70 hover:text-on-surface hover:border-primary/30'
+                    : isActive ? 'text-primary bg-primary/40 shadow-[0_2px_10px_rgba(var(--primary-rgb),0.3)] border-primary/60' : 'text-on-surface/70 hover:text-on-surface bg-primary/20 hover:bg-primary/30 border-transparent'}
                 `}
                 style={{ minWidth: '90px', maxWidth: '220px' }}
               >

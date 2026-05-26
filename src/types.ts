@@ -65,6 +65,7 @@ export interface ThemeSettings {
   blurIntensity: number;
   transparency: number;
   enableMica: boolean;
+  enableLiquidGlass?: boolean;
   fontFamily?: string;
   gridSize?: number;
   gridWidth?: number;

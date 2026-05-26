@@ -45,6 +45,7 @@ function describeOp(op: AIFileOp, t: (key: string, options?: Record<string, unkn
 
 export default function AIRenamePanel({ files, currentDir, theme, onClose, onComplete }: AIRenamePanelProps) {
   const { t } = useTranslation();
+  const liquidGlassEnabled = theme.enableLiquidGlass === true;
   const [instruction, setInstruction] = useState('');
   const [ops, setOps] = useState<AIFileOp[]>([]);
   const [summary, setSummary] = useState('');
@@ -148,7 +149,7 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
       <motion.div
         initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
         onClick={e => e.stopPropagation()}
-        className="w-[760px] max-h-[620px] bg-surface/95 backdrop-blur-3xl rounded-3xl border border-primary/20 shadow-2xl flex flex-col overflow-hidden"
+        className={`${liquidGlassEnabled ? 'liquid-glass' : 'bg-surface/95 backdrop-blur-3xl border border-primary/20'} w-[760px] max-h-[620px] rounded-3xl shadow-2xl flex flex-col overflow-hidden`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-8 py-5 border-b border-primary/10">

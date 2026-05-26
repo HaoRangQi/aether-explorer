@@ -30,10 +30,63 @@ import {
 } from './lib/startup-diagnostics';
 
 const MAX_RECENT_ITEMS = 100;
+const LIQUID_GLASS_PRIMARY = '#ffffff';
+type ResolvedAppearance = 'light' | 'dark';
+const LIQUID_GLASS_COLOR_VARS: Record<ResolvedAppearance, Record<string, string>> = {
+  light: {
+    '--color-icon': 'rgba(255, 255, 255, 0.92)',
+    '--color-selected-fg': '#ffffff',
+    '--color-selected-bg': 'rgba(255, 255, 255, 0.26)',
+    '--color-hover-fg': '#ffffff',
+    '--color-hover-bg': 'rgba(255, 255, 255, 0.18)',
+    '--color-panel-bg': 'rgba(255, 255, 255, 0.12)',
+    '--color-text-primary': '#ffffff',
+    '--color-text-secondary': 'rgba(255, 255, 255, 0.70)',
+    '--color-border': 'rgba(255, 255, 255, 0.24)',
+    '--color-divider': 'rgba(255, 255, 255, 0.16)',
+    '--color-shadow': 'rgba(0, 0, 0, 0.24)',
+    '--color-active-icon-bg': 'rgba(255, 255, 255, 0.22)',
+    '--color-tag-selected': '#ffffff',
+    '--color-search-bg': 'rgba(255, 255, 255, 0.16)',
+  },
+  dark: {
+    '--color-icon': 'rgba(255, 255, 255, 0.92)',
+    '--color-selected-fg': '#ffffff',
+    '--color-selected-bg': 'rgba(255, 255, 255, 0.20)',
+    '--color-hover-fg': '#ffffff',
+    '--color-hover-bg': 'rgba(255, 255, 255, 0.12)',
+    '--color-panel-bg': 'rgba(255, 255, 255, 0.08)',
+    '--color-text-primary': '#ffffff',
+    '--color-text-secondary': 'rgba(255, 255, 255, 0.68)',
+    '--color-border': 'rgba(255, 255, 255, 0.18)',
+    '--color-divider': 'rgba(255, 255, 255, 0.12)',
+    '--color-shadow': 'rgba(0, 0, 0, 0.40)',
+    '--color-active-icon-bg': 'rgba(255, 255, 255, 0.18)',
+    '--color-tag-selected': '#ffffff',
+    '--color-search-bg': 'rgba(255, 255, 255, 0.10)',
+  },
+};
 
 const SettingsView = lazy(() => import('./components/SettingsView'));
 const StorageView = lazy(() => import('./components/StorageView'));
 const TransferModal = lazy(() => import('./components/TransferModal'));
+
+type NativeLiquidGlassStatus = {
+  requested: boolean;
+  supported: boolean;
+  applied: boolean;
+  reason?: string | null;
+};
+
+type PermissionPreflightResult = {
+  path: string;
+  ok: boolean;
+  error?: string | null;
+};
+
+function resolveAppearance(mode: ThemeSettings['mode'], systemTheme: ResolvedAppearance): ResolvedAppearance {
+  return mode === 'auto' ? systemTheme : mode;
+}
 
 function getInitialTabs(defaultHomePath: string): TabData[] {
   return buildInitialTabs(defaultHomePath, new URLSearchParams(window.location.search));
@@ -168,6 +221,28 @@ export default function App() {
     };
     document.addEventListener('contextmenu', focusWindow, true);
     return () => document.removeEventListener('contextmenu', focusWindow, true);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      invoke<PermissionPreflightResult[]>('preflight_file_permissions')
+        .then(results => {
+          if (cancelled) return;
+          const denied = results.filter(result => !result.ok);
+          if (denied.length > 0) {
+            console.info('Permission preflight completed with denied paths:', denied.map(result => result.path));
+          }
+        })
+        .catch(err => {
+          console.warn('Permission preflight failed:', normalizeAppError(err).userMessage);
+        });
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, []);
 
   const resolveWindowTarget = useCallback((tab?: TabData) => {
@@ -366,19 +441,20 @@ export default function App() {
   // Apply theme to document
   useEffect(() => {
     const root = window.document.documentElement;
-    root.classList.remove('light', 'dark');
+    const liquidGlassEnabled = theme.enableLiquidGlass === true;
+    const resolvedMode = resolveAppearance(theme.mode, systemTheme);
+    root.classList.remove('light', 'dark', 'liquid-glass-theme', 'liquid-glass-light', 'liquid-glass-dark');
 
-    if (theme.mode === 'auto') {
-      root.classList.add(systemTheme);
+    if (liquidGlassEnabled) {
+      root.classList.add(resolvedMode, 'liquid-glass-theme', `liquid-glass-${resolvedMode}`);
     } else {
-      root.classList.add(theme.mode);
+      root.classList.add(resolvedMode);
     }
 
-    root.style.setProperty('--primary', theme.accentColor);
+    root.style.setProperty('--primary', liquidGlassEnabled ? LIQUID_GLASS_PRIMARY : theme.accentColor);
     root.style.setProperty('--font-sans', theme.fontFamily || 'Inter');
 
     // 纯色背景（无壁纸时生效）
-    const resolvedMode = theme.mode === 'auto' ? systemTheme : theme.mode;
     const defaultBg = resolvedMode === 'dark' ? '#1E1E2E' : '#FCFCFD';
     root.style.setProperty('--app-bg', theme.colorAppBg || defaultBg);
 
@@ -399,9 +475,11 @@ export default function App() {
       ['--color-tag-selected', theme.colorTagSelected],
       ['--color-search-bg', theme.colorSearchBg],
     ];
+    const liquidGlassColorVars = LIQUID_GLASS_COLOR_VARS[resolvedMode];
     for (const [prop, value] of colorVars) {
-      if (value) {
-        root.style.setProperty(prop, value);
+      const resolvedValue = liquidGlassEnabled ? liquidGlassColorVars[prop] : value;
+      if (resolvedValue) {
+        root.style.setProperty(prop, resolvedValue);
       } else {
         root.style.removeProperty(prop);
       }
@@ -415,6 +493,29 @@ export default function App() {
       i18n.changeLanguage(nextLanguage);
     }
   }, [theme.language, theme.followSystemLanguage, i18n]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const enabled = theme.enableLiquidGlass === true;
+    const appearance = resolveAppearance(theme.mode, systemTheme);
+
+    invoke<NativeLiquidGlassStatus>('set_native_liquid_glass_enabled', { enabled, appearance })
+      .then((status) => {
+        if (!cancelled && enabled && !status.applied) {
+          setTheme(prev => prev.enableLiquidGlass ? { ...prev, enableLiquidGlass: false } : prev);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to sync native Liquid Glass:', normalizeAppError(err).userMessage);
+        if (!cancelled && enabled) {
+          setTheme(prev => prev.enableLiquidGlass ? { ...prev, enableLiquidGlass: false } : prev);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [theme.enableLiquidGlass, theme.mode, systemTheme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -579,12 +680,13 @@ export default function App() {
     }));
   }, []);
 
-  const resolvedThemeMode = theme.mode === 'auto' ? systemTheme : theme.mode;
+  const liquidGlassEnabled = theme.enableLiquidGlass === true;
+  const resolvedThemeMode = resolveAppearance(theme.mode, systemTheme);
 
-  const safeWallpaperUrl = theme.wallpaperUrl && isValidWallpaperUrl(theme.wallpaperUrl)
+  const safeWallpaperUrl = !liquidGlassEnabled && theme.wallpaperUrl && isValidWallpaperUrl(theme.wallpaperUrl)
     ? theme.wallpaperUrl
     : undefined;
-  const backgroundUrl = safeWallpaperUrl || (theme.enableGradient
+  const backgroundUrl = liquidGlassEnabled ? undefined : safeWallpaperUrl || (theme.enableGradient
     ? (resolvedThemeMode === 'light'
       ? "https://lh3.googleusercontent.com/aida-public/AB6AXuB9XaXmOrvTbEmkcGVQRTeI3kC1xcNNI9hs3iLUfwEmP9n4a8NBlhkuVjFfQQHJDbgc5-Hlu84crRzebo5m19DliX5ipgb9sdBh13reLuJDOlyYlkJo7pdUnYUTQbMfhTdIdErU6myMmdrUcyz1jC1_Zm6gK27RiLNAdjDNeAZHXpMzca9lHZFHKIvWwpSholpGfTPYSn3KLjl5aJg_IW4SpVHMDS7SLG8Vr1mGx7p0OKpvfUnm857Ege-iTZ6Oy3Lw1NgTOyJojb9O"
       : "https://lh3.googleusercontent.com/aida-public/AB6AXuB5rkbZYEmntgaSGeN7iqlRsjtR3W5ODpJVUMLqhdxav_8_-VdvCsdd4wypghvj96XDWyE48JagMP-B7V0x3U3asu3dsg1n034ddQ0OAmyCVv8dxrRxj95ASkdMKW9KSBHsY_j9nl5KvSSVu38q6ed-TvVStYA2QcFuskTmrbqbz9iT8CxblEDxGz3Xewr4wKDfnoxSxZz-ec7VLicJvF6p8Qpm7UhFoj4uZLTlrQE5-rihCK5xFZ66DT-bf92WmUxbngN82dckzps5")
@@ -651,7 +753,7 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
     <div
-      className="h-screen w-screen overflow-hidden antialiased transition-all duration-700 flex rounded-[24px]"
+      className={`h-screen w-screen overflow-hidden antialiased transition-all duration-700 flex rounded-[24px] ${liquidGlassEnabled ? 'liquid-glass-shell' : ''}`}
       style={{ fontFamily: theme.fontFamily || 'unset' }}
     >
 
@@ -747,7 +849,7 @@ export default function App() {
             </div>
           </div>
 
-	          <footer className="h-9 border-t border-divider bg-transparent flex items-center justify-between px-6 text-secondary-custom text-[11px] font-medium shrink-0">
+	          <footer className={`${liquidGlassEnabled ? 'liquid-footer' : 'border-divider bg-transparent'} h-9 border-t flex items-center justify-between px-6 text-secondary-custom text-[11px] font-medium shrink-0`}>
 	            <div className="cursor-default tracking-wide flex items-center gap-4">
 	               <div className="flex items-center gap-2">
 	                 <span className="text-icon font-bold tabular-nums">{visibleItemCount}</span>
@@ -794,7 +896,7 @@ export default function App() {
               initial={{ scale: 0.96, y: 12, opacity: 0 }}
               animate={{ scale: 1, y: 0, opacity: 1 }}
               exit={{ scale: 0.96, y: 12, opacity: 0 }}
-              className="w-full max-w-[780px] max-h-[82vh] overflow-hidden rounded-3xl border border-primary/15 bg-surface/95 shadow-2xl shadow-black/20"
+              className={`${liquidGlassEnabled ? 'liquid-glass' : 'border border-primary/15 bg-surface/95'} w-full max-w-[780px] max-h-[82vh] overflow-hidden rounded-3xl shadow-2xl shadow-black/20`}
               onMouseDown={(event) => event.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-4 p-6 border-b border-primary/10">
@@ -844,7 +946,7 @@ export default function App() {
               initial={{ scale: 0.96, y: 12, opacity: 0 }}
               animate={{ scale: 1, y: 0, opacity: 1 }}
               exit={{ scale: 0.96, y: 12, opacity: 0 }}
-              className="w-full max-w-[520px] rounded-3xl border border-primary/15 bg-surface/95 shadow-2xl shadow-black/20 overflow-hidden"
+              className={`${liquidGlassEnabled ? 'liquid-glass' : 'border border-primary/15 bg-surface/95'} w-full max-w-[520px] rounded-3xl shadow-2xl shadow-black/20 overflow-hidden`}
             >
               <div className="flex items-start gap-4 p-6">
                 <div className="w-11 h-11 rounded-2xl bg-amber-500/15 flex items-center justify-center shrink-0">

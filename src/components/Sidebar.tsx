@@ -50,6 +50,7 @@ interface SidebarProps {
 
 export default function Sidebar({ currentView, currentPath, onViewChange, onOpenTab, theme, tabs }: SidebarProps) {
   const { t } = useTranslation();
+  const liquidGlassEnabled = theme.enableLiquidGlass === true;
   const [diskInfo, setDiskInfo] = useState<DiskInfo | null>(null);
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [volumeMessage, setVolumeMessage] = useState('');
@@ -275,7 +276,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
   ];
 
   return (
-    <nav className="w-sidebar-width max-w-sidebar-width border-r border-transparent flex flex-col pt-4 pb-8 z-40 shrink-0 overflow-hidden group/sidebar">
+    <nav className={`${liquidGlassEnabled ? 'liquid-nav border-white/10' : 'border-transparent'} w-sidebar-width max-w-sidebar-width border-r flex flex-col pt-4 pb-8 z-40 shrink-0 overflow-hidden group/sidebar`}>
       {/* Mac Window Controls */}
       <div className="flex items-center gap-2 px-5 mb-8" data-no-drag>
         <button
@@ -345,7 +346,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
                   {isActive && (
                     <motion.div
                       layoutId="sidebar-pill"
-                      className="absolute inset-0 bg-panel-custom border border-custom rounded-lg z-0"
+                      className={`absolute inset-0 rounded-lg z-0 ${liquidGlassEnabled ? 'liquid-pill' : 'bg-panel-custom border border-custom'}`}
                       transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
                     />
                   )}
@@ -396,7 +397,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
                   <div key={volume.path} className="group relative">
                     <button
                       onClick={() => openVolume(volume)}
-                      className={`w-full flex items-center px-3 py-1.5 rounded-lg transition-all duration-300 relative cursor-pointer font-semibold ${isActive ? 'text-on-surface font-black bg-panel-custom' : 'text-on-surface/75 hover:bg-on-surface/[0.04] hover:text-on-surface'}`}
+                      className={`w-full flex items-center px-3 py-1.5 rounded-lg transition-all duration-300 relative cursor-pointer font-semibold ${isActive ? `${liquidGlassEnabled ? 'liquid-pill' : 'bg-panel-custom'} text-on-surface font-black` : 'text-on-surface/75 hover:bg-on-surface/[0.04] hover:text-on-surface'}`}
                     >
                       <div className="flex items-center gap-2 relative z-10 w-full text-left min-w-0">
                         <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-all duration-300 ${isActive ? 'bg-active-icon text-on-primary shadow-md shadow-custom' : 'bg-panel-custom text-on-surface/40 group-hover:bg-hover-custom'}`}>
@@ -446,7 +447,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
       {diskInfo && (
         <button
           onClick={() => handleMenuClick('storage', 'sidebar.storage')}
-          className={`mx-3 mt-4 px-3 py-2 rounded-lg border text-left transition-all shrink-0 ${currentView === 'storage' ? 'bg-panel-custom border-custom text-on-surface' : 'bg-panel-custom border-custom hover:bg-hover-custom text-on-surface/70'}`}
+          className={`mx-3 mt-4 px-3 py-2 rounded-lg border text-left transition-all shrink-0 ${currentView === 'storage' ? `${liquidGlassEnabled ? 'liquid-pill' : 'bg-panel-custom border-custom'} text-on-surface` : `${liquidGlassEnabled ? 'liquid-pill' : 'bg-panel-custom border-custom'} hover:bg-hover-custom text-on-surface/70`}`}
         >
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <div className="flex items-center gap-1.5 min-w-0">

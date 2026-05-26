@@ -114,6 +114,11 @@ describe('normalizeThemeSettings', () => {
     expect(result.enableMultiWindow).toBe(false);
   });
 
+  it('default enableLiquidGlass is false', () => {
+    const result = normalizeThemeSettings({});
+    expect(result.enableLiquidGlass).toBe(false);
+  });
+
   it('falls back to favorites when default home path is blank', () => {
     expect(normalizeThemeSettings({ defaultHomePath: '' }).defaultHomePath).toBe('aether://favorites');
     expect(normalizeThemeSettings({ defaultHomePath: '   ' }).defaultHomePath).toBe('aether://favorites');
@@ -210,6 +215,7 @@ describe('sanitizeImportedSettingsBackup', () => {
         listDensity: 'tiny',
         crossWindowDropDefault: 'teleport',
         enableMultiWindow: true,
+        enableLiquidGlass: true,
         unknownInjectedField: 'should-not-survive',
         aiApiKey: 'legacy-secret',
         aiProviders: [
@@ -229,6 +235,7 @@ describe('sanitizeImportedSettingsBackup', () => {
     expect(result.theme?.listDensity).toBe(DEFAULT_THEME.listDensity);
     expect(result.theme?.crossWindowDropDefault).toBe(DEFAULT_THEME.crossWindowDropDefault);
     expect(result.theme?.enableMultiWindow).toBe(true);
+    expect(result.theme?.enableLiquidGlass).toBe(true);
     expect((result.theme as ThemeSettings & { unknownInjectedField?: string })?.unknownInjectedField).toBeUndefined();
     expect(result.theme?.aiApiKey).toBeUndefined();
     expect(result.theme?.aiProviders?.[0].apiKey).toBeUndefined();

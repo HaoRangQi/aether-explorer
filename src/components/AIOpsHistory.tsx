@@ -29,6 +29,7 @@ interface AIOpsHistoryProps {
   onClose: () => void;
   onRollbackComplete: () => void;
   retentionDays?: number;
+  liquidGlassEnabled?: boolean;
 }
 
 const OP_ICONS: Record<string, React.ReactNode> = {
@@ -106,6 +107,7 @@ export default function AIOpsHistory({
   onClose,
   onRollbackComplete,
   retentionDays = AI_OP_HISTORY_DEFAULT_RETENTION_DAYS,
+  liquidGlassEnabled = false,
 }: AIOpsHistoryProps) {
   const [sessions, setSessions] = useState<AIOpSession[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -225,7 +227,7 @@ export default function AIOpsHistory({
       <motion.div
         initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
         onClick={e => e.stopPropagation()}
-        className="w-[760px] max-h-[700px] bg-surface/95 backdrop-blur-3xl rounded-3xl border border-primary/20 shadow-2xl flex flex-col overflow-hidden"
+        className={`${liquidGlassEnabled ? 'liquid-glass' : 'bg-surface/95 backdrop-blur-3xl border border-primary/20'} w-[760px] max-h-[700px] rounded-3xl shadow-2xl flex flex-col overflow-hidden`}
       >
         <div className="flex items-center justify-between px-8 py-5 border-b border-primary/10">
           <div className="flex items-center gap-3 min-w-0">
