@@ -273,3 +273,18 @@ bash scripts/release.sh
 - 包含 `darwin-aarch64` 与 `darwin-x86_64`
 - 两个平台指向同一个 universal updater 包
 - 签名验证通过（客户端可正常更新）
+
+## 06.13 v0.4.2 发布执行记录
+
+`v0.4.2` 是原生 Liquid Glass 与文件工作台治理版本。发布前本地已完成：
+
+- `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 均为 `0.4.2`。
+- `CHANGELOG.md` 已增加 `0.4.2` release notes，GitHub Release notes 可由 workflow 自动抽取。
+- `codex/14-liquid-glass-file-workbench.md` 已沉淀原生 Liquid Glass、分栏状态、传输管理、大小统计、权限预检与版本线治理边界。
+- 本地 release gate 已通过：`npm run lint`、`npm run lint:readme`、`npm run lint:i18n`、`npm run lint:ci-gates`、`npm test`、`npm run test:rust`、`npm run lint:rust`、`npm run build`。
+
+版本线注意事项：
+
+- 历史上存在 `v4.0.1` tag，这是异常版本线；本次继续按 `0.x` 正式 release 线发 `v0.4.2`。
+- tag 必须指向合并后的 `develop` release commit，不从功能分支半路打 tag。
+- 发布完成仍以 [06.5 验收清单](#065-验收清单) 为准：远程 release 必须包含 `.dmg`、`.app.tar.gz`、`.sig`、`latest.json` 和 `SHA256SUMS`，且 stable updater manifest 指向 `0.4.2`。
