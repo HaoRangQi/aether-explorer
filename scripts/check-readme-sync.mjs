@@ -45,6 +45,8 @@ const headingKeys = new Map([
   ['Project Structure', 'project-structure'],
   ['功能清单', 'feature-list'],
   ['Feature List', 'feature-list'],
+  ['文档治理', 'documentation-governance'],
+  ['Documentation Governance', 'documentation-governance'],
   ['注意事项', 'notes'],
   ['Notes', 'notes'],
   ['常见问题', 'troubleshooting'],

@@ -14,6 +14,7 @@ import { usePrefersReducedMotion } from '../lib/use-prefers-reduced-motion';
 import Loader from './Loader';
 
 const AUTO_CLOSE_DELAY_MS = 1500;
+const FINISHED_TASK_VISIBLE_WINDOW_SECONDS = 2;
 
 interface TransferModalProps {
   onClose: () => void;
@@ -32,7 +33,7 @@ function taskPercent(task: TransferTaskSnapshot): number {
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const units = ['B', 'K', 'M', 'G', 'T'];
   let value = bytes;
   let unitIndex = 0;
   while (value >= 1024 && unitIndex < units.length - 1) {
@@ -89,6 +90,14 @@ export default function TransferModal({ onClose, theme }: TransferModalProps) {
     }
   }, []);
 
+  const isRecentlyFinishedTask = useCallback((task: TransferTaskSnapshot) => {
+    if (isActiveTask(task)) return false;
+    const now = Math.floor(Date.now() / 1000);
+    const finishedAt = task.finishedAt ?? task.startedAt;
+    const elapsed = now - finishedAt;
+    return elapsed >= 0 && elapsed <= FINISHED_TASK_VISIBLE_WINDOW_SECONDS;
+  }, []);
+
   useEffect(() => {
     void loadTasks();
     const interval = window.setInterval(() => {
@@ -97,26 +106,49 @@ export default function TransferModal({ onClose, theme }: TransferModalProps) {
     return () => window.clearInterval(interval);
   }, [loadTasks]);
 
+  const activeTasks = useMemo(() => tasks.filter(isActiveTask), [tasks]);
+
+  const mostRecentFinishedTask = useMemo(() => {
+    const recentFinishedTasks = tasks
+      .filter(task => isRecentlyFinishedTask(task))
+      .sort((a, b) => {
+        const aTime = a.finishedAt ?? a.startedAt;
+        const bTime = b.finishedAt ?? b.startedAt;
+        return bTime - aTime;
+      });
+    return recentFinishedTasks[0] ?? null;
+  }, [isRecentlyFinishedTask, tasks]);
+
+  const visibleTasks = useMemo(() => {
+    if (activeTasks.length > 0) {
+      return activeTasks;
+    }
+    return mostRecentFinishedTask ? [mostRecentFinishedTask] : [];
+  }, [activeTasks, mostRecentFinishedTask]);
+
   const overallProgress = useMemo(() => {
-    if (tasks.length === 0) return 0;
-    const totalBytes = tasks.reduce((sum, task) => sum + task.totalBytes, 0);
+    if (activeTasks.length === 0) {
+      return tasks.length > 0 ? 100 : 0;
+    }
+    const totalBytes = activeTasks.reduce((sum, task) => sum + task.totalBytes, 0);
     if (totalBytes > 0) {
-      const completedBytes = tasks.reduce((sum, task) => sum + task.completedBytes, 0);
+      const completedBytes = activeTasks.reduce((sum, task) => sum + task.completedBytes, 0);
       return Math.min(100, (completedBytes / totalBytes) * 100);
     }
 
-    const totalItems = tasks.reduce((sum, task) => sum + task.totalItems, 0);
+    const totalItems = activeTasks.reduce((sum, task) => sum + task.totalItems, 0);
     if (totalItems > 0) {
-      const completedItems = tasks.reduce((sum, task) => sum + task.completedItems, 0);
+      const completedItems = activeTasks.reduce((sum, task) => sum + task.completedItems, 0);
       return Math.min(100, (completedItems / totalItems) * 100);
     }
 
-    return tasks.every(task => task.status === 'completed') ? 100 : 0;
-  }, [tasks]);
+    return 0;
+  }, [activeTasks, tasks.length]);
 
-  const activeCount = tasks.filter(isActiveTask).length;
-  const finishedCount = tasks.length - activeCount;
-  const canAutoClose = !isLoading && activeCount === 0 && (finishedCount > 0 || tasks.length === 0);
+  const activeCount = visibleTasks.filter(isActiveTask).length;
+  const finishedCount = visibleTasks.length - activeCount;
+  const totalFinishedCount = tasks.length - activeCount;
+  const canAutoClose = !isLoading && activeCount === 0 && (totalFinishedCount > 0 || tasks.length === 0);
   const radius = 45;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (overallProgress / 100) * circumference;
@@ -153,7 +185,11 @@ export default function TransferModal({ onClose, theme }: TransferModalProps) {
     tick();
     autoCloseTimeoutRef.current = window.setTimeout(() => {
       autoCloseTimeoutRef.current = null;
-      onClose();
+      void clearFinishedTransferTasks()
+        .catch(() => undefined)
+        .finally(() => {
+          onClose();
+        });
     }, AUTO_CLOSE_DELAY_MS);
   }, [canAutoClose, clearAutoClose, onClose]);
 
@@ -268,13 +304,13 @@ export default function TransferModal({ onClose, theme }: TransferModalProps) {
                 <Loader size={18} />
                 <span>{t('transfer.loading')}</span>
               </div>
-            ) : tasks.length === 0 ? (
+            ) : visibleTasks.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
                 <CheckCircle2 className="w-8 h-8 text-on-surface/25" />
                 <p className="text-[14px] font-semibold text-on-surface/70">{t('transfer.empty')}</p>
               </div>
             ) : (
-              tasks.map(task => {
+              visibleTasks.map(task => {
                 const progress = taskPercent(task);
                 const Icon = task.kind === 'move' ? Archive : Copy;
                 const meta = task.totalBytes > 0
@@ -344,7 +380,7 @@ export default function TransferModal({ onClose, theme }: TransferModalProps) {
           </div>
           <button
             onClick={() => void handleClearFinished()}
-            disabled={finishedCount === 0}
+            disabled={totalFinishedCount === 0}
             className="px-6 py-2 rounded-full border border-transparent text-[13px] font-bold text-on-surface hover:bg-on-surface/[0.04] transition-all flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
           >
             <Trash2 className="w-4 h-4" /> {t('transfer.clearFinished')}

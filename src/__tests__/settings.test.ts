@@ -33,6 +33,7 @@ describe('normalizeContextMenuExtensions', () => {
     expect(result.some(e => e.id === 'custom-foo')).toBe(true);
     expect(result.some(e => e.id === 'ai-assistant')).toBe(true);
     expect(result.some(e => e.id === 'ai-history')).toBe(true);
+    expect(result.some(e => e.id === 'calculate-hash')).toBe(true);
   });
 
   it('preserves isSystem entries and injects missing system extensions', () => {
@@ -46,6 +47,7 @@ describe('normalizeContextMenuExtensions', () => {
     expect(result.some(e => e.id === 'user-1')).toBe(true);
     // 缺失的 ai-history 被补全
     expect(result.some(e => e.id === 'ai-history')).toBe(true);
+    expect(result.some(e => e.id === 'calculate-hash')).toBe(true);
   });
 
   it('fills missing fields', () => {
@@ -117,6 +119,11 @@ describe('normalizeThemeSettings', () => {
   it('default enableLiquidGlass is false', () => {
     const result = normalizeThemeSettings({});
     expect(result.enableLiquidGlass).toBe(false);
+  });
+
+  it('default showFolderSizeInList is true', () => {
+    const result = normalizeThemeSettings({});
+    expect(result.showFolderSizeInList).toBe(true);
   });
 
   it('falls back to favorites when default home path is blank', () => {
@@ -241,6 +248,7 @@ describe('sanitizeImportedSettingsBackup', () => {
     expect(result.theme?.aiProviders?.[0].apiKey).toBeUndefined();
     expect(result.theme?.contextMenuExtensions?.some(ext => ext.id === 'ai-assistant')).toBe(true);
     expect(result.theme?.contextMenuExtensions?.some(ext => ext.id === 'ai-history')).toBe(true);
+    expect(result.theme?.contextMenuExtensions?.some(ext => ext.id === 'calculate-hash')).toBe(true);
   });
 
   it('accepts current backup schema and maps legacy app version field', () => {

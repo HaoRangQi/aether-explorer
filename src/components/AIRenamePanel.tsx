@@ -2,10 +2,10 @@ import React, { useState, useCallback } from 'react';
 import { motion } from 'motion/react';
 import { Sparkles, X, Loader2, Check, AlertCircle, FolderPlus, Move, Trash2, Archive, Pencil } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { ThemeSettings, FileItem, AIExecutedOp } from '../types';
+import { ThemeSettings, FileItem, AIExecutedOp, OperationEffect, OperationStatus } from '../types';
 import { generateFileOps, AIFileOp } from '../lib/ai-service';
 import { renameFile, createFolder, moveFile, deleteToTrash, compressFiles } from '../api/filesystem';
-import { saveOpSession, buildReverseOp } from '../lib/ai-ops-log';
+import { saveOperationSession, buildReverseOp } from '../lib/operation-history';
 
 interface AIRenamePanelProps {
   files: FileItem[];
@@ -41,6 +41,22 @@ function describeOp(op: AIFileOp, t: (key: string, options?: Record<string, unkn
     case 'trash':    return t('aiRename.descriptions.trash', { name: op.path.split('/').pop() || op.path });
     case 'compress': return t('aiRename.descriptions.compress', { count: op.paths.length, outputName: op.outputName });
   }
+}
+
+function resolveActiveModel(theme: ThemeSettings): string | undefined {
+  if (theme.aiProviders?.length && theme.aiActiveProvider) {
+    const active = theme.aiProviders.find(provider => provider.id === theme.aiActiveProvider && provider.enabled);
+    if (active?.model) return active.model;
+  }
+  return theme.aiModel;
+}
+
+function resolveOperationStatus(effects: OperationEffect[]): OperationStatus {
+  const okCount = effects.filter(effect => effect.status === 'ok').length;
+  const failCount = effects.filter(effect => effect.status === 'fail').length;
+  if (failCount > 0 && okCount > 0) return 'partial';
+  if (failCount > 0 && okCount === 0) return 'failed';
+  return 'success';
 }
 
 export default function AIRenamePanel({ files, currentDir, theme, onClose, onComplete }: AIRenamePanelProps) {
@@ -123,22 +139,46 @@ export default function AIRenamePanel({ files, currentDir, theme, onClose, onCom
       setOpResults([...results, ...ops.slice(results.length).map(() => 'pending' as const)]);
     }
 
-    // 写操作日志
-    const hasTrash = executedOps.some(e => e.op.type === 'trash');
-    await saveOpSession({
-      id: `ai-${Date.now()}`,
+    // 写操作日志（统一操作历史）
+    const effects: OperationEffect[] = executedOps.map(entry => ({
+      op: entry.op,
+      status: entry.status,
+      reverseOp: entry.reverseOp,
+      note: entry.note,
+    }));
+    const hasTrash = effects.some(effect => effect.op.type === 'trash');
+    const okCount = effects.filter(effect => effect.status === 'ok').length;
+    const failCount = effects.filter(effect => effect.status === 'fail').length;
+    const skippedCount = effects.filter(effect => effect.status === 'skipped').length;
+    await saveOperationSession({
+      id: `op-ai-${Date.now()}`,
       timestamp: Date.now(),
-      instruction,
-      summary,
-      ops: executedOps,
-      canRollback: executedOps.some(e => e.status === 'ok' && e.reverseOp) && !hasTrash,
+      source: 'ai',
+      category: effects.length > 1 ? 'batch' : (effects[0]?.op.type === 'rename' ? 'rename' : 'other'),
+      status: resolveOperationStatus(effects),
+      canUndo: effects.some(effect => effect.status === 'ok' && effect.reverseOp) && !hasTrash,
+      reasonNotUndoable: hasTrash ? '包含移至废纸篓操作，需手动恢复' : undefined,
+      itemCount: effects.length,
+      title: summary || instruction,
+      summary: summary || instruction,
+      effects,
+      sourceMeta: {
+        aiMeta: {
+          model: resolveActiveModel(theme),
+          instruction,
+          batchTotal: effects.length,
+          batchSucceeded: okCount,
+          batchFailed: failCount,
+          batchSkipped: skippedCount,
+        },
+      },
     }, {
       retentionDays: theme.aiOpsHistoryRetentionDays,
     });
 
     setStatus('done');
     setTimeout(onComplete, 1000);
-  }, [ops, currentDir, instruction, summary, onComplete, theme.aiOpsHistoryRetentionDays]);
+  }, [ops, currentDir, instruction, summary, onComplete, theme]);
 
   return (
     <motion.div

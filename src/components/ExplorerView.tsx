@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, FileText, Video, Archive, FileIcon, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw, History, Plus } from 'lucide-react';
+import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw, History, Plus, Fingerprint } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { interpolateFileActionTemplate, safeShellOpen } from '../lib/url-guard';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -10,14 +10,15 @@ import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, emitTo, listen } from '@tauri-apps/api/event';
-import { listDirectory, cancelDirectoryLoads, getHomeDir, getFileInfo, getAppIcon, getDirectorySignature, previewCopyFileConflicts, previewMoveFileConflicts, startCopyFilesTask, startMoveFilesTask, listTransferTasks, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, duplicateAsAlias, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload } from '../api/filesystem';
-import type { FileTransferPayload, MoveConflict, MoveConflictStrategy, TransferTaskSnapshot } from '../api/filesystem';
-import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction } from '../types';
+import { listDirectory, cancelDirectoryLoads, getHomeDir, getFileInfo, getOpenWithOptions, setDefaultOpenWith, pickApplication, getAppIcon, getDirectorySignature, estimateDirsSizeFast, startDirSizeTask, getDirSizeTask, cancelDirSizeTask, previewCopyFileConflicts, previewMoveFileConflicts, startCopyFilesTask, startMoveFilesTask, listTransferTasks, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, duplicateAsAlias, calculateFileHash, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload } from '../api/filesystem';
+import type { DirectorySizeTaskSnapshot, DirectorySizeTaskStatus, FileHashResult, FileTransferPayload, MoveConflict, MoveConflictStrategy, OpenWithOption, TransferTaskSnapshot } from '../api/filesystem';
+import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction, OperationCategory, OperationEffect, OperationStatus } from '../types';
 import { QUICK_ACCESS } from '../constants';
 import AIRenamePanel from './AIRenamePanel';
-import AIOpsHistory from './AIOpsHistory';
+import OperationHistoryPanel from './OperationHistoryPanel';
 import Tooltip from './Tooltip';
 import CrossWindowDropBanner from './CrossWindowDropBanner';
+import FileTypeIcon from './FileTypeIcon';
 import { directoryErrorKind as classifyDirectoryError, normalizeAppError } from '../lib/app-error';
 import {
   buildFileLookup,
@@ -52,6 +53,7 @@ import {
 } from '../lib/native-menu';
 import { getCachedAssetUrl } from '../lib/asset-url-cache';
 import { formatMediaDuration } from '../lib/media-metadata';
+import { saveOperationSession } from '../lib/operation-history';
 
 const TAG_COLORS: Record<string, string> = {
   'tag-red': '#ff5f56',
@@ -66,11 +68,40 @@ const TAG_COLORS: Record<string, string> = {
 const LIST_COLS = {
   checkbox: 'w-6',
   sortNum: 'w-8',
-  modified: 'w-56',
   size: 'w-24',
   type: 'w-24',
   actions: 'w-8',
 };
+
+const LIST_MODIFIED_COL_BY_DENSITY = {
+  relaxed: 'w-48',
+  normal: 'w-48',
+  compact: 'w-44',
+  ultra: 'w-40',
+} as const;
+
+const SORT_DEFAULT_DIRECTION: Record<string, 'asc' | 'desc'> = {
+  modified: 'desc',
+  size: 'desc',
+};
+
+function parseModifiedTimestamp(value?: string): number {
+  if (!value) return 0;
+  const ts = new Date(value.replace(' ', 'T')).getTime();
+  return Number.isNaN(ts) ? 0 : ts;
+}
+
+function parseSizeToBytes(size?: string): number {
+  if (!size || size === '--') return 0;
+  const normalized = size.trim().toUpperCase();
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed)) return 0;
+  if (/(?:^|\s)(?:T|TB)$/.test(normalized)) return parsed * 1024 * 1024 * 1024 * 1024;
+  if (/(?:^|\s)(?:G|GB)$/.test(normalized)) return parsed * 1024 * 1024 * 1024;
+  if (/(?:^|\s)(?:M|MB)$/.test(normalized)) return parsed * 1024 * 1024;
+  if (/(?:^|\s)(?:K|KB)$/.test(normalized)) return parsed * 1024;
+  return parsed;
+}
 
 // 将 "YYYY-MM-DD HH:mm" 转为相对时间标签，超出 7 天返回空字符串
 function getRelativeTimeLabel(modified: string): string {
@@ -106,11 +137,19 @@ const TAURI_DRAG_LEAVE_EVENT = 'tauri://drag-leave';
 // banner 视觉提示的兜底超时（正常情况源端 dragEnd 会立即终结）
 const INCOMING_DRAG_VISIBLE_MS = 12000;
 const FEEDBACK_VISIBLE_MS = 3200;
+const OPEN_WITH_SUBMENU_CLOSE_DELAY_MS = 220;
 const LARGE_BATCH_OPERATION_THRESHOLD = 5000;
+const MOVE_TASK_DEDUPE_WINDOW_MS = 1500;
 const APP_ICON_CACHE_LIMIT = 256;
+const FOLDER_SIZE_ESTIMATE_CACHE_TTL_MS = 30_000;
+const FOLDER_SIZE_ESTIMATE_BATCH_SIZE = 24;
+const FOLDER_SIZE_ESTIMATE_DEBOUNCE_MS = 60;
+const DIR_SIZE_POLL_INTERVAL_MS = 180;
 const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 const RECENT_VIRTUAL_PATH = 'aether://recent';
 const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
+const OPEN_WITH_SELECT_PLACEHOLDER = '__aether-open-with-placeholder__';
+const OPEN_WITH_SELECT_OTHER = '__aether-open-with-other__';
 const OPEN_WITH_APPS = ['Finder', 'Preview', 'TextEdit', 'Safari', 'Google Chrome', 'Visual Studio Code'];
 const PROTECTED_ROOT_APPROVALS_KEY = 'aether-protected-root-approvals';
 const logDragDebug = (message: string) => {
@@ -168,6 +207,31 @@ interface DirectorySizeInfo {
   formatted_allocated?: string;
   file_count: number;
   skipped_count?: number;
+  isApproximate?: boolean;
+  status?: DirectorySizeTaskStatus;
+  error?: string | null;
+}
+
+interface HashDialogState {
+  file: FileItem;
+  loading: boolean;
+  result: FileHashResult | null;
+  error: string;
+}
+
+function directorySizeInfoFromTaskSnapshot(snapshot: DirectorySizeTaskSnapshot): DirectorySizeInfo {
+  return {
+    path: snapshot.path,
+    bytes: snapshot.bytes,
+    formatted: snapshot.formatted,
+    allocated_bytes: snapshot.allocatedBytes,
+    formatted_allocated: snapshot.formattedAllocated,
+    file_count: snapshot.fileCount,
+    skipped_count: snapshot.skippedCount,
+    isApproximate: snapshot.isApproximate,
+    status: snapshot.status,
+    error: snapshot.error,
+  };
 }
 
 interface TransferTaskWaitMessages {
@@ -176,6 +240,22 @@ interface TransferTaskWaitMessages {
   failedDefaultValue: string;
   onCompleted?: (task: TransferTaskSnapshot | null) => void | Promise<void>;
   onFinished?: (task: TransferTaskSnapshot) => boolean;
+  onSettled?: (task: TransferTaskSnapshot | null) => void | Promise<void>;
+}
+
+interface ManualHistoryRecordInput {
+  category: OperationCategory;
+  title: string;
+  summary: string;
+  effects?: OperationEffect[];
+  itemCount?: number;
+  status?: OperationStatus;
+  canUndo?: boolean;
+  reasonNotUndoable?: string;
+  primaryPath?: string;
+  targetPath?: string;
+  conflictStrategy?: MoveConflictStrategy;
+  volumeHint?: 'same-volume' | 'cross-volume' | 'mixed';
 }
 
 interface IncomingFileDrag {
@@ -244,6 +324,16 @@ interface TauriDragDropPayload {
   position: { x: number; y: number };
 }
 
+function buildMoveTaskDedupeKey(paths: string[], targetPath: string, strategy: MoveConflictStrategy): string {
+  const normalizedTarget = targetPath && targetPath !== '/'
+    ? targetPath.replace(/\/+$/, '')
+    : targetPath || '/';
+  const normalizedPaths = Array.from(new Set(paths.filter(Boolean)))
+    .map(path => (path && path !== '/' ? path.replace(/\/+$/, '') : path || '/'))
+    .sort();
+  return `${strategy}::${normalizedTarget}::${normalizedPaths.join('\u001f')}`;
+}
+
 interface ExplorerViewProps {
   view: ViewMode;
   isActive?: boolean;
@@ -286,7 +376,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [showCheckboxCol, setShowCheckboxCol] = useState(false);
   const [showSortCol, setShowSortCol] = useState(false);
   const [showAIRename, setShowAIRename] = useState(false);
-  const [showAIHistory, setShowAIHistory] = useState(false);
+  const [showOperationHistory, setShowOperationHistory] = useState(false);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [favoriteFiles, setFavoriteFiles] = useState<FileItem[]>([]);
   const [recentFiles, setRecentFiles] = useState<FileItem[]>([]);
@@ -295,6 +385,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [mediaDurationMap, setMediaDurationMap] = useState<Record<string, string>>({});
   const [columnFilesCache, setColumnFilesCache] = useState<Record<string, FileItem[]>>({});
   const [columnLoadErrors, setColumnLoadErrors] = useState<Record<string, string>>({});
+  const [folderSizeEstimateMap, setFolderSizeEstimateMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [directoryErrorKind, setDirectoryErrorKind] = useState<DirectoryErrorKind | null>(null);
@@ -336,12 +427,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [isReceivingExternalDrag, setIsReceivingExternalDrag] = useState(false);
   const fileDragActivityTimerRef = useRef<number | null>(null);
   const fileDragClearTimerRef = useRef<number | null>(null);
+  const submenuCloseTimerRef = useRef<number | null>(null);
   const externalDragFallbackTimerRef = useRef<number | null>(null);
   const localFileDropHandledRef = useRef(false);
   const draggedFileIdRef = useRef<string | null>(null);
   const activeTransferRef = useRef<{ transferId: string; paths: string[] } | null>(null);
   const incomingDragTimerRef = useRef<number | null>(null);
   const recentExternalDropRef = useRef<Set<string>>(new Set());
+  const recentMoveTaskStartsRef = useRef<Map<string, number>>(new Map());
+  const pendingMoveTaskStartsRef = useRef<Set<string>>(new Set());
+  const nativeFileDragActiveRef = useRef(false);
   // 拖拽期间监听光标位置，请求 Rust 把光标下的非源窗口 raise 到前台
   const dragCursorHandlerRef = useRef<((e: DragEvent) => void) | null>(null);
   const lastRaiseAtRef = useRef(0);
@@ -390,6 +485,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const pendingColumnLoadsRef = useRef<Map<string, number>>(new Map());
   const pendingAppIconPathsRef = useRef<Set<string>>(new Set());
   const failedAppIconPathsRef = useRef<Set<string>>(new Set());
+  const folderSizeEstimateMetaRef = useRef<Map<string, { formatted: string; ts: number }>>(new Map());
+  const pendingFolderEstimatePathsRef = useRef<Set<string>>(new Set<string>());
+  const folderSizeEstimateTimerRef = useRef<number | null>(null);
+  const dirSizeTaskIdRef = useRef<string | null>(null);
+  const dirSizePollTimerRef = useRef<number | null>(null);
+  const dirSizeRequestSeqRef = useRef(0);
   // 批量 setAppIconMap 缓冲：每个图标到达不立即 setState，80ms 内合并一次
   // 避免 200 app 触发 200 次 setState → 200 次派生链全量重算
   const pendingIconUpdatesRef = useRef<Record<string, string>>({});
@@ -400,12 +501,32 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [dirSizeLoading, setDirSizeLoading] = useState(false);
   const [dirSizeError, setDirSizeError] = useState('');
   const [inspectorOverride, setInspectorOverride] = useState(false); // 一次性弹出
+  const [inspectorDetails, setInspectorDetails] = useState<FileItem | null>(null);
+  const [inspectorDetailsLoading, setInspectorDetailsLoading] = useState(false);
+  const [openWithOptions, setOpenWithOptions] = useState<OpenWithOption[]>([]);
+  const [openWithOptionsLoading, setOpenWithOptionsLoading] = useState(false);
+  const [openWithUpdating, setOpenWithUpdating] = useState(false);
+  const [hashDialog, setHashDialog] = useState<HashDialogState | null>(null);
+
+  const clearDirSizePolling = useCallback((cancelTask = false) => {
+    if (dirSizePollTimerRef.current) {
+      window.clearInterval(dirSizePollTimerRef.current);
+      dirSizePollTimerRef.current = null;
+    }
+
+    const taskId = dirSizeTaskIdRef.current;
+    dirSizeTaskIdRef.current = null;
+    if (cancelTask && taskId) {
+      void cancelDirSizeTask(taskId).catch(() => {});
+    }
+  }, []);
 
   // 关闭面板（手动关闭或选中文件时）
   const closeInspector = () => {
     setInspectorOverride(false);
     // 如果自动预览开关也是关的，清掉 dirSize
     if (!theme.showPreviewPanel) {
+      clearDirSizePolling(true);
       setDirSize(null);
       setDirSizeLoading(false);
       setDirSizeError('');
@@ -436,6 +557,38 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     modified: '',
     path,
   });
+
+  const patchOpenWithInCollection = useCallback((items: FileItem[], targetPath: string, openWith: string) => {
+    let changed = false;
+    const next = items.map(item => {
+      if (item.path !== targetPath || item.openWith === openWith) return item;
+      changed = true;
+      return { ...item, openWith };
+    });
+    return changed ? next : items;
+  }, []);
+
+  const syncFileOpenWith = useCallback((targetPath: string, openWith: string) => {
+    setFiles(prev => patchOpenWithInCollection(prev, targetPath, openWith));
+    setFavoriteFiles(prev => patchOpenWithInCollection(prev, targetPath, openWith));
+    setRecentFiles(prev => patchOpenWithInCollection(prev, targetPath, openWith));
+    setTaggedFiles(prev => patchOpenWithInCollection(prev, targetPath, openWith));
+    setColumnFilesCache(prev => {
+      let changed = false;
+      const next: Record<string, FileItem[]> = {};
+      Object.entries(prev).forEach(([key, items]) => {
+        const patched = patchOpenWithInCollection(items, targetPath, openWith);
+        if (patched !== items) changed = true;
+        next[key] = patched;
+      });
+      return changed ? next : prev;
+    });
+    setInspectorDetails(prev => (
+      prev?.path === targetPath && prev.openWith !== openWith
+        ? { ...prev, openWith }
+        : prev
+    ));
+  }, [patchOpenWithInCollection]);
 
   const resetColumnState = useCallback(() => {
     columnLoadGenerationRef.current += 1;
@@ -632,6 +785,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
+  const clearFileClipboardState = async () => {
+    try {
+      await clearFileClipboard();
+    } catch {
+      // ignore clear failures; UI should still drop paste affordance
+    }
+    setHasFileClipboard(false);
+  };
+
   const getTransferPathsForFile = (file: FileItem) => {
     const items = selectedFileIds.includes(file.id) && selectedFiles.length > 0 ? selectedFiles : [file];
     return items.map(item => item.path);
@@ -826,7 +988,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           useTransferTask: true,
         });
       } else {
-        await executeCopyFiles(makeFileItemsFromPaths(paths), makeFolderItemFromPath(targetDir), 'abort');
+        await executeCopyFiles(makeFileItemsFromPaths(paths), makeFolderItemFromPath(targetDir), 'abort', {
+          clearClipboardOnSuccess: true,
+        });
       }
     } catch (e) {
       showFeedback(t('messages.operationFailed', { error: formatAppError(e) }));
@@ -934,6 +1098,122 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   }, []);
   showFeedbackRef.current = showFeedback;
 
+  const resolveOperationStatusByEffects = useCallback((effects: OperationEffect[]): OperationStatus => {
+    const okCount = effects.filter(effect => effect.status === 'ok').length;
+    const failCount = effects.filter(effect => effect.status === 'fail').length;
+    if (failCount > 0 && okCount > 0) return 'partial';
+    if (failCount > 0 && okCount === 0) return 'failed';
+    return 'success';
+  }, []);
+
+  const recordManualOperationHistory = useCallback(async (input: ManualHistoryRecordInput) => {
+    const effects = input.effects ?? [];
+    const hasReverse = effects.some(effect => effect.status === 'ok' && Boolean(effect.reverseOp));
+    const canUndo = input.canUndo ?? hasReverse;
+    const status = input.status ?? resolveOperationStatusByEffects(effects);
+    const itemCount = input.itemCount ?? effects.length;
+    try {
+      await saveOperationSession({
+        id: `op-manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: Date.now(),
+        source: 'manual',
+        category: input.category,
+        status,
+        canUndo,
+        reasonNotUndoable: canUndo ? undefined : (input.reasonNotUndoable || '该操作不可安全撤销'),
+        itemCount: Math.max(1, itemCount),
+        title: input.title,
+        summary: input.summary,
+        effects,
+        sourceMeta: {
+          manualMeta: {
+            action: input.category,
+            primaryPath: input.primaryPath,
+            targetPath: input.targetPath,
+            conflictStrategy: input.conflictStrategy,
+            volumeHint: input.volumeHint,
+          },
+        },
+      }, {
+        retentionDays: theme.aiOpsHistoryRetentionDays,
+      });
+    } catch {
+      // 操作历史写入失败时不影响主流程
+    }
+  }, [resolveOperationStatusByEffects, theme.aiOpsHistoryRetentionDays]);
+
+  const resolveTransferTaskOperationStatus = useCallback((task: TransferTaskSnapshot | null): OperationStatus => {
+    if (!task) return 'failed';
+    if (task.status === 'cancelled') return 'failed';
+    if (task.status === 'failed') {
+      const completed = task.moved + task.copied + task.copiedCrossDevice;
+      return completed > 0 ? 'partial' : 'failed';
+    }
+    if (task.failed > 0 || task.skipped > 0) return 'partial';
+    return 'success';
+  }, []);
+
+  const resolveTransferTaskVolumeHint = useCallback((task: TransferTaskSnapshot | null): 'same-volume' | 'cross-volume' | 'mixed' | undefined => {
+    if (!task) return undefined;
+    if (task.copiedCrossDevice > 0 && task.moved > 0) return 'mixed';
+    if (task.copiedCrossDevice > 0) return 'cross-volume';
+    return 'same-volume';
+  }, []);
+
+  const getBaseNameFromPath = useCallback((path: string): string => {
+    const parts = path.split('/').filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : path;
+  }, []);
+
+  const joinDirAndName = useCallback((dir: string, name: string): string => {
+    if (dir === '/') return `/${name}`;
+    return `${dir.replace(/\/+$/, '')}/${name}`;
+  }, []);
+
+  const buildMoveEffects = useCallback((paths: string[], targetDir: string, includeReverse: boolean): OperationEffect[] => (
+    paths.map(path => {
+      const name = getBaseNameFromPath(path);
+      const originalDir = path.split('/').slice(0, -1).join('/') || '/';
+      const movedPath = joinDirAndName(targetDir, name);
+      return {
+        op: { type: 'move', path, targetDir },
+        status: 'ok',
+        reverseOp: includeReverse
+          ? { type: 'move', path: movedPath, targetDir: originalDir }
+          : undefined,
+      } satisfies OperationEffect;
+    })
+  ), [getBaseNameFromPath, joinDirAndName]);
+
+  const canUndoTransferMove = useCallback((task: TransferTaskSnapshot | null, expectedCount: number): boolean => {
+    if (!task) return false;
+    if (task.status !== 'completed') return false;
+    // 仅允许“同卷纯移动且全成功”的场景自动撤销
+    if (task.copiedCrossDevice > 0) return false;
+    if (task.failed > 0 || task.skipped > 0) return false;
+    if (task.moved !== expectedCount) return false;
+    return true;
+  }, []);
+
+  const clearContextSubmenuCloseTimer = () => {
+    if (!submenuCloseTimerRef.current) return;
+    window.clearTimeout(submenuCloseTimerRef.current);
+    submenuCloseTimerRef.current = null;
+  };
+
+  const openContextSubmenu = (submenu: string) => {
+    clearContextSubmenuCloseTimer();
+    setContextSubmenu(submenu);
+  };
+
+  const scheduleContextSubmenuClose = (submenu: string) => {
+    clearContextSubmenuCloseTimer();
+    submenuCloseTimerRef.current = window.setTimeout(() => {
+      submenuCloseTimerRef.current = null;
+      setContextSubmenu(prev => (prev === submenu ? null : prev));
+    }, OPEN_WITH_SUBMENU_CLOSE_DELAY_MS);
+  };
+
   const requestExistingOutputChoice = useCallback((state: Omit<ExistingOutputDialogState, 'onResolve'>) => (
     new Promise<'replace' | 'keepBoth' | 'cancel'>(resolve => {
       setExistingOutputDialog({
@@ -1019,6 +1299,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     resetColumnState();
     setNavigationHistory(EMPTY_NAVIGATION_HISTORY);
     setActiveDropdown(null);
+    clearContextSubmenuCloseTimer();
     setContextMenu(null);
     setContextSubmenu(null);
     setSelectionBox(null);
@@ -1070,6 +1351,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (feedbackTimerRef.current) window.clearTimeout(feedbackTimerRef.current);
     if (marqueeResetTimerRef.current) window.clearTimeout(marqueeResetTimerRef.current);
     if (typeaheadTimerRef.current) window.clearTimeout(typeaheadTimerRef.current);
+    if (submenuCloseTimerRef.current) window.clearTimeout(submenuCloseTimerRef.current);
   }, []);
 
   // Resolve view ID to path — strip timestamp suffix from tab IDs
@@ -1245,6 +1527,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   useEffect(() => {
     const handleInternalMouseMove = (event: MouseEvent) => {
+      if (nativeFileDragActiveRef.current) return;
       const dragState = internalDragRef.current;
       if (!dragState) return;
 
@@ -1276,6 +1559,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     };
 
     const handleInternalMouseUp = async (event: MouseEvent) => {
+      if (nativeFileDragActiveRef.current) {
+        internalDragRef.current = null;
+        return;
+      }
       const dragState = internalDragRef.current;
       if (!dragState) return;
 
@@ -1317,11 +1604,23 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   }, [view, onSelectFiles, resetColumnState]);
   
   const displayedFiles = isFavoritesRoot ? favoriteFiles : isRecentRoot ? recentFiles : isTagRoot ? taggedFiles : files;
-  const filesWithAppIcons = useMemo(() => displayedFiles.map(file => (
+  const folderSizeEstimateEnabled = theme.showFolderSizeInList !== false;
+
+  const filesWithFolderSizeEstimates = useMemo(() => {
+    if (!folderSizeEstimateEnabled || displayMode !== 'list') return displayedFiles;
+    return displayedFiles.map(file => {
+      if (file.type !== 'folder') return file;
+      const estimated = folderSizeEstimateMap[file.path];
+      if (!estimated || estimated === file.size) return file;
+      return { ...file, size: estimated };
+    });
+  }, [displayMode, displayedFiles, folderSizeEstimateEnabled, folderSizeEstimateMap]);
+
+  const filesWithAppIcons = useMemo(() => filesWithFolderSizeEstimates.map(file => (
     file.type === 'application' && appIconMap[file.path]
       ? { ...file, thumbnail: appIconMap[file.path] }
       : file
-  )), [displayedFiles, appIconMap]);
+  )), [filesWithFolderSizeEstimates, appIconMap]);
   const filesWithMediaMetadata = useMemo(() => filesWithAppIcons.map(file => (
     file.type === 'video' && mediaDurationMap[file.path]
       ? { ...file, duration: mediaDurationMap[file.path] }
@@ -1331,6 +1630,83 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   useEffect(() => {
     hydrateAppIcons(displayedFiles);
   }, [displayedFiles, hydrateAppIcons]);
+
+  useEffect(() => {
+    if (!folderSizeEstimateEnabled || displayMode !== 'list' || displayedFiles.length === 0) return;
+    if (isVirtualRoot) return;
+
+    const now = Date.now();
+    const pending = pendingFolderEstimatePathsRef.current;
+
+    for (const file of displayedFiles) {
+      if (file.type !== 'folder') continue;
+      if (!file.path || isVirtualPath(file.path)) continue;
+      if (pending.has(file.path)) continue;
+      const cached = folderSizeEstimateMetaRef.current.get(file.path);
+      if (cached && now - cached.ts < FOLDER_SIZE_ESTIMATE_CACHE_TTL_MS) continue;
+      pending.add(file.path);
+    }
+
+    if (folderSizeEstimateTimerRef.current || pending.size === 0) return;
+
+    const flushEstimates = async () => {
+      folderSizeEstimateTimerRef.current = null;
+      const queue = pendingFolderEstimatePathsRef.current as Set<string>;
+      if (queue.size === 0) return;
+
+      const batch: string[] = [];
+      for (const path of queue) {
+        batch.push(path);
+        if (batch.length >= FOLDER_SIZE_ESTIMATE_BATCH_SIZE) break;
+      }
+      batch.forEach(path => queue.delete(path));
+
+      try {
+        const results = await estimateDirsSizeFast(batch);
+        if (results.length > 0) {
+          const ts = Date.now();
+          const updates: Record<string, string> = {};
+          for (const item of results) {
+            if (!item?.path || !item.formatted) continue;
+            folderSizeEstimateMetaRef.current.set(item.path, {
+              formatted: item.formatted,
+              ts,
+            });
+            updates[item.path] = item.formatted;
+          }
+          if (Object.keys(updates).length > 0) {
+            setFolderSizeEstimateMap(prev => ({ ...prev, ...updates }));
+          }
+        }
+      } catch {
+        // 粗略估算是增强能力，失败时静默降级为 "--"。
+      } finally {
+        if (pendingFolderEstimatePathsRef.current.size > 0) {
+          folderSizeEstimateTimerRef.current = window.setTimeout(flushEstimates, FOLDER_SIZE_ESTIMATE_DEBOUNCE_MS);
+        }
+      }
+    };
+
+    folderSizeEstimateTimerRef.current = window.setTimeout(flushEstimates, FOLDER_SIZE_ESTIMATE_DEBOUNCE_MS);
+  }, [displayMode, displayedFiles, folderSizeEstimateEnabled, isVirtualRoot]);
+
+  useEffect(() => {
+    if (folderSizeEstimateEnabled) return;
+    folderSizeEstimateMetaRef.current.clear();
+    pendingFolderEstimatePathsRef.current.clear();
+    if (folderSizeEstimateTimerRef.current) {
+      window.clearTimeout(folderSizeEstimateTimerRef.current);
+      folderSizeEstimateTimerRef.current = null;
+    }
+    setFolderSizeEstimateMap({});
+  }, [folderSizeEstimateEnabled]);
+
+  useEffect(() => () => {
+    if (folderSizeEstimateTimerRef.current) {
+      window.clearTimeout(folderSizeEstimateTimerRef.current);
+      folderSizeEstimateTimerRef.current = null;
+    }
+  }, []);
 
   const selectableFiles = useMemo(() => {
     const filesById = new Map<string, FileItem>();
@@ -1363,10 +1739,27 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     if (sortConfig) {
       filtered = [...filtered].sort((a, b) => {
-        const valA = (a as any)[sortConfig.key] || '';
-        const valB = (b as any)[sortConfig.key] || '';
-        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
-        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        let result = 0;
+        if (sortConfig.key === 'modified') {
+          const tsA = parseModifiedTimestamp(a.modified);
+          const tsB = parseModifiedTimestamp(b.modified);
+          result = tsA - tsB;
+        } else if (sortConfig.key === 'size') {
+          const sizeA = parseSizeToBytes(a.size);
+          const sizeB = parseSizeToBytes(b.size);
+          result = sizeA - sizeB;
+        } else {
+          const valA = String((a as any)[sortConfig.key] || '').toLowerCase();
+          const valB = String((b as any)[sortConfig.key] || '').toLowerCase();
+          if (valA < valB) result = -1;
+          else if (valA > valB) result = 1;
+        }
+        if (result < 0) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (result > 0) return sortConfig.direction === 'asc' ? 1 : -1;
+        const fallbackA = a.name.toLowerCase();
+        const fallbackB = b.name.toLowerCase();
+        if (fallbackA < fallbackB) return -1;
+        if (fallbackA > fallbackB) return 1;
         return 0;
       });
     }
@@ -1682,6 +2075,21 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         success: 'messages.importedFromFinder',
         failed: 'messages.finderImportFailed',
         failedDefaultValue: '导入失败：{{error}}',
+        onSettled: async task => {
+          await recordManualOperationHistory({
+            category: 'copy',
+            title: '导入文件',
+            summary: `导入 ${cleanPaths.length} 个项目`,
+            itemCount: cleanPaths.length,
+            status: resolveTransferTaskOperationStatus(task),
+            canUndo: false,
+            reasonNotUndoable: '传输任务无逐项回滚信息',
+            primaryPath: cleanPaths[0],
+            targetPath: targetDir,
+            conflictStrategy: 'abort',
+            volumeHint: resolveTransferTaskVolumeHint(task),
+          });
+        },
       }, targetDir);
       return true;
     } catch (err) {
@@ -1712,8 +2120,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     messages: TransferTaskWaitMessages,
     refreshTargetPath?: string,
   ) {
+    let settledTask: TransferTaskSnapshot | null = null;
     try {
       const task = await waitForTransferTaskResult(taskId, refreshTargetPath);
+      settledTask = task;
       if (!task) {
         showFeedback(t(messages.failed, {
           error: t('messages.transferTaskUnavailable', { defaultValue: '传输任务记录已清理' }),
@@ -1743,6 +2153,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         error: formatAppError(err),
         defaultValue: messages.failedDefaultValue,
       }));
+    } finally {
+      await messages.onSettled?.(settledTask);
     }
   }
 
@@ -1868,54 +2280,100 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     const paths = filesToMove.map(file => file.path);
-    if (conflictStrategy === 'abort') {
-      const conflicts = await previewMoveFileConflicts(paths, targetFolder.path);
-      if (conflicts.length > 0) {
-        setMoveConflictDialog({
-          filesToMove,
-          targetFolder,
-          conflicts,
-          operation: 'move',
-          clearClipboardOnSuccess: options.clearClipboardOnSuccess,
-          clearDragPayloadOnSuccess: options.clearDragPayloadOnSuccess,
-          useTransferTaskOnResolve: true,
-        });
-        return true;
+    const moveTaskKey = buildMoveTaskDedupeKey(paths, targetFolder.path, conflictStrategy);
+    const now = Date.now();
+    const recentStarts = recentMoveTaskStartsRef.current;
+    for (const [key, startedAt] of recentStarts.entries()) {
+      if (now - startedAt > MOVE_TASK_DEDUPE_WINDOW_MS) {
+        recentStarts.delete(key);
       }
     }
+    if (pendingMoveTaskStartsRef.current.has(moveTaskKey)) {
+      logDragDebug(`moveTaskDeduped reason=pending key=${moveTaskKey}`);
+      return true;
+    }
+    const recentStartedAt = recentStarts.get(moveTaskKey);
+    if (typeof recentStartedAt === 'number' && now - recentStartedAt <= MOVE_TASK_DEDUPE_WINDOW_MS) {
+      logDragDebug(`moveTaskDeduped reason=recent key=${moveTaskKey}`);
+      return true;
+    }
 
-    const taskId = await startMoveFilesTask(paths, targetFolder.path, conflictStrategy);
-    logDragDebug(`moveTaskStarted taskId=${taskId} count=${paths.length} conflictStrategy=${conflictStrategy}`);
-    onStartTransfer();
-    showFeedback(t('messages.moveStarted', { count: paths.length }));
-    void waitForTransferTask(taskId, paths.length, {
-      success: 'messages.moveCompleted',
-      failed: 'messages.moveFailed',
-      failedDefaultValue: '移动失败：{{error}}',
-      onCompleted: async task => {
-        if (task && task.failed === 0) {
-          const completed = task.moved + task.copiedCrossDevice;
-          if (options.clearClipboardOnSuccess && task.copiedCrossDevice === 0 && task.skipped === 0 && task.moved > 0) {
-            await clearFileClipboard();
-            setHasFileClipboard(false);
-          }
-          if (options.clearDragPayloadOnSuccess && completed > 0) {
-            finishSharedFileDrag();
-          }
-        }
-        showMoveTaskCompletedFeedback(task, paths.length);
-      },
-      onFinished: task => {
-        if (task.status === 'cancelled' && options.clearDragPayloadOnSuccess) {
-          finishSharedFileDrag();
-        }
-        if (task.status === 'failed' && (task.moved > 0 || task.copiedCrossDevice > 0 || task.skipped > 0)) {
-          showMoveTaskCompletedFeedback(task, paths.length);
+    pendingMoveTaskStartsRef.current.add(moveTaskKey);
+    try {
+      if (conflictStrategy === 'abort') {
+        const conflicts = await previewMoveFileConflicts(paths, targetFolder.path);
+        if (conflicts.length > 0) {
+          setMoveConflictDialog({
+            filesToMove,
+            targetFolder,
+            conflicts,
+            operation: 'move',
+            clearClipboardOnSuccess: options.clearClipboardOnSuccess,
+            clearDragPayloadOnSuccess: options.clearDragPayloadOnSuccess,
+            useTransferTaskOnResolve: true,
+          });
           return true;
         }
-        return false;
-      },
-    });
+      }
+
+      const taskId = await startMoveFilesTask(paths, targetFolder.path, conflictStrategy);
+      recentStarts.set(moveTaskKey, Date.now());
+      // 避免 map 长期增长，保留最新一批即可。
+      while (recentStarts.size > 256) {
+        const oldestKey = recentStarts.keys().next().value;
+        if (!oldestKey) break;
+        recentStarts.delete(oldestKey);
+      }
+      logDragDebug(`moveTaskStarted taskId=${taskId} count=${paths.length} conflictStrategy=${conflictStrategy}`);
+      onStartTransfer();
+      showFeedback(t('messages.moveStarted', { count: paths.length }));
+      void waitForTransferTask(taskId, paths.length, {
+        success: 'messages.moveCompleted',
+        failed: 'messages.moveFailed',
+        failedDefaultValue: '移动失败：{{error}}',
+        onCompleted: async task => {
+          if (task && task.failed === 0) {
+            const completed = task.moved + task.copiedCrossDevice;
+            if (options.clearClipboardOnSuccess) {
+              await clearFileClipboardState();
+            }
+            if (options.clearDragPayloadOnSuccess && completed > 0) {
+              finishSharedFileDrag();
+            }
+          }
+          showMoveTaskCompletedFeedback(task, paths.length);
+        },
+        onFinished: task => {
+          if (task.status === 'cancelled' && options.clearDragPayloadOnSuccess) {
+            finishSharedFileDrag();
+          }
+          if (task.status === 'failed' && (task.moved > 0 || task.copiedCrossDevice > 0 || task.skipped > 0)) {
+            showMoveTaskCompletedFeedback(task, paths.length);
+            return true;
+          }
+          return false;
+        },
+        onSettled: async task => {
+          const undoable = canUndoTransferMove(task, paths.length);
+          await recordManualOperationHistory({
+            category: 'move',
+            title: '移动',
+            summary: `移动 ${paths.length} 个项目`,
+            effects: undoable ? buildMoveEffects(paths, targetFolder.path, true) : undefined,
+            itemCount: paths.length,
+            status: resolveTransferTaskOperationStatus(task),
+            canUndo: undoable,
+            reasonNotUndoable: undoable ? undefined : '仅同卷且全成功的移动支持撤销',
+            primaryPath: paths[0],
+            targetPath: targetFolder.path,
+            conflictStrategy,
+            volumeHint: resolveTransferTaskVolumeHint(task),
+          });
+        },
+      });
+    } finally {
+      pendingMoveTaskStartsRef.current.delete(moveTaskKey);
+    }
     return true;
   };
 
@@ -2457,9 +2915,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
 
       if (result.failed.length === 0) {
-        if (options.clearClipboardOnSuccess && result.moved.length > 0 && !hasCrossDeviceCopies && skipped === 0) {
-          await clearFileClipboard();
-          setHasFileClipboard(false);
+        if (options.clearClipboardOnSuccess) {
+          await clearFileClipboardState();
         }
         if (options.clearDragPayloadOnSuccess) {
           finishSharedFileDrag();
@@ -2520,7 +2977,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       if (conflictStrategy === 'abort') {
         const conflicts = await previewCopyFileConflicts(paths, targetFolder.path);
         if (conflicts.length > 0) {
-          setMoveConflictDialog({ filesToMove: filesToCopy, targetFolder, conflicts, operation: 'copy' });
+          setMoveConflictDialog({
+            filesToMove: filesToCopy,
+            targetFolder,
+            conflicts,
+            operation: 'copy',
+            clearClipboardOnSuccess: options.clearClipboardOnSuccess,
+          });
           return true;
         }
       }
@@ -2533,6 +2996,26 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         success: 'messages.copyCompleted',
         failed: 'messages.operationFailed',
         failedDefaultValue: '复制失败：{{error}}',
+        onCompleted: async task => {
+          if (task && task.failed === 0 && options.clearClipboardOnSuccess) {
+            await clearFileClipboardState();
+          }
+        },
+        onSettled: async task => {
+          await recordManualOperationHistory({
+            category: 'copy',
+            title: '复制',
+            summary: `复制 ${paths.length} 个项目`,
+            itemCount: paths.length,
+            status: resolveTransferTaskOperationStatus(task),
+            canUndo: false,
+            reasonNotUndoable: '传输任务无逐项回滚信息',
+            primaryPath: paths[0],
+            targetPath: targetFolder.path,
+            conflictStrategy,
+            volumeHint: resolveTransferTaskVolumeHint(task),
+          });
+        },
       });
     } catch (err) {
       logDragDebug(`copyError error=${formatAppError(err)}`);
@@ -2552,6 +3035,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     if (dialog.operation === 'copy') {
       await executeCopyFiles(dialog.filesToMove, dialog.targetFolder, strategy, {
+        clearClipboardOnSuccess: dialog.clearClipboardOnSuccess,
         skipLargeBatchConfirm: true,
       });
       return;
@@ -2574,6 +3058,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleDragStart = (e: React.DragEvent, file: FileItem) => {
+    nativeFileDragActiveRef.current = true;
+    internalDragRef.current = null;
     draggedFileIdRef.current = file.id;
     localFileDropHandledRef.current = false;
     const paths = writeDragPayload(file);
@@ -2618,6 +3104,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleDragEnd = (e: React.DragEvent) => {
+    nativeFileDragActiveRef.current = false;
     logDragDebug(`dragEnd activeId=${draggedFileIdRef.current ?? ''} screenX=${e.screenX} screenY=${e.screenY} meta=${e.metaKey} alt=${e.altKey} shift=${e.shiftKey}`);
 
     stopCursorRaiseTracking();
@@ -2717,10 +3204,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const handleSort = (key: string) => {
     setSortConfig(current => {
       if (current?.key === key) {
+        if (key === 'modified' || key === 'size') {
+          return { key, direction: current.direction === 'desc' ? 'asc' : 'desc' };
+        }
         if (current.direction === 'desc') return null; // Reset sort
         return { key, direction: 'desc' };
       }
-      return { key, direction: 'asc' };
+      return { key, direction: SORT_DEFAULT_DIRECTION[key] || 'asc' };
     });
   };
 
@@ -2757,20 +3247,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
-  const getFileIcon = (type: FileItem['type'], thumbnail?: string) => {
-    if (type === 'application' && thumbnail) {
-      return <img src={thumbnail} alt="" className="w-full h-full object-contain drop-shadow-sm" draggable={false} />;
+  const getFileIcon = (target: FileItem | FileItem['type'], thumbnailOverride?: string) => {
+    if (typeof target === 'string') {
+      return <FileTypeIcon type={target} thumbnailOverride={thumbnailOverride} className="h-full w-full" />;
     }
-
-    switch (type) {
-      case 'image': return <ImageIcon className="w-5 h-5 text-icon" />;
-      case 'video': return <Video className="w-5 h-5 text-secondary" />;
-      case 'pdf': return <FileText className="w-5 h-5 text-red-400" />;
-      case 'archive': return <Archive className="w-5 h-5 text-yellow-400" />;
-      case 'folder': return <Folder className="w-5 h-5 text-icon fill-current opacity-80" />;
-      case 'application': return <Archive className="w-5 h-5 text-icon" />;
-      default: return <FileIcon className="w-5 h-5 text-secondary-custom" />;
-    }
+    return <FileTypeIcon file={target} thumbnailOverride={thumbnailOverride} className="h-full w-full" />;
   };
 
   const getFileTypeLabel = useCallback((type: FileItem['type']) => {
@@ -2812,7 +3293,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }}
       >
         <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/15">
-          {getFileIcon(file.type, file.thumbnail)}
+          {getFileIcon(file)}
           {dragPreview.count > 1 && (
             <span className="absolute -right-2 -top-2 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-black text-on-primary shadow-lg">
               {dragPreview.count}
@@ -2841,6 +3322,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     return `${base.substring(0, 25)}...${ext}`;
   };
 
+  const activeListDensity = (theme.listDensity || 'normal') as keyof typeof LIST_MODIFIED_COL_BY_DENSITY;
+  const listModifiedColClass = LIST_MODIFIED_COL_BY_DENSITY[activeListDensity] || LIST_MODIFIED_COL_BY_DENSITY.normal;
+
   const renderFileItem = (file: FileItem, isColumnItem = false, sortIndex?: number, sourceColumnIndex?: number) => {
     const isColumnBranchSelected = isColumnItem
       && file.type === 'folder'
@@ -2859,7 +3343,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     const mediaMetaClass = isHiddenFile ? 'text-white/45' : 'text-white/90';
     
     if (displayMode === 'list' && !isColumnItem) {
-      const density = theme.listDensity || 'normal';
+      const density = activeListDensity;
+      const relativeModifiedLabel = getRelativeTimeLabel(file.modified);
       
       const config = {
         relaxed: { py: 'py-4', gap: 'gap-4', icon: 'w-10 h-10', text: 'text-[15px]', subText: 'text-[12px]', scale: 'scale-100' },
@@ -2915,9 +3400,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             <div className={`${LIST_COLS.sortNum} shrink-0 text-[10px] font-black text-on-surface/25 tabular-nums pl-1`}>{sortIndex ?? ''}</div>
           )}
           <div className={`flex items-center flex-1 min-w-0 ${config.gap}`}>
-            <div className={`${config.icon} rounded-lg flex items-center justify-center shrink-0 shadow-sm border border-on-surface/5 transition-colors ${isSelected ? 'bg-hover-custom' : 'bg-panel-custom'}`}>
-               <div className={`w-full h-full flex items-center justify-center transition-transform ${config.scale}`}>
-                 {getFileIcon(file.type, file.thumbnail)}
+            <div className={`${config.icon} flex items-center justify-center shrink-0 overflow-hidden`}>
+               <div className={`w-full h-full flex items-center justify-center transition-transform ${
+                 file.thumbnail && (file.type === 'application' || file.type === 'image') ? '' : config.scale
+               }`}>
+                 {getFileIcon(file)}
                </div>
             </div>
             {renamingFile?.id === file.id ? (
@@ -2930,7 +3417,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 autoFocus
                 className={`${config.text} font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none min-w-0 flex-1`} />
             ) : (
-            <span className={`${config.text} select-none font-black ${fileNameClass} truncate pr-4 transition-all duration-300`}>{formattedName}</span>
+            <span className={`${config.text} select-none font-black ${fileNameClass} truncate pr-2 transition-all duration-300`}>{formattedName}</span>
             )}
             {tags.length > 0 && (
               <div className="flex gap-1 shrink-0">
@@ -2938,10 +3425,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               </div>
             )}
           </div>
-          <div className={`${LIST_COLS.modified} shrink-0 pl-2 flex items-center gap-1.5 transition-all duration-300 min-w-0`}>
-            <span className={`${config.subText} ${fileMetaClass} font-black truncate shrink-0`}>{file.modified}</span>
-            {getRelativeTimeLabel(file.modified) && (
-              <span className="text-[10px] font-medium text-on-surface/35 shrink-0">{getRelativeTimeLabel(file.modified)}</span>
+          <div className={`${listModifiedColClass} shrink-0 pl-1.5 flex items-center gap-1 transition-all duration-300 min-w-0`}>
+            <span className={`${config.subText} ${fileMetaClass} font-black truncate min-w-0 flex-1`}>{file.modified}</span>
+            {relativeModifiedLabel && (
+              <span className="text-[10px] font-medium text-on-surface/35 shrink-0 max-w-[3.5rem] truncate">{relativeModifiedLabel}</span>
             )}
           </div>
           <div className={`${LIST_COLS.size} shrink-0 ${config.subText} ${fileMetaClass} font-mono font-black pl-2 text-right tabular-nums transition-all duration-300`}>{file.size || '--'}</div>
@@ -2989,7 +3476,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           }}
         >
           <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-panel-custom group-hover:bg-hover-custom transition-colors shrink-0 p-1">
-            {getFileIcon(file.type, file.thumbnail)}
+            {getFileIcon(file)}
           </div>
           <div className="flex-1 min-w-0 flex flex-col justify-center">
             {renamingFile?.id === file.id ? (
@@ -3061,7 +3548,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
               <div className="absolute bottom-0 left-0 right-0 p-4">
                 <div className="flex items-center gap-2 mb-1">
-                  {getFileIcon(file.type, file.thumbnail)}
+                  {getFileIcon(file)}
                   <span className="text-[10px] font-black bg-primary text-on-primary px-1.5 py-0.5 rounded-full shadow-lg">{file.type === 'video' ? 'VIDEO' : 'IMAGE'}</span>
                 </div>
                 {renamingFile?.id === file.id ? (
@@ -3080,7 +3567,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             <>
               <div className="flex justify-between items-start">
                 <div className={`w-14 h-14 rounded-2xl flex items-center justify-center bg-panel-custom group-hover:bg-hover-custom transition-colors shrink-0 p-1`}>
-                  {getFileIcon(file.type, file.thumbnail)}
+                  {getFileIcon(file)}
                 </div>
               </div>
               <div className="mt-4 flex-1">
@@ -3202,16 +3689,20 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     const parsed = Number.parseFloat(size);
     if (Number.isNaN(parsed)) return t('explorer.groupSizeUnknown', '未知大小');
+    const normalized = size.trim().toUpperCase();
+    const hasHugeUnit = /(?:^|\s)(?:T|TB|G|GB)$/.test(normalized);
+    const hasMediumUnit = /(?:^|\s)(?:M|MB)$/.test(normalized);
+    const hasSmallUnit = /(?:^|\s)(?:K|KB)$/.test(normalized);
 
-    if (size.includes('GB') || size.includes('TB')) {
+    if (hasHugeUnit) {
       return t('explorer.groupSizeHuge', '超大');
     }
-    if (size.includes('MB')) {
+    if (hasMediumUnit) {
       if (parsed >= 100) return t('explorer.groupSizeLarge', '大');
       if (parsed >= 10) return t('explorer.groupSizeMedium', '中');
       return t('explorer.groupSizeSmall', '小');
     }
-    if (size.includes('KB')) {
+    if (hasSmallUnit) {
       return parsed >= 1024 ? t('explorer.groupSizeMedium', '中') : t('explorer.groupSizeSmall', '小');
     }
 
@@ -3397,8 +3888,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         action: () => { setShowAIRename(true); },
       }));
       items.push(await MenuItem.new({
-        text: t('explorer.aiHistory', 'AI 操作历史'),
-        action: () => { setShowAIHistory(true); },
+        text: t('explorer.aiHistory', '操作历史'),
+        action: () => { setShowOperationHistory(true); },
       }));
     } else {
       // 第1分组: 打开 + 重命名
@@ -3414,7 +3905,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
             action: () => { void handleOpenWith(primary, appName); },
           })),
           MenuItem.new({
-            text: t('explorer.openWithOther', '其它…'),
+            text: t('explorer.openWithOther', '选择更多…'),
             action: () => { void handleOpenWithOther(primary); },
           }),
         ]),
@@ -3428,7 +3919,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         action: () => { setShowAIRename(true); },
       }));
       await addSeparator();
-      // 第2分组: 复制 + 剪切 + 制作替身
+      // 第2分组: 复制 + 剪切 + 创建副本
       items.push(await MenuItem.new({
         text: t('explorer.copy', '复制'),
         action: () => { void handleCopyToClipboard(getActionFiles(primary)); },
@@ -3438,7 +3929,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         action: () => { void handleCutToClipboard(getActionFiles(primary)); },
       }));
       items.push(await MenuItem.new({
-        text: t('explorer.alias', '制作替身'),
+        text: t('explorer.alias', '创建副本'),
         action: () => { void handleAlias(primary); },
       }));
       await addSeparator();
@@ -3531,6 +4022,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     if (isBlank) void refreshFileClipboardState();
+    clearContextSubmenuCloseTimer();
     setContextSubmenu(null);
     setContextMenu({ x: e.clientX, y: e.clientY, fileIds: newSelection, isBlank, targetDir: blankTargetDir });
   };
@@ -3546,6 +4038,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return;
     }
 
+    clearContextSubmenuCloseTimer();
     setContextSubmenu(null);
     setContextMenu({ x: e.clientX, y: e.clientY, fileIds: [file.id] });
   };
@@ -3728,6 +4221,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }));
       });
     }
+    clearContextSubmenuCloseTimer();
     setContextMenu(null);
     setContextSubmenu(null);
   };
@@ -3740,21 +4234,24 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     } catch (err) {
       showFeedback(t('messages.openWithFailed', { error: normalizeAppError(err).userMessage }));
     }
+    clearContextSubmenuCloseTimer();
     setContextMenu(null);
     setContextSubmenu(null);
   };
 
   const handleOpenWithOther = async (file: FileItem) => {
-    const selected = await openDialog({ multiple: false, directory: false, defaultPath: '/Applications' });
-    if (!selected || typeof selected !== 'string') return;
     try {
+      const selected = await pickApplication();
+      if (!selected) return;
       await invoke('open_with', { path: file.path, appName: selected });
       onRecordRecent(file.path);
     } catch (err) {
       showFeedback(t('messages.openWithFailed', { error: normalizeAppError(err).userMessage }));
+    } finally {
+      clearContextSubmenuCloseTimer();
+      setContextMenu(null);
+      setContextSubmenu(null);
     }
-    setContextMenu(null);
-    setContextSubmenu(null);
   };
 
   const getActionFiles = (file?: FileItem) => {
@@ -3853,11 +4350,53 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         return <Code2 className="w-4 h-4" />;
       case 'url':
         return <ExternalLink className="w-4 h-4" />;
+      case 'calculate-hash':
+        return <Fingerprint className="w-4 h-4" />;
       case 'placeholder':
         return <Sparkles className="w-4 h-4 text-icon" />;
       default:
         return <Puzzle className="w-4 h-4" />;
     }
+  };
+
+  const handleCalculateHash = async (file: FileItem) => {
+    const target = getActionFiles(file)[0] || file;
+    if (target.type === 'folder') {
+      showFeedback(t('messages.hashFolderUnsupported', { defaultValue: '文件夹暂不支持计算哈希值' }));
+      setContextMenu(null);
+      return;
+    }
+
+    setHashDialog({
+      file: target,
+      loading: true,
+      result: null,
+      error: '',
+    });
+    setContextMenu(null);
+    setContextSubmenu(null);
+
+    try {
+      const result = await calculateFileHash(target.path);
+      setHashDialog(current => (
+        current && current.file.path === target.path
+          ? { ...current, loading: false, result }
+          : current
+      ));
+    } catch (err) {
+      const error = formatAppError(err);
+      setHashDialog(current => (
+        current && current.file.path === target.path
+          ? { ...current, loading: false, error }
+          : current
+      ));
+    }
+  };
+
+  const handleCopyHashValue = async () => {
+    if (!hashDialog?.result) return;
+    await navigator.clipboard.writeText(hashDialog.result.value);
+    showFeedback(t('messages.hashCopied', { defaultValue: '哈希值已复制' }));
   };
 
   const handleRenameStart = (file: FileItem) => {
@@ -3871,14 +4410,42 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       setRenamingFile(null);
       return;
     }
+    const file = renamingFile;
+    const nextName = renameInput.trim();
     try {
-      await renameFile(renamingFile.path, renameInput.trim());
+      const renamedPath = await renameFile(file.path, nextName);
+      await recordManualOperationHistory({
+        category: 'rename',
+        title: '重命名',
+        summary: `${file.name} → ${nextName}`,
+        effects: [{
+          op: { type: 'rename', path: file.path, newName: nextName },
+          status: 'ok',
+          reverseOp: { type: 'rename', path: renamedPath || `${file.path.split('/').slice(0, -1).join('/')}/${nextName}`, newName: file.name },
+        }],
+        primaryPath: file.path,
+        targetPath: renamedPath,
+      });
       await refreshCurrentDir();
       showFeedback(t('messages.renameCompleted', {
-        name: renameInput.trim(),
+        name: nextName,
         defaultValue: '已重命名为：{{name}}',
       }));
     } catch (e) {
+      await recordManualOperationHistory({
+        category: 'rename',
+        title: '重命名',
+        summary: `${file.name} → ${nextName}`,
+        effects: [{
+          op: { type: 'rename', path: file.path, newName: nextName },
+          status: 'fail',
+          note: formatAppError(e),
+        }],
+        status: 'failed',
+        canUndo: false,
+        reasonNotUndoable: `重命名失败：${formatAppError(e)}`,
+        primaryPath: file.path,
+      });
       showFeedback(t('messages.renameFailed', {
         error: formatAppError(e),
         defaultValue: '重命名失败：{{error}}',
@@ -3898,6 +4465,30 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       const results = await Promise.allSettled(targets.map(item => deleteToTrash(item.path)));
       const failed = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
       const movedCount = targets.length - failed.length;
+      const effects: OperationEffect[] = results.map((result, index) => {
+        const target = targets[index];
+        if (result.status === 'fulfilled') {
+          return {
+            op: { type: 'trash', path: target.path },
+            status: 'ok',
+          };
+        }
+        return {
+          op: { type: 'trash', path: target.path },
+          status: 'fail',
+          note: normalizeAppError(result.reason).userMessage,
+        };
+      });
+      await recordManualOperationHistory({
+        category: 'trash',
+        title: '移至废纸篓',
+        summary: `共 ${targets.length} 项，成功 ${movedCount}，失败 ${failed.length}`,
+        effects,
+        status: failed.length === 0 ? 'success' : movedCount > 0 ? 'partial' : 'failed',
+        canUndo: false,
+        reasonNotUndoable: '移至废纸篓操作需手动从废纸篓恢复',
+        primaryPath: targets[0]?.path,
+      });
 
       if (movedCount > 0) {
         await refreshCurrentDir();
@@ -3984,6 +4575,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     try {
       const createdPath = await createFile(targetDir, name);
+      await recordManualOperationHistory({
+        category: 'create-file',
+        title: '新建文件',
+        summary: `${name}`,
+        effects: [{
+          op: { type: 'create_file', parentDir: targetDir, name },
+          status: 'ok',
+          reverseOp: { type: 'trash', path: createdPath },
+        }],
+        primaryPath: createdPath,
+        targetPath: targetDir,
+      });
       const entries = await refreshCurrentDir(false, targetDir);
       const created = entries.find(file => file.path === createdPath);
       if (created) {
@@ -4014,6 +4617,20 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
       showFeedback(t('messages.fileCreated', { name, defaultValue: `已创建文件：${name}` }));
     } catch (e) {
+      await recordManualOperationHistory({
+        category: 'create-file',
+        title: '新建文件',
+        summary: `${name}`,
+        effects: [{
+          op: { type: 'create_file', parentDir: targetDir, name },
+          status: 'fail',
+          note: formatAppError(e),
+        }],
+        status: 'failed',
+        canUndo: false,
+        reasonNotUndoable: `创建失败：${formatAppError(e)}`,
+        targetPath: targetDir,
+      });
       showFeedback(t('messages.fileCreateFailed', { error: formatAppError(e), defaultValue: `创建文件失败：${formatAppError(e)}` }));
     }
     setContextMenu(null);
@@ -4054,6 +4671,18 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     try {
       const createdPath = await createFolder(targetDir, name);
+      await recordManualOperationHistory({
+        category: 'create-folder',
+        title: '新建文件夹',
+        summary: `${name}`,
+        effects: [{
+          op: { type: 'mkdir', parentDir: targetDir, name },
+          status: 'ok',
+          reverseOp: { type: 'trash', path: createdPath },
+        }],
+        primaryPath: createdPath,
+        targetPath: targetDir,
+      });
       const entries = await refreshCurrentDir(false, targetDir);
       const created = entries.find(file => file.path === createdPath);
       if (created) {
@@ -4080,6 +4709,20 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
       showFeedback(t('messages.folderCreated', { name, defaultValue: `已创建文件夹：${name}` }));
     } catch (e) {
+      await recordManualOperationHistory({
+        category: 'create-folder',
+        title: '新建文件夹',
+        summary: `${name}`,
+        effects: [{
+          op: { type: 'mkdir', parentDir: targetDir, name },
+          status: 'fail',
+          note: formatAppError(e),
+        }],
+        status: 'failed',
+        canUndo: false,
+        reasonNotUndoable: `创建失败：${formatAppError(e)}`,
+        targetPath: targetDir,
+      });
       showFeedback(t('messages.folderCreateFailed', { error: formatAppError(e), defaultValue: `创建文件夹失败：${formatAppError(e)}` }));
     }
     setContextMenu(null);
@@ -4109,9 +4752,38 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
     try {
       await compressFiles(targets.map(item => item.path), output);
+      await recordManualOperationHistory({
+        category: 'compress',
+        title: '压缩',
+        summary: `${targets.length} 个项目 → ${output.split('/').pop() || output}`,
+        effects: [{
+          op: { type: 'compress', paths: targets.map(item => item.path), outputName: output.split('/').pop() || output },
+          status: 'ok',
+          reverseOp: { type: 'trash', path: output },
+        }],
+        primaryPath: targets[0]?.path,
+        targetPath: output,
+      });
       refreshCurrentDir();
       showFeedback(t('messages.compressCompleted', { count: targets.length, defaultValue: `已压缩 ${targets.length} 个项目` }));
-    } catch (e) { showFeedback(t('messages.compressFailed', { error: formatAppError(e), defaultValue: `压缩失败：${formatAppError(e)}` })); }
+    } catch (e) {
+      await recordManualOperationHistory({
+        category: 'compress',
+        title: '压缩',
+        summary: `${targets.length} 个项目`,
+        effects: [{
+          op: { type: 'compress', paths: targets.map(item => item.path), outputName: output.split('/').pop() || output },
+          status: 'fail',
+          note: formatAppError(e),
+        }],
+        status: 'failed',
+        canUndo: false,
+        reasonNotUndoable: `压缩失败：${formatAppError(e)}`,
+        primaryPath: targets[0]?.path,
+        targetPath: output,
+      });
+      showFeedback(t('messages.compressFailed', { error: formatAppError(e), defaultValue: `压缩失败：${formatAppError(e)}` }));
+    }
     setContextMenu(null);
   };
 
@@ -4145,10 +4817,46 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleAlias = async (file: FileItem) => {
     try {
-      await duplicateAsAlias(file.path);
+      const copiedPath = await duplicateAsAlias(file.path);
+      await recordManualOperationHistory({
+        category: 'copy',
+        title: '创建副本',
+        summary: `${file.name}`,
+        effects: [{
+          op: {
+            type: 'copy',
+            path: file.path,
+            targetDir: copiedPath.split('/').slice(0, -1).join('/') || currentPath,
+          },
+          status: 'ok',
+          reverseOp: { type: 'trash', path: copiedPath },
+        }],
+        primaryPath: file.path,
+        targetPath: copiedPath,
+      });
       refreshCurrentDir();
-      showFeedback(t('messages.aliasCreated', { name: file.name, defaultValue: `已创建替身：${file.name}` }));
-    } catch (e) { showFeedback(t('messages.aliasCreateFailed', { error: formatAppError(e), defaultValue: `创建替身失败：${formatAppError(e)}` })); }
+      showFeedback(t('messages.aliasCreated', { name: file.name, defaultValue: `已创建副本：${file.name}` }));
+    } catch (e) {
+      await recordManualOperationHistory({
+        category: 'copy',
+        title: '创建副本',
+        summary: `${file.name}`,
+        effects: [{
+          op: {
+            type: 'copy',
+            path: file.path,
+            targetDir: file.path.split('/').slice(0, -1).join('/') || currentPath,
+          },
+          status: 'fail',
+          note: formatAppError(e),
+        }],
+        status: 'failed',
+        canUndo: false,
+        reasonNotUndoable: `创建副本失败：${formatAppError(e)}`,
+        primaryPath: file.path,
+      });
+      showFeedback(t('messages.aliasCreateFailed', { error: formatAppError(e), defaultValue: `创建副本失败：${formatAppError(e)}` }));
+    }
     setContextMenu(null);
   };
 
@@ -4214,7 +4922,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         return;
       } else if (actionType === 'ai-history') {
         setContextMenu(null);
-        setShowAIHistory(true);
+        setShowOperationHistory(true);
+        return;
+      } else if (actionType === 'calculate-hash') {
+        setContextMenu(null);
+        void handleCalculateHash(file);
         return;
       } else {
         showFeedback(t('messages.extensionReserved', { label: extension.label, defaultValue: `扩展「${extension.label}」已预留，等待插件接入。` }));
@@ -4254,7 +4966,22 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const allColumns = displayMode === 'column'
     ? [undefined, ...columnPaths]
     : [];
-  const inspectorFile = lastSelectedFile ?? (currentPath ? makeFolderItemFromPath(currentPath) : null);
+  const inspectorSourceFile = lastSelectedFile ?? (currentPath ? makeFolderItemFromPath(currentPath) : null);
+  const inspectorFile = useMemo(() => {
+    if (!inspectorSourceFile) return null;
+    if (!inspectorDetails || inspectorDetails.path !== inspectorSourceFile.path) return inspectorSourceFile;
+    return {
+      ...inspectorSourceFile,
+      ...inspectorDetails,
+      size: inspectorDetails.size === '--' && inspectorSourceFile.size
+        ? inspectorSourceFile.size
+        : (inspectorDetails.size || inspectorSourceFile.size),
+      thumbnail: inspectorSourceFile.thumbnail || inspectorDetails.thumbnail,
+      duration: inspectorSourceFile.duration || inspectorDetails.duration,
+      dimensions: inspectorSourceFile.dimensions || inspectorDetails.dimensions,
+      tags: inspectorSourceFile.tags || inspectorDetails.tags,
+    };
+  }, [inspectorDetails, inspectorSourceFile]);
   const inspectorVisible = Boolean((inspectorOverride || (lastSelectedFile && theme.showPreviewPanel)) && inspectorFile);
   const inspectorFileType = inspectorFile ? getFileTypeLabel(inspectorFile.type) : t('explorer.folder', '文件夹');
   const inspectorTags = inspectorFile ? getTagsForItem(inspectorFile) : [];
@@ -4264,9 +4991,164 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     : null;
   const inspectorPath = inspectorFile?.path || '';
   const inspectorType = inspectorFile?.type;
+  const inspectorSupportsOpenWith = Boolean(
+    inspectorFile
+    && inspectorFile.type !== 'folder'
+    && inspectorFile.type !== 'application'
+    && !isVirtualPath(inspectorFile.path),
+  );
+  const inspectorDefaultOpenWith = openWithOptions.find(option => option.isDefault) ?? null;
+  const inspectorOpenWithValue = inspectorDefaultOpenWith?.path ?? OPEN_WITH_SELECT_PLACEHOLDER;
+  const inspectorOpenWithDisabled = !inspectorSupportsOpenWith || openWithOptionsLoading || openWithUpdating;
+  const inspectorOpenWithPlaceholder = openWithOptionsLoading
+    ? t('explorer.openWithLoading', '正在加载应用...')
+    : openWithUpdating
+      ? t('explorer.reading', '正在读取...')
+      : inspectorFile?.openWith || t('explorer.selectOpenWith', '选择应用');
+  const inspectorSizePending = Boolean(
+    inspectorSizeInfo?.status
+    && !['completed', 'failed', 'cancelled'].includes(inspectorSizeInfo.status),
+  );
+  const inspectorSizeStatusText = inspectorSizeInfo
+    ? inspectorSizeInfo.status === 'failed'
+      ? t('explorer.sizeUpdateFailed', '统计未完成')
+      : inspectorSizeInfo.status === 'cancelled'
+        ? t('explorer.sizeUpdateCancelled', '统计已取消')
+        : inspectorSizeInfo.isApproximate
+          ? t('explorer.sizeEstimated', '估算中，结果会继续更新')
+          : inspectorSizePending
+            ? t('explorer.sizeUpdating', '正在统计，结果会继续更新')
+            : ''
+    : '';
+
+  useEffect(() => {
+    if (!inspectorVisible || !inspectorSourceFile?.path || isVirtualPath(inspectorSourceFile.path)) {
+      setInspectorDetails(null);
+      setInspectorDetailsLoading(false);
+      return;
+    }
+
+    let disposed = false;
+    const path = inspectorSourceFile.path;
+    setInspectorDetails(prev => (prev?.path === path ? prev : null));
+    setInspectorDetailsLoading(true);
+
+    getFileInfo(path)
+      .then(file => {
+        if (!disposed) setInspectorDetails(file);
+      })
+      .catch(() => {
+        if (!disposed) setInspectorDetails(null);
+      })
+      .finally(() => {
+        if (!disposed) setInspectorDetailsLoading(false);
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [inspectorSourceFile, inspectorVisible]);
+
+  useEffect(() => {
+    if (!inspectorVisible || !inspectorSourceFile?.path || isVirtualPath(inspectorSourceFile.path) || inspectorSourceFile.type === 'folder') {
+      setOpenWithOptions([]);
+      setOpenWithOptionsLoading(false);
+      setOpenWithUpdating(false);
+      return;
+    }
+
+    let disposed = false;
+    const path = inspectorSourceFile.path;
+    setOpenWithOptions([]);
+    setOpenWithOptionsLoading(true);
+
+    getOpenWithOptions(path)
+      .then(options => {
+        if (!disposed) setOpenWithOptions(options);
+      })
+      .catch(() => {
+        if (!disposed) setOpenWithOptions([]);
+      })
+      .finally(() => {
+        if (!disposed) setOpenWithOptionsLoading(false);
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [inspectorSourceFile, inspectorVisible]);
+
+  const applyInspectorDefaultOpenWith = useCallback(async (targetAppPath: string) => {
+    if (!inspectorFile || !inspectorSupportsOpenWith) return;
+    setOpenWithUpdating(true);
+    try {
+      const appName = await setDefaultOpenWith(inspectorFile.path, targetAppPath);
+      setOpenWithOptions(prev => {
+        const exists = prev.some(option => option.path === targetAppPath);
+        const next = exists
+          ? prev.map(option => ({
+            ...option,
+            isDefault: option.path === targetAppPath,
+          }))
+          : [
+            ...prev.map(option => ({ ...option, isDefault: false })),
+            {
+              name: appName,
+              path: targetAppPath,
+              isDefault: true,
+            },
+          ];
+
+        return next.sort((a, b) => {
+          if (a.isDefault !== b.isDefault) return Number(b.isDefault) - Number(a.isDefault);
+          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        });
+      });
+      syncFileOpenWith(inspectorFile.path, appName);
+      showFeedback(t('messages.defaultOpenWithUpdated', {
+        app: appName,
+        defaultValue: `已将默认打开方式改为 ${appName}`,
+      }));
+    } catch (err) {
+      showFeedback(t('messages.defaultOpenWithUpdateFailed', {
+        error: normalizeAppError(err).userMessage,
+        defaultValue: `设置默认打开方式失败：${normalizeAppError(err).userMessage}`,
+      }));
+    } finally {
+      setOpenWithUpdating(false);
+    }
+  }, [inspectorFile, inspectorSupportsOpenWith, showFeedback, syncFileOpenWith, t]);
+
+  const handleInspectorOpenWithOther = useCallback(async () => {
+    if (!inspectorFile || !inspectorSupportsOpenWith) return;
+    try {
+      const selected = await pickApplication();
+      if (!selected) return;
+      if (inspectorDefaultOpenWith?.path === selected) return;
+      await applyInspectorDefaultOpenWith(selected);
+    } catch (err) {
+      showFeedback(t('messages.defaultOpenWithUpdateFailed', {
+        error: normalizeAppError(err).userMessage,
+        defaultValue: `设置默认打开方式失败：${normalizeAppError(err).userMessage}`,
+      }));
+    }
+  }, [applyInspectorDefaultOpenWith, inspectorDefaultOpenWith?.path, inspectorFile, inspectorSupportsOpenWith, showFeedback, t]);
+
+  const handleInspectorOpenWithChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
+    if (!inspectorFile || !inspectorSupportsOpenWith) return;
+    const nextAppPath = event.target.value;
+    if (!nextAppPath || nextAppPath === OPEN_WITH_SELECT_PLACEHOLDER) return;
+    if (nextAppPath === OPEN_WITH_SELECT_OTHER) {
+      await handleInspectorOpenWithOther();
+      return;
+    }
+    if (inspectorDefaultOpenWith?.path === nextAppPath) return;
+    await applyInspectorDefaultOpenWith(nextAppPath);
+  };
 
   useEffect(() => {
     if (!inspectorVisible || !inspectorPath) {
+      clearDirSizePolling(true);
       setDirSize(null);
       setDirSizeLoading(false);
       setDirSizeError('');
@@ -4274,34 +5156,132 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     if (inspectorType !== 'folder' || isVirtualPath(inspectorPath)) {
+      clearDirSizePolling(true);
       setDirSize(null);
       setDirSizeLoading(false);
       setDirSizeError('');
       return;
     }
 
-    let cancelled = false;
     const path = inspectorPath;
+    const requestId = ++dirSizeRequestSeqRef.current;
+    let disposed = false;
+
+    clearDirSizePolling(true);
     setDirSize(null);
     setDirSizeError('');
     setDirSizeLoading(true);
-    invoke<DirectorySizeInfo>('get_dir_size', { path })
-      .then(result => {
-        if (cancelled) return;
-        setDirSize({ ...result, path: result.path || path });
-      })
-      .catch(error => {
-        if (cancelled) return;
-        setDirSizeError(normalizeAppError(error).userMessage);
-      })
-      .finally(() => {
-        if (!cancelled) setDirSizeLoading(false);
+
+    const stopPolling = () => {
+      if (dirSizePollTimerRef.current) {
+        window.clearInterval(dirSizePollTimerRef.current);
+        dirSizePollTimerRef.current = null;
+      }
+    };
+
+    const applyTaskSnapshot = (snapshot: DirectorySizeTaskSnapshot) => {
+      if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
+      setDirSize(prev => {
+        const next = directorySizeInfoFromTaskSnapshot(snapshot);
+        if (
+          snapshot.status === 'running'
+          && snapshot.bytes === 0
+          && snapshot.fileCount === 0
+          && prev?.path === snapshot.path
+          && (prev.bytes > 0 || prev.file_count > 0)
+        ) {
+          return {
+            ...prev,
+            status: snapshot.status,
+            isApproximate: true,
+            error: snapshot.error,
+          };
+        }
+        return next;
       });
 
-    return () => {
-      cancelled = true;
+      const isFinished = snapshot.status === 'completed' || snapshot.status === 'failed' || snapshot.status === 'cancelled';
+      setDirSizeLoading(!isFinished);
+      if (snapshot.status === 'failed' && snapshot.error) {
+        setDirSizeError(snapshot.error);
+      } else if (snapshot.status !== 'failed') {
+        setDirSizeError('');
+      }
+
+      if (isFinished) {
+        stopPolling();
+        dirSizeTaskIdRef.current = null;
+      }
     };
-  }, [inspectorVisible, inspectorPath, inspectorType]);
+
+    const pollTask = async (taskId: string) => {
+      const snapshot = await getDirSizeTask(taskId);
+      if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
+      if (!snapshot) {
+        setDirSizeLoading(false);
+        setDirSizeError(t('explorer.sizeTaskUnavailable', '大小统计任务记录已清理'));
+        stopPolling();
+        dirSizeTaskIdRef.current = null;
+        return;
+      }
+      applyTaskSnapshot(snapshot);
+    };
+
+    void (async () => {
+      try {
+        const estimates = await estimateDirsSizeFast([path]);
+        if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
+        const estimate = estimates.find(item => item.path === path);
+        if (estimate) {
+          setDirSize({
+            path,
+            bytes: estimate.bytes,
+            formatted: estimate.formatted,
+            allocated_bytes: estimate.bytes,
+            formatted_allocated: estimate.formatted,
+            file_count: 0,
+            skipped_count: 0,
+            isApproximate: true,
+            status: 'running',
+            error: null,
+          });
+        }
+
+        const taskId = await startDirSizeTask(path);
+        if (disposed || requestId !== dirSizeRequestSeqRef.current) {
+          void cancelDirSizeTask(taskId).catch(() => {});
+          return;
+        }
+
+        dirSizeTaskIdRef.current = taskId;
+        await pollTask(taskId);
+        if (disposed || !dirSizeTaskIdRef.current) return;
+
+        dirSizePollTimerRef.current = window.setInterval(() => {
+          void pollTask(taskId).catch(error => {
+            if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
+            setDirSizeError(normalizeAppError(error).userMessage);
+            setDirSizeLoading(false);
+            stopPolling();
+            dirSizeTaskIdRef.current = null;
+          });
+        }, DIR_SIZE_POLL_INTERVAL_MS);
+      } catch (error) {
+        if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
+        setDirSizeError(normalizeAppError(error).userMessage);
+        setDirSizeLoading(false);
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      clearDirSizePolling(true);
+    };
+  }, [clearDirSizePolling, inspectorVisible, inspectorPath, inspectorType, t]);
+
+  useEffect(() => () => {
+    clearDirSizePolling(true);
+  }, [clearDirSizePolling]);
 
   return (
       <div className="h-full flex overflow-hidden">
@@ -4654,8 +5634,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                               <button onClick={() => { setShowAIRename(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
                                 <Sparkles className="w-3.5 h-3.5 text-primary" /> {t('explorer.aiAssistant', 'AI 文件助手')}
                               </button>
-                              <button onClick={() => { setShowAIHistory(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
-                                <History className="w-3.5 h-3.5 text-on-surface/50" /> {t('explorer.aiHistory', 'AI 操作历史')}
+                              <button onClick={() => { setShowOperationHistory(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
+                                <History className="w-3.5 h-3.5 text-on-surface/50" /> {t('explorer.operationHistory', '操作历史')}
                               </button>
                               <div className="my-1 h-px bg-primary/10" />
                               <button onClick={() => { handleSort('name'); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.sortByName', '按名称排序')}</button>
@@ -4933,10 +5913,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                         {sortConfig?.key === 'name' && <span className="shrink-0">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>}
                       </div>
                       <div
-                        className={`${LIST_COLS.modified} shrink-0 cursor-pointer hover:text-primary transition-colors pl-2`}
+                        className={`${listModifiedColClass} shrink-0 cursor-pointer hover:text-primary transition-colors pl-1.5`}
                         onClick={() => handleSort('modified')}
                       >
-                        <span className="truncate flex items-center gap-2">
+                        <span className="truncate min-w-0 flex items-center gap-2">
                           {t('explorer.modified', '修改日期')}
                           {sortConfig?.key === 'modified' && <span>{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>}
                         </span>
@@ -5151,13 +6131,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   </div>
                 ) : lastSelectedFile.type === 'image' && imagePreviewFailed ? (
                   <div className="w-full h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-[12px] text-on-surface/35 font-bold leading-relaxed">
-                    {getFileIcon(lastSelectedFile.type, lastSelectedFile.thumbnail)}
+                    {getFileIcon(lastSelectedFile)}
                     {t('explorer.imagePreviewFailed', '图片预览加载失败')}
                   </div>
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
                     <div className="transform group-hover:scale-110 transition-transform duration-500">
-                      {getFileIcon(lastSelectedFile.type, lastSelectedFile.thumbnail)}
+                      {getFileIcon(lastSelectedFile)}
                     </div>
                   </div>
                 )}
@@ -5182,12 +6162,25 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <div className="grid grid-cols-3 gap-2 text-[13px] leading-relaxed">
                   <div className="text-on-surface/40">{t('explorer.size')}</div>
                   <div className="text-on-surface col-span-2">
-                    {dirSizeLoading ? (
-                      <span className="inline-block h-4 w-24 rounded bg-gradient-to-r from-primary/20 via-primary/40 to-primary/20 bg-[length:200%_100%] animate-shimmer" />
-                    ) : inspectorSizeInfo ? (
+                    {inspectorSizeInfo ? (
                       <span>
-                        {inspectorSizeInfo.formatted}
-                        <span className="text-on-surface/40 text-[11px]"> ({t('explorer.filesCount', { count: inspectorSizeInfo.file_count, defaultValue: `${inspectorSizeInfo.file_count} 个文件` })})</span>
+                        <span className="inline-flex items-center gap-2">
+                          <span>{inspectorSizeInfo.formatted}</span>
+                          {inspectorSizePending && (
+                            <span className="inline-block h-2 w-10 rounded-full bg-gradient-to-r from-primary/15 via-primary/45 to-primary/15 bg-[length:200%_100%] animate-shimmer" />
+                          )}
+                        </span>
+                        {(inspectorSizeInfo.file_count > 0 || !inspectorSizePending) && (
+                          <span className="text-on-surface/40 text-[11px]"> ({t('explorer.filesCount', { count: inspectorSizeInfo.file_count, defaultValue: `${inspectorSizeInfo.file_count} 个文件` })})</span>
+                        )}
+                        {inspectorSizeStatusText && (
+                          <span
+                            className={`block text-[11px] ${inspectorSizeInfo.status === 'failed' ? 'text-amber-400/80' : 'text-on-surface/35'}`}
+                            title={dirSizeError || undefined}
+                          >
+                            {inspectorSizeStatusText}
+                          </span>
+                        )}
                         {inspectorSizeInfo.formatted_allocated && inspectorSizeInfo.formatted_allocated !== inspectorSizeInfo.formatted && (
                           <span className="block text-on-surface/35 text-[11px]">
                             {t('explorer.diskSize', { size: inspectorSizeInfo.formatted_allocated, defaultValue: `磁盘占用 ${inspectorSizeInfo.formatted_allocated}` })}
@@ -5199,6 +6192,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                           </span>
                         ) : null}
                       </span>
+                    ) : dirSizeLoading ? (
+                      <span className="inline-block h-4 w-24 rounded bg-gradient-to-r from-primary/20 via-primary/40 to-primary/20 bg-[length:200%_100%] animate-shimmer" />
                     ) : dirSizeError ? (
                       <span className="text-on-surface/40 text-[11px]" title={dirSizeError}>--</span>
                     ) : inspectorFile.type === 'folder' ? (
@@ -5209,6 +6204,36 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   </div>
                   <div className="text-on-surface/40">{t('explorer.type')}</div>
                   <div className="text-on-surface col-span-2">{inspectorFileType}</div>
+                  <div className="text-on-surface/40">{t('explorer.openWith', '打开方式')}</div>
+                  <div className="text-on-surface col-span-2 min-w-0">
+                    {inspectorSupportsOpenWith ? (
+                      <div className="relative min-w-0">
+                        <select
+                          value={inspectorOpenWithValue}
+                          onChange={handleInspectorOpenWithChange}
+                          disabled={inspectorOpenWithDisabled}
+                          className="w-full min-w-0 appearance-none rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 pr-9 text-[12px] font-bold text-on-surface outline-none transition-all focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:cursor-not-allowed disabled:text-on-surface/35"
+                        >
+                          {!inspectorDefaultOpenWith && (
+                            <option value={OPEN_WITH_SELECT_PLACEHOLDER}>{inspectorOpenWithPlaceholder}</option>
+                          )}
+                          {openWithOptions.map(option => (
+                            <option key={option.path} value={option.path}>
+                              {option.name}
+                            </option>
+                          ))}
+                          <option value={OPEN_WITH_SELECT_OTHER}>
+                            {t('explorer.openWithOther', '选择更多…')}
+                          </option>
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-on-surface/35">
+                          <ChevronRight className="h-4 w-4 rotate-90" />
+                        </div>
+                      </div>
+                    ) : (
+                      '--'
+                    )}
+                  </div>
                   {inspectorFile.type === 'video' && inspectorFile.duration && (
                     <>
                       <div className="text-on-surface/40">{t('explorer.duration')}</div>
@@ -5399,8 +6424,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 <button onClick={() => { setShowAIRename(true); setContextMenu(null); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Sparkles className="w-4 h-4 text-primary" /> {t('explorer.aiAssistant', 'AI 文件助手')}
                 </button>
-                <button onClick={() => { setShowAIHistory(true); setContextMenu(null); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
-                  <History className="w-4 h-4 text-on-surface/50" /> {t('explorer.aiHistory', 'AI 操作历史')}
+                <button onClick={() => { setShowOperationHistory(true); setContextMenu(null); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                  <History className="w-4 h-4 text-on-surface/50" /> {t('explorer.operationHistory', '操作历史')}
                 </button>
               </>
             ) : findFileById(contextMenu.fileIds[0]) ? (
@@ -5414,8 +6439,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                 </button>
                 <div
                   className="relative"
-                  onMouseEnter={() => setContextSubmenu('openWith')}
-                  onMouseLeave={() => setContextSubmenu(prev => prev === 'openWith' ? null : prev)}
+                  onMouseEnter={() => openContextSubmenu('openWith')}
+                  onMouseLeave={() => scheduleContextSubmenuClose('openWith')}
                 >
                   <button className="w-full flex items-center justify-between gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                     <span className="flex items-center gap-3">
@@ -5426,6 +6451,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   {contextSubmenu === 'openWith' && (
                     <div
                       className="absolute left-full top-0 z-[110] ml-1 w-52 rounded-2xl border border-primary/20 shadow-2xl p-1.5"
+                      onMouseEnter={() => openContextSubmenu('openWith')}
+                      onMouseLeave={() => scheduleContextSubmenuClose('openWith')}
                       style={{
                         // 用 color-mix 把 primary 与 surface 实混，
                         // 视觉上有"父菜单的玻璃淡色感"但不透明、不依赖 backdrop-filter
@@ -5447,7 +6474,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                         onClick={() => handleOpenWithOther(ctxFile)}
                         className="w-full rounded-lg px-3 py-1.5 text-left text-[12px] font-bold text-on-surface transition-all hover:bg-primary/10 hover:text-primary"
                       >
-                        {t('explorer.openWithOther', '其它…')}
+                        {t('explorer.openWithOther', '选择更多…')}
                       </button>
                     </div>
                   )}
@@ -5456,7 +6483,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   <Edit3 className="w-4 h-4" /> {t('explorer.rename', '重命名')}
                 </button>
                 <div className="my-1 h-px bg-primary/10" />
-                {/* 第2分组: 复制 + 剪切 + 制作替身 */}
+                {/* 第2分组: 复制 + 剪切 + 创建副本 */}
                 <button onClick={() => handleCopyToClipboard(getActionFiles(ctxFile))} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Copy className="w-4 h-4" /> {t('explorer.copy', '复制')}
                 </button>
@@ -5464,7 +6491,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   <Edit2 className="w-4 h-4" /> {t('explorer.cut', '剪切')}
                 </button>
                 <button onClick={() => handleAlias(ctxFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
-                  <Copy className="w-4 h-4" /> {t('explorer.alias', '制作替身')}
+                  <Copy className="w-4 h-4" /> {t('explorer.alias', '创建副本')}
                 </button>
                 <div className="my-1 h-px bg-primary/10" />
                 {/* 第3分组: 解压/压缩 + 在终端打开 + 查看简介 */}
@@ -5716,14 +6743,85 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         />
       )}
 
-      {showAIHistory && (
-        <AIOpsHistory
-          onClose={() => setShowAIHistory(false)}
-          onRollbackComplete={() => { setShowAIHistory(false); refreshCurrentDir(); }}
+      {showOperationHistory && (
+        <OperationHistoryPanel
+          onClose={() => setShowOperationHistory(false)}
+          onOperationComplete={() => { void refreshCurrentDir(); }}
           retentionDays={theme.aiOpsHistoryRetentionDays}
           liquidGlassEnabled={liquidGlassEnabled}
         />
       )}
+
+      <AnimatePresence>
+        {hashDialog && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[140] flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 18, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 18, scale: 0.96 }}
+              className="w-full max-w-lg rounded-2xl border border-primary/25 bg-surface/95 p-5 shadow-2xl shadow-black/30"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-[17px] font-black text-on-surface">{t('explorer.calculateHash', '计算哈希值')}</h3>
+                  <p className="mt-1 break-all text-[12px] font-medium text-on-surface/55">{hashDialog.file.path}</p>
+                </div>
+                <button
+                  onClick={() => setHashDialog(null)}
+                  className="rounded-lg p-2 text-on-surface/45 transition-colors hover:bg-primary/10 hover:text-on-surface"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-primary/10 bg-primary/5 p-4">
+                {hashDialog.loading ? (
+                  <div className="space-y-3">
+                    <div className="text-[13px] font-bold text-on-surface/60">{t('explorer.hashComputing', '正在计算哈希值...')}</div>
+                    <div className="h-3 w-full rounded-full bg-gradient-to-r from-primary/15 via-primary/45 to-primary/15 bg-[length:200%_100%] animate-shimmer" />
+                  </div>
+                ) : hashDialog.error ? (
+                  <div className="text-[13px] font-bold text-red-400">
+                    {t('messages.hashCalculateFailed', { error: hashDialog.error, defaultValue: `计算哈希值失败：${hashDialog.error}` })}
+                  </div>
+                ) : hashDialog.result ? (
+                  <div className="grid grid-cols-3 gap-2 text-[13px] leading-relaxed">
+                    <div className="text-on-surface/40">{t('explorer.hashAlgorithm', '算法')}</div>
+                    <div className="col-span-2 text-on-surface">{hashDialog.result.algorithm}</div>
+                    <div className="text-on-surface/40">{t('explorer.hashValue', '哈希值')}</div>
+                    <div className="col-span-2 break-all font-mono text-[12px] text-on-surface">{hashDialog.result.value}</div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  onClick={() => setHashDialog(null)}
+                  className="rounded-xl px-4 py-2.5 text-[13px] font-black text-on-surface/65 transition-colors hover:bg-primary/10"
+                >
+                  {t('common.cancel', '取消')}
+                </button>
+                <button
+                  onClick={() => { void handleCopyHashValue(); }}
+                  disabled={!hashDialog.result}
+                  className={`rounded-xl px-4 py-2.5 text-[13px] font-black transition-colors ${
+                    hashDialog.result
+                      ? 'bg-primary text-on-primary shadow-lg shadow-primary/20'
+                      : 'bg-primary/10 text-on-surface/35'
+                  }`}
+                >
+                  {t('explorer.copyHash', '复制哈希值')}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

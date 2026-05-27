@@ -8,7 +8,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { load } from '@tauri-apps/plugin-store';
 import Sidebar from './components/Sidebar';
 import TopBar, { TabTransferPayload } from './components/TopBar';
-import ExplorerView from './components/ExplorerView';
 import type { SettingsCategory } from './components/SettingsView';
 import { ThemeSettings, ViewMode, TabData } from './types';
 import {
@@ -70,6 +69,7 @@ const LIQUID_GLASS_COLOR_VARS: Record<ResolvedAppearance, Record<string, string>
 const SettingsView = lazy(() => import('./components/SettingsView'));
 const StorageView = lazy(() => import('./components/StorageView'));
 const TransferModal = lazy(() => import('./components/TransferModal'));
+const ExplorerView = lazy(() => import('./components/ExplorerView'));
 
 type NativeLiquidGlassStatus = {
   requested: boolean;
@@ -814,38 +814,40 @@ export default function App() {
                 </Suspense>
               </div>
               {/* Explorer views — keep mounted so tab-local state survives settings/storage screens */}
-              {tabs.map(tab => (
-                <div key={tab.id} className={`h-full ${tab.id === view ? '' : 'hidden'}`}>
-                  <ExplorerView
-                    view={tab.id}
-                    isActive={tab.id === view}
-                    currentTabLabelKey={tab.labelTranslationKey}
-                    initialPath={tab.initialPath}
-                    theme={theme}
-                    onThemeChange={setTheme}
-                    onViewChange={setView}
-                    selectedFileIds={tab.id === view ? selectedFileIds : []}
-                    onSelectFiles={tab.id === view ? setSelectedFileIds : () => {}}
-                    onSelectionCountChange={tab.id === view ? setVisibleItemCount : undefined}
-                    onTitleChange={handleTabTitleChange}
-                    onPathChange={handleTabPathChange}
-                    onOpenTab={handleOpenTab}
-                    onCreateWindow={createNewWindow}
-                    onStartTransfer={() => setIsTransferring(true)}
-                    favorites={favorites}
-                    onToggleFavorite={(id) => {
-                      setFavorites(prev =>
-                        prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]
-                      );
-                    }}
-                    fileTags={fileTags}
-                    onFileTagsChange={setFileTags}
-                    recentItems={recentItems}
-                    onRecordRecent={handleRecordRecent}
-                    onClearRecent={() => setRecentItems([])}
-                  />
-                </div>
-              ))}
+              <Suspense fallback={<div className="h-full flex items-center justify-center text-on-surface/45">正在加载文件视图...</div>}>
+                {tabs.map(tab => (
+                  <div key={tab.id} className={`h-full ${tab.id === view ? '' : 'hidden'}`}>
+                    <ExplorerView
+                      view={tab.id}
+                      isActive={tab.id === view}
+                      currentTabLabelKey={tab.labelTranslationKey}
+                      initialPath={tab.initialPath}
+                      theme={theme}
+                      onThemeChange={setTheme}
+                      onViewChange={setView}
+                      selectedFileIds={tab.id === view ? selectedFileIds : []}
+                      onSelectFiles={tab.id === view ? setSelectedFileIds : () => {}}
+                      onSelectionCountChange={tab.id === view ? setVisibleItemCount : undefined}
+                      onTitleChange={handleTabTitleChange}
+                      onPathChange={handleTabPathChange}
+                      onOpenTab={handleOpenTab}
+                      onCreateWindow={createNewWindow}
+                      onStartTransfer={() => setIsTransferring(true)}
+                      favorites={favorites}
+                      onToggleFavorite={(id) => {
+                        setFavorites(prev =>
+                          prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]
+                        );
+                      }}
+                      fileTags={fileTags}
+                      onFileTagsChange={setFileTags}
+                      recentItems={recentItems}
+                      onRecordRecent={handleRecordRecent}
+                      onClearRecent={() => setRecentItems([])}
+                    />
+                  </div>
+                ))}
+              </Suspense>
             </div>
           </div>
 

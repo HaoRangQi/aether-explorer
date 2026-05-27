@@ -1,6 +1,6 @@
 # 14 原生玻璃与文件工作台治理 (Liquid-Glass-File-Workbench)
 
-**状态**: ✅ 已落地并验证  **首次落地**: [2026-05-26]  **最近更新**: [2026-05-26]  **域**: macOS 原生 Liquid Glass、文件操作状态机、分栏导航、大小统计、权限预检与 release 版本线治理
+**状态**: ✅ 已落地并验证  **首次落地**: [2026-05-26]  **最近更新**: [2026-05-27]  **域**: macOS 原生 Liquid Glass、文件操作状态机、分栏导航、大小统计、权限预检与 release 版本线治理
 
 ← 返回 [索引](./README.md)
 
@@ -30,6 +30,8 @@
 - `columnPaths[index]` 只代表第 `index` 列中被打开的文件夹路径，不代表该 item 被真实选中。
 - 右侧简介面板解析选中项时必须覆盖当前目录文件和分栏缓存文件。
 - 任务结束后的传输面板可自动关闭，但鼠标活动必须重置倒计时。
+- 传输面板默认只展示活跃任务；完成态只做短暂结果反馈，不做长期堆积。
+- 操作历史撤销执行后面板保持打开；撤销前必须先做路径可执行性校验。
 - 发版必须走 [§ 06 发布运行手册](./06-release-runbook.md)，不得手写 `latest.json`。
 
 ## 14.3 实现拓扑
@@ -164,12 +166,30 @@ click file in column N
 
 ```text
 tasks queued/running/cancelling
-  └─ stay open and poll
+  └─ show active tasks and poll
 
-all tasks finished or no tasks
-  └─ start 1500ms close countdown
-       ├─ mousemove → restart countdown
-       └─ timeout   → close modal
+all tasks finished
+  └─ show latest completed result briefly
+       └─ start 1500ms close countdown
+            ├─ mousemove → restart countdown
+            └─ timeout   → clear finished tasks then close modal
+```
+
+### 操作历史撤销
+
+```text
+click undo on session
+  └─ preflight validation per reverse effect
+       ├─ source still exists?
+       ├─ target dir available?
+       └─ destination path conflict?
+            ├─ failed check → mark failed with reason, skip execution
+            └─ pass         → execute reverse op
+
+session completed
+  ├─ write back status (undone / undo_partial / undo_failed)
+  ├─ write back reason summary when needed
+  └─ keep history panel open, only refresh listing + explorer directory
 ```
 
 ## 14.7 失败模式与排查
@@ -184,6 +204,9 @@ all tasks finished or no tasks
 | 左下角存储比例明显不对 | `df /` 读到 System snapshot，不是 Data volume | 根卷优先用 `diskutil info -plist /System/Volumes/Data` |
 | 简介大小显示“点击查看简介以统计” | 大小统计绑定在手动简介动作上，不是 inspector 生命周期 | 根据 `inspectorPath` 自动调用 `get_dir_size` |
 | 传输管理器结束后一直挡住界面 | 完成态没有自动关闭策略 | 任务完成后倒计时关闭，鼠标活动重置 |
+| 每拖一次都看到任务条目变多 | 完成态任务在面板持续保留，用户感知成重复任务 | 默认仅展示活跃任务；无活跃任务时只短暂展示最近完成项，自动关闭前清理 finished tasks |
+| 撤销后历史窗口自动关闭 | 撤销完成回调直接关闭面板，打断连续撤销流程 | 撤销后只刷新目录和历史列表，不关闭面板 |
+| 撤销失败无可读原因 | 执行前未做路径前置校验，UI 仅显示“撤销失败” | 增加 source/target/conflict 前置校验，并把失败原因写回会话与 UI |
 | “替身”变成文件系统链接 | 直接映射 Finder alias/symlink 语义 | 改为真实复制并加 `-替身` 后缀 |
 
 ## 14.8 SOP
@@ -217,7 +240,9 @@ git tag --list 'v0.4.2'
 3. 原生 Liquid Glass 不是 Web CSS 能补出来的。Web 研究文档可以帮助理解折射，但桌面像素折射必须交给 OS 或原生渲染层。
 4. macOS 根卷容量不能直接信 `/` 的 `df` 结果；APFS Data/System 拆分后，用户看到的“磁盘占用”应以 Data 容器为主。
 5. 传输 UI 要跟任务生命周期绑定。同步 copy/move 只适合需要立即结果摘要的内部调用，用户可见批量操作应使用 transfer task。
-6. `v4.0.1` 已进入历史 tag，但产品 release 线继续按 `0.x` 管理；发版前必须同时看 tag 历史和 updater 版本比较风险。
+6. 用户说“任务重复”时，不一定是创建重复任务，也可能是历史完成态留在可见层；先收敛可见任务策略，再查 task id 去重。
+7. 撤销是有前置条件的事务，不是盲执行 API；执行前要先验证文件仍在、目标可用、路径不冲突，并把失败原因落库供复盘。
+8. `v4.0.1` 已进入历史 tag，但产品 release 线继续按 `0.x` 管理；发版前必须同时看 tag 历史和 updater 版本比较风险。
 
 ## 14.10 未来扩展
 

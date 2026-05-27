@@ -55,7 +55,7 @@ It is positioned as a Finder enhancement tool, not a replacement for the system 
 - Appearance — theme mode, accent color, font, transparency, blur intensity
 - Context menu — configurable extensions with custom terminal commands
 - Language — Chinese/English, default Chinese
-- AI operation history — true pagination, search by date/filename, configurable retention (default 7 days, max 90 days)
+- Operation history (AI + file actions) — true pagination, search by date/filename, configurable retention (default 7 days, max 90 days)
 
 ## Known Limitations
 
@@ -136,6 +136,12 @@ aether-explorer/
 ## Feature List
 
 See [FEATURES.md](./FEATURES.md) for the full status table.
+
+## Documentation Governance
+
+- Codex index: [`codex/README.md`](./codex/README.md)
+- Release workflow and acceptance: [`codex/06-release-runbook.md`](./codex/06-release-runbook.md)
+- Liquid Glass and file workbench governance: [`codex/14-liquid-glass-file-workbench.md`](./codex/14-liquid-glass-file-workbench.md)
 
 ## Notes
 

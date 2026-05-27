@@ -7,6 +7,7 @@ export interface FileItem {
   created?: string;
   added?: string;
   lastOpened?: string;
+  openWith?: string;
   path: string;
   thumbnail?: string;
   tags?: string[];
@@ -27,7 +28,7 @@ export interface ContextMenuAction {
   label: string;
   enabled: boolean;
   isSystem?: boolean;
-  actionType?: 'terminal' | 'shell' | 'url' | 'placeholder' | 'ai-assistant' | 'ai-history';
+  actionType?: 'terminal' | 'shell' | 'url' | 'placeholder' | 'ai-assistant' | 'ai-history' | 'calculate-hash';
   terminalApp?: string;
   terminalArgs?: string;
   command?: string;
@@ -103,9 +104,14 @@ export interface ThemeSettings {
    */
   crossWindowDropDefault?: 'copy' | 'move' | 'ask';
   /**
-   * AI 操作历史保留天数（默认 7 天，最大 90 天）。
+   * 操作历史保留天数（默认 7 天，最大 90 天）。
+   * 兼容旧配置字段名，包含 AI 与人工操作。
    */
   aiOpsHistoryRetentionDays?: number;
+  /**
+   * 在列表“大小”列显示文件夹大小（快速粗略估算，优先性能）。
+   */
+  showFolderSizeInList?: boolean;
   language?: string;
   followSystemLanguage?: boolean;
   languageOptions?: LanguageOption[];
@@ -147,6 +153,82 @@ export interface AIProviderConfig {
   enabled: boolean;
 }
 
+export type OperationSource = 'manual' | 'ai';
+export type OperationHistoryFilter = 'all' | OperationSource;
+export type OperationCategory =
+  | 'rename'
+  | 'create-file'
+  | 'create-folder'
+  | 'copy'
+  | 'move'
+  | 'trash'
+  | 'compress'
+  | 'decompress'
+  | 'batch'
+  | 'other';
+
+export type OperationStatus =
+  | 'success'
+  | 'partial'
+  | 'failed'
+  | 'undone'
+  | 'undo_partial'
+  | 'undo_failed';
+
+export type OperationEffectStatus = 'ok' | 'fail' | 'skipped';
+
+export type OperationFileOp =
+  | { type: 'rename'; path: string; newName: string }
+  | { type: 'mkdir'; parentDir: string; name: string }
+  | { type: 'create_file'; parentDir: string; name: string }
+  | { type: 'move'; path: string; targetDir: string }
+  | { type: 'copy'; path: string; targetDir: string }
+  | { type: 'trash'; path: string }
+  | { type: 'compress'; paths: string[]; outputName: string };
+
+export interface OperationEffect {
+  op: OperationFileOp;
+  status: OperationEffectStatus;
+  reverseOp?: OperationFileOp;
+  note?: string;
+}
+
+export interface AIHistoryMeta {
+  model?: string;
+  instruction: string;
+  batchTotal: number;
+  batchSucceeded: number;
+  batchFailed: number;
+  batchSkipped: number;
+}
+
+export interface ManualHistoryMeta {
+  action: OperationCategory;
+  primaryPath?: string;
+  targetPath?: string;
+  conflictStrategy?: 'abort' | 'replace' | 'keepBoth' | 'skip';
+  volumeHint?: 'same-volume' | 'cross-volume' | 'mixed';
+}
+
+export type OperationSourceMeta =
+  | { aiMeta: AIHistoryMeta; manualMeta?: never }
+  | { manualMeta: ManualHistoryMeta; aiMeta?: never };
+
+export interface OperationSession {
+  id: string;
+  timestamp: number;
+  source: OperationSource;
+  category: OperationCategory;
+  status: OperationStatus;
+  canUndo: boolean;
+  reasonNotUndoable?: string;
+  itemCount: number;
+  title: string;
+  summary: string;
+  effects: OperationEffect[];
+  sourceMeta: OperationSourceMeta;
+}
+
 export interface AIOpSession {
   id: string;
   timestamp: number;
@@ -157,9 +239,9 @@ export interface AIOpSession {
 }
 
 export interface AIExecutedOp {
-  op: import('./lib/ai-service').AIFileOp;
-  status: 'ok' | 'fail' | 'skipped';
-  reverseOp?: import('./lib/ai-service').AIFileOp;
+  op: OperationFileOp;
+  status: OperationEffectStatus;
+  reverseOp?: OperationFileOp;
   note?: string;
 }
 

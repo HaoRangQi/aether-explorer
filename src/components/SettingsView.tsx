@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle, File as FileIcon, Search, FileText, History } from 'lucide-react';
+import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, EyeOff, Monitor, Palette, HardDrive, Shield, Puzzle, Layout, Trash2, Plus, Settings2, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Terminal, Info, RefreshCw, DownloadCloud, BadgeCheck, ExternalLink, Code2, Pencil, FileUp, FileDown, Copy, Folder, X, Loader2, RotateCw, ArrowRightLeft, HelpCircle, File as FileIcon, Search, FileText, History, Fingerprint } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { confirm as tauriConfirm, open, save } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -96,6 +96,7 @@ const ACTION_TYPE_ICONS = {
   placeholder: Sparkles,
   'ai-assistant': Sparkles,
   'ai-history': Sparkles,
+  'calculate-hash': Fingerprint,
 } satisfies Record<NonNullable<ContextMenuAction['actionType']>, React.ComponentType<{ className?: string }>>;
 
 type UpdateStatus = {
@@ -150,7 +151,7 @@ const AI_HISTORY_RETENTION_OPTIONS = [3, 7, 15, 30, 90];
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes < 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
+  const units = ['B', 'K', 'M', 'G'];
   let value = bytes;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {
@@ -190,6 +191,7 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
   const [liquidGlassStatus, setLiquidGlassStatus] = useState<NativeLiquidGlassStatus | null>(null);
   const [liquidGlassMessage, setLiquidGlassMessage] = useState('');
   const [isTogglingLiquidGlass, setIsTogglingLiquidGlass] = useState(false);
+  const showFolderSizeInList = theme.showFolderSizeInList !== false;
 
   const getActionTypeMeta = useCallback((type: NonNullable<ContextMenuAction['actionType']>) => ({
     label: t(`settings.extensions.actionTypes.${type}.label`),
@@ -1230,14 +1232,14 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
                   <FileIcon className="w-4 h-4 text-icon" />
                   <div className="flex-1 min-w-0">
                     <p className="text-[11px] font-bold text-primary-custom truncate">报告_2024.pdf</p>
-                    <p className="text-[9px] text-secondary-custom">2.1 MB · 周一</p>
+                    <p className="text-[9px] text-secondary-custom">2.1 M · 周一</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-panel-custom border border-transparent hover:bg-hover-custom hover:border-custom transition-all">
                   <ImageIcon className="w-4 h-4 text-icon" />
                   <div className="flex-1 min-w-0">
                     <p className="text-[11px] font-bold text-primary-custom truncate">封面_final.png</p>
-                    <p className="text-[9px] text-secondary-custom">4.5 MB · 今天</p>
+                    <p className="text-[9px] text-secondary-custom">4.5 M · 今天</p>
                   </div>
                 </div>
                 {/* 底部状态栏 */}
@@ -2505,10 +2507,10 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
             <div className="space-y-1 min-w-0">
               <h4 className="text-[15px] font-bold text-on-surface flex items-center gap-2">
                 <History className="w-4 h-4 text-primary" />
-                {t('settings.aiHistoryRetention', 'AI 操作历史保留时长')}
+                {t('settings.aiHistoryRetention', '操作历史保留时长')}
               </h4>
               <p className="text-[12px] text-on-surface/50">
-                {t('settings.aiHistoryRetentionDesc', '用于控制本地 AI 操作历史保存周期。默认 7 天，最长 90 天。')}
+                {t('settings.aiHistoryRetentionDesc', '用于控制本地操作历史保存周期（含 AI 与人工操作）。默认 7 天，最长 90 天。')}
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0 p-1 bg-primary/5 rounded-2xl border border-primary/10">
@@ -2544,6 +2546,24 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
               className={`w-14 h-8 rounded-full p-1.5 transition-colors duration-300 flex items-center ${theme.showHiddenFiles ? 'bg-primary' : 'bg-on-surface/[0.1]'}`}
             >
               <motion.div animate={{ x: theme.showHiddenFiles ? 24 : 0 }} className={`w-5 h-5 rounded-full shadow-lg ${theme.showHiddenFiles ? 'bg-on-primary' : 'bg-on-surface/30'}`} />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between p-6 bg-primary/5 rounded-2xl border border-transparent hover:border-primary/20 transition-all group">
+            <div className="space-y-1">
+              <h4 className="text-[15px] font-bold text-on-surface flex items-center gap-2">
+                <FileIcon className="w-4 h-4 text-primary" />
+                {t('settings.showFolderSizeInList', '列表显示文件夹大小（快速估算）')}
+              </h4>
+              <p className="text-[12px] text-on-surface/50">
+                {t('settings.showFolderSizeInListDesc', '在“大小”列显示文件夹的粗略大小，优先保证流畅，不做高精度深度统计。')}
+              </p>
+            </div>
+            <button
+              onClick={() => onThemeChange({ ...theme, showFolderSizeInList: !showFolderSizeInList })}
+              className={`w-14 h-8 rounded-full p-1.5 transition-colors duration-300 flex items-center ${showFolderSizeInList ? 'bg-primary' : 'bg-on-surface/[0.1]'}`}
+            >
+              <motion.div animate={{ x: showFolderSizeInList ? 24 : 0 }} className={`w-5 h-5 rounded-full shadow-lg ${showFolderSizeInList ? 'bg-on-primary' : 'bg-on-surface/30'}`} />
             </button>
           </div>
 
@@ -2863,7 +2883,7 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
                   onChange={(e) => setNewActionType(e.target.value as NonNullable<ContextMenuAction['actionType']>)}
                   className="w-full bg-white/5 border border-primary/20 rounded-2xl px-5 py-4 text-[13px] font-bold text-on-surface outline-none focus:ring-4 focus:ring-primary/10 transition-all"
                 >
-                  {Object.keys(ACTION_TYPE_ICONS).filter((type) => !type.startsWith('ai-')).map((type) => <option key={type} value={type}>{getActionTypeMeta(type as NonNullable<ContextMenuAction['actionType']>).label}</option>)}
+                  {Object.keys(ACTION_TYPE_ICONS).filter((type) => !type.startsWith('ai-') && type !== 'calculate-hash').map((type) => <option key={type} value={type}>{getActionTypeMeta(type as NonNullable<ContextMenuAction['actionType']>).label}</option>)}
                 </select>
               </label>
             </div>

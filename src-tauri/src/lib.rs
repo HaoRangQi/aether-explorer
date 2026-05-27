@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::hash::{Hash, Hasher};
@@ -33,12 +33,58 @@ struct FileEntry {
     added: String,
     #[serde(rename = "lastOpened")]
     last_opened: String,
+    #[serde(rename = "openWith")]
+    open_with: String,
     #[serde(rename = "type")]
     file_type: String,
     #[serde(rename = "iconPath", skip_serializing_if = "Option::is_none")]
     icon_path: Option<String>,
     #[serde(rename = "childCount", skip_serializing_if = "Option::is_none")]
     child_count: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FileHashResult {
+    path: String,
+    algorithm: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct OpenWithOption {
+    name: String,
+    path: String,
+    is_default: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct DirectorySizeEstimate {
+    path: String,
+    bytes: u64,
+    #[serde(rename = "formatted")]
+    formatted: String,
+    #[serde(rename = "isApproximate")]
+    is_approximate: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DirectorySizeTaskSnapshot {
+    id: String,
+    path: String,
+    status: String,
+    bytes: u64,
+    formatted: String,
+    allocated_bytes: u64,
+    formatted_allocated: String,
+    file_count: u64,
+    skipped_count: u64,
+    is_approximate: bool,
+    started_at: u64,
+    finished_at: Option<u64>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -308,9 +354,19 @@ struct FileDragState(Mutex<Option<FileTransferPayload>>);
 #[derive(Clone, Default)]
 struct TransferTaskState(Arc<Mutex<HashMap<String, TransferTask>>>);
 
+#[derive(Clone, Default)]
+struct DirectorySizeTaskState(Arc<Mutex<HashMap<String, DirectorySizeTask>>>);
+
 #[derive(Clone)]
 struct TransferTask {
     snapshot: TransferTaskSnapshot,
+    cancel_requested: Arc<AtomicBool>,
+    move_dedupe_key: Option<String>,
+}
+
+#[derive(Clone)]
+struct DirectorySizeTask {
+    snapshot: DirectorySizeTaskSnapshot,
     cancel_requested: Arc<AtomicBool>,
 }
 
@@ -353,9 +409,103 @@ struct TransferEstimate {
 
 impl TransferTaskState {
     fn insert(&self, snapshot: TransferTaskSnapshot, cancel_requested: Arc<AtomicBool>) -> Result<(), AppError> {
+        self.insert_with_move_dedupe(snapshot, cancel_requested, None)
+    }
+
+    fn insert_with_move_dedupe(
+        &self,
+        snapshot: TransferTaskSnapshot,
+        cancel_requested: Arc<AtomicBool>,
+        move_dedupe_key: Option<String>,
+    ) -> Result<(), AppError> {
         let mut tasks = self.0.lock().map_err(|_| AppError::unavailable("传输任务状态不可用"))?;
-        tasks.insert(snapshot.id.clone(), TransferTask { snapshot, cancel_requested });
+        tasks.insert(
+            snapshot.id.clone(),
+            TransferTask {
+                snapshot,
+                cancel_requested,
+                move_dedupe_key,
+            },
+        );
         Ok(())
+    }
+
+    fn get_or_create_move_task(
+        &self,
+        srcs: &[String],
+        dst_dir: &str,
+        strategy: MoveConflictStrategy,
+    ) -> Result<(String, Option<Arc<AtomicBool>>), AppError> {
+        let dedupe_key = build_move_task_dedupe_key(srcs, dst_dir, strategy);
+        let now = now_unix_seconds();
+        let mut tasks = self.0.lock().map_err(|_| AppError::unavailable("传输任务状态不可用"))?;
+
+        let mut newest_existing: Option<(u64, String)> = None;
+        for task in tasks.values() {
+            if task.snapshot.kind != "move" {
+                continue;
+            }
+            if task.move_dedupe_key.as_deref() != Some(dedupe_key.as_str()) {
+                continue;
+            }
+
+            let status = task.snapshot.status.as_str();
+            if !is_terminal_transfer_status(status) {
+                let ts = task.snapshot.started_at;
+                match &newest_existing {
+                    Some((best_ts, _)) if *best_ts >= ts => {}
+                    _ => newest_existing = Some((ts, task.snapshot.id.clone())),
+                }
+                continue;
+            }
+
+            let finished_at = task.snapshot.finished_at.unwrap_or(task.snapshot.started_at);
+            if now.saturating_sub(finished_at) > MOVE_TASK_DEDUPE_WINDOW_SECONDS {
+                continue;
+            }
+            match &newest_existing {
+                Some((best_ts, _)) if *best_ts >= finished_at => {}
+                _ => newest_existing = Some((finished_at, task.snapshot.id.clone())),
+            }
+        }
+
+        if let Some((_, task_id)) = newest_existing {
+            return Ok((task_id, None));
+        }
+
+        let estimate = estimate_transfer_paths(srcs);
+        let task_id = next_transfer_task_id("move");
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        tasks.insert(
+            task_id.clone(),
+            TransferTask {
+                snapshot: TransferTaskSnapshot {
+                    id: task_id.clone(),
+                    kind: "move".into(),
+                    status: "queued".into(),
+                    total_items: estimate.items,
+                    completed_items: 0,
+                    total_bytes: estimate.bytes,
+                    completed_bytes: 0,
+                    current_name: None,
+                    error: None,
+                    started_at: now,
+                    finished_at: None,
+                    copied: 0,
+                    moved: 0,
+                    copied_cross_device: 0,
+                    failed: 0,
+                    conflicts: 0,
+                    skipped: 0,
+                    skipped_same_dir: 0,
+                    skipped_conflicts: 0,
+                },
+                cancel_requested: cancel_requested.clone(),
+                move_dedupe_key: Some(dedupe_key),
+            },
+        );
+
+        Ok((task_id, Some(cancel_requested)))
     }
 
     fn update<F>(&self, task_id: &str, update: F)
@@ -377,6 +527,53 @@ impl TransferTaskState {
         let mut snapshots: Vec<TransferTaskSnapshot> = tasks.values().map(|task| task.snapshot.clone()).collect();
         snapshots.sort_by_key(|snapshot| snapshot.started_at);
         Ok(snapshots)
+    }
+}
+
+impl DirectorySizeTaskState {
+    fn insert(&self, snapshot: DirectorySizeTaskSnapshot, cancel_requested: Arc<AtomicBool>) -> Result<(), AppError> {
+        let mut tasks = self.0.lock().map_err(|_| AppError::unavailable("目录大小任务状态不可用"))?;
+        tasks.insert(snapshot.id.clone(), DirectorySizeTask { snapshot, cancel_requested });
+        Ok(())
+    }
+
+    fn update<F>(&self, task_id: &str, update: F)
+    where
+        F: FnOnce(&mut DirectorySizeTaskSnapshot),
+    {
+        match self.0.lock() {
+            Ok(mut tasks) => {
+                if let Some(task) = tasks.get_mut(task_id) {
+                    update(&mut task.snapshot);
+                }
+            }
+            Err(_) => log::error!("目录大小任务状态锁不可用，无法更新任务 {}", task_id),
+        }
+    }
+
+    fn get(&self, task_id: &str) -> Result<Option<DirectorySizeTaskSnapshot>, AppError> {
+        let tasks = self.0.lock().map_err(|_| AppError::unavailable("目录大小任务状态不可用"))?;
+        Ok(tasks.get(task_id).map(|task| task.snapshot.clone()))
+    }
+
+    fn cancel(&self, task_id: &str) -> Result<(), AppError> {
+        let mut tasks = self.0.lock().map_err(|_| AppError::unavailable("目录大小任务状态不可用"))?;
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.cancel_requested.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    fn cleanup_finished(&self) {
+        let cutoff = now_unix_seconds().saturating_sub(FINISHED_DIR_SIZE_TASK_RETENTION_SECONDS);
+        if let Ok(mut tasks) = self.0.lock() {
+            tasks.retain(|_, task| {
+                if !matches!(task.snapshot.status.as_str(), "completed" | "failed" | "cancelled") {
+                    return true;
+                }
+                task.snapshot.finished_at.unwrap_or(u64::MAX) >= cutoff
+            });
+        }
     }
 }
 
@@ -422,6 +619,8 @@ fn is_terminal_transfer_status(status: &str) -> bool {
 }
 
 const FINISHED_TRANSFER_TASK_RETENTION_SECONDS: u64 = 30;
+const FINISHED_DIR_SIZE_TASK_RETENTION_SECONDS: u64 = 30;
+const MOVE_TASK_DEDUPE_WINDOW_SECONDS: u64 = 2;
 
 fn now_unix_seconds() -> u64 {
     SystemTime::now()
@@ -436,6 +635,146 @@ fn next_transfer_task_id(kind: &str) -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     format!("{}-{}-{}", kind, std::process::id(), nanos)
+}
+
+fn next_directory_size_task_id() -> String {
+    next_transfer_task_id("dir-size")
+}
+
+fn normalize_transfer_path_for_dedupe(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed == "/" {
+        return "/".to_string();
+    }
+    trimmed.trim_end_matches('/').to_string()
+}
+
+fn move_conflict_strategy_key(strategy: MoveConflictStrategy) -> &'static str {
+    match strategy {
+        MoveConflictStrategy::Abort => "abort",
+        MoveConflictStrategy::Replace => "replace",
+        MoveConflictStrategy::KeepBoth => "keep-both",
+        MoveConflictStrategy::Skip => "skip",
+    }
+}
+
+fn build_move_task_dedupe_key(
+    srcs: &[String],
+    dst_dir: &str,
+    strategy: MoveConflictStrategy,
+) -> String {
+    let dst = normalize_transfer_path_for_dedupe(dst_dir);
+    let mut normalized_srcs: Vec<String> = srcs
+        .iter()
+        .map(|src| normalize_transfer_path_for_dedupe(src))
+        .filter(|src| !src.is_empty())
+        .collect();
+    normalized_srcs.sort();
+    normalized_srcs.dedup();
+
+    format!(
+        "{}::{}::{}",
+        move_conflict_strategy_key(strategy),
+        dst,
+        normalized_srcs.join("\u{1f}")
+    )
+}
+
+fn normalize_open_with_options(options: Vec<OpenWithOption>) -> Vec<OpenWithOption> {
+    fn should_skip_open_with_path(path: &str) -> bool {
+        path.contains("/Contents/Helpers/")
+            || path.contains("/Contents/Frameworks/")
+            || path.contains("/Library/Application Support/")
+    }
+
+    fn score_open_with_option(option: &OpenWithOption) -> i32 {
+        let mut score = 0;
+        if option.is_default {
+            score += 100;
+        }
+        if option.path.starts_with("/System/Applications/") {
+            score += 20;
+        } else if option.path.starts_with("/Applications/") || option.path.contains("/Applications/") {
+            score += 12;
+        }
+        if option.path.contains("/Contents/Helpers/") {
+            score -= 20;
+        }
+        if option.path.contains("/Library/Application Support/") {
+            score -= 12;
+        }
+        score -= option.path.len() as i32 / 32;
+        score
+    }
+
+    let mut seen_paths = HashSet::new();
+    let mut grouped: HashMap<String, OpenWithOption> = HashMap::new();
+    for option in options {
+        if option.path.trim().is_empty() || should_skip_open_with_path(&option.path) {
+            continue;
+        }
+        if !seen_paths.insert(option.path.clone()) {
+            continue;
+        }
+
+        let key = option.name.trim().to_lowercase();
+        match grouped.get(&key) {
+            Some(existing) if score_open_with_option(existing) >= score_open_with_option(&option) => {}
+            _ => {
+                grouped.insert(key, option);
+            }
+        }
+    }
+
+    let mut deduped: Vec<OpenWithOption> = grouped.into_values().collect();
+
+    deduped.sort_by(|a, b| {
+        if a.is_default != b.is_default {
+            return b.is_default.cmp(&a.is_default);
+        }
+        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+    });
+
+    deduped
+}
+
+fn normalize_selected_application_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.to_lowercase().ends_with(".app") {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn resolve_open_with_application_target(raw: &str) -> Result<String, AppError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::invalid_path("目标应用无效", Some(raw.to_string())));
+    }
+
+    if let Some(app_path) = normalize_selected_application_path(trimmed) {
+        let metadata = fs::metadata(&app_path)
+            .map_err(|e| AppError::from_io(&e, Some(&app_path), format!("读取应用信息失败: {}", e)))?;
+        if !metadata.is_dir() {
+            return Err(AppError::invalid_path("目标应用无效，必须选择 .app 应用程序", Some(app_path)));
+        }
+        return Ok(app_path);
+    }
+
+    if trimmed.contains('/') {
+        return Err(AppError::invalid_path(
+            "目标应用无效，必须选择 .app 应用程序",
+            Some(trimmed.to_string()),
+        ));
+    }
+
+    Ok(trimmed.to_string())
 }
 
 fn estimate_transfer_path(path: &Path) -> TransferEstimate {
@@ -488,11 +827,11 @@ fn format_size(bytes: u64) -> String {
 
     let b = bytes as f64;
     if b >= GB {
-        format!("{:.1} GB", b / GB)
+        format!("{:.1} G", b / GB)
     } else if b >= MB {
-        format!("{:.1} MB", b / MB)
+        format!("{:.1} M", b / MB)
     } else if b >= KB {
-        format!("{:.1} KB", b / KB)
+        format!("{:.1} K", b / KB)
     } else {
         format!("{} B", bytes)
     }
@@ -511,11 +850,11 @@ fn format_storage_size(bytes: u64) -> String {
 
     let b = bytes as f64;
     if b >= GB {
-        format!("{:.1} GB", b / GB)
+        format!("{:.1} G", b / GB)
     } else if b >= MB {
-        format!("{:.1} MB", b / MB)
+        format!("{:.1} M", b / MB)
     } else if b >= KB {
-        format!("{:.1} KB", b / KB)
+        format!("{:.1} K", b / KB)
     } else {
         format!("{} B", bytes)
     }
@@ -898,6 +1237,185 @@ fn get_app_icon(path: String) -> Result<Option<String>, AppError> {
     Ok(resolve_app_icon_png(Path::new(&path)))
 }
 
+#[cfg(target_os = "macos")]
+fn resolve_bundle_identifier(app_path: &Path) -> String {
+    let mdls_value = read_mdls_string(app_path, "kMDItemCFBundleIdentifier");
+    if !mdls_value.is_empty() {
+        return mdls_value;
+    }
+
+    let plist_path = app_path.join("Contents").join("Info.plist");
+    std::process::Command::new("defaults")
+        .arg("read")
+        .arg(&plist_path)
+        .arg("CFBundleIdentifier")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_bundle_identifier(_app_path: &Path) -> String {
+    String::new()
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_content_type_identifier(path: &Path) -> String {
+    let mdls_value = read_mdls_string(path, "kMDItemContentType");
+    if !mdls_value.is_empty() {
+        return mdls_value;
+    }
+
+    let Some(extension) = path.extension().and_then(|ext| ext.to_str()).filter(|ext| !ext.is_empty()) else {
+        return String::new();
+    };
+
+    let script = r#"import UniformTypeIdentifiers
+let ext = CommandLine.arguments[1]
+if let type = UTType(filenameExtension: ext) {
+    print(type.identifier)
+}"#;
+
+    std::process::Command::new("swift")
+        .args(["-e", script])
+        .arg(extension)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_content_type_identifier(_path: &Path) -> String {
+    String::new()
+}
+
+#[cfg(target_os = "macos")]
+fn list_open_with_paths(path: &Path) -> Result<Vec<String>, AppError> {
+    let script = r#"ObjC.import("AppKit");
+function run(argv) {
+  const url = $.NSURL.fileURLWithPath(argv[0]);
+  const apps = $.NSWorkspace.sharedWorkspace.URLsForApplicationsToOpenURL(url);
+  if (!apps) return "";
+  const lines = [];
+  for (const item of ObjC.unwrap(apps)) {
+    lines.push(ObjC.unwrap(item.path));
+  }
+  return lines.join("\n");
+}"#;
+
+    let output = std::process::Command::new("osascript")
+        .args(["-l", "JavaScript", "-e", script])
+        .arg(path)
+        .output()
+        .map_err(|e| AppError::internal_at(format!("读取打开方式列表失败: {}", e), Some(path.to_string_lossy().to_string())))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::internal_at(
+            format!("读取打开方式列表失败: {}", if stderr.is_empty() { "osascript exited unexpectedly" } else { &stderr }),
+            Some(path.to_string_lossy().to_string()),
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn list_open_with_paths(_path: &Path) -> Result<Vec<String>, AppError> {
+    Ok(Vec::new())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_default_open_with(content_type: &str, bundle_id: &str, path: &Path) -> Result<(), AppError> {
+    let script = r#"import Foundation
+import CoreServices
+
+let args = CommandLine.arguments
+guard args.count >= 3 else {
+    FileHandle.standardError.write(Data("missing arguments".utf8))
+    exit(2)
+}
+
+let status = LSSetDefaultRoleHandlerForContentType(args[1] as NSString, .all, args[2] as NSString)
+if status != 0 {
+    FileHandle.standardError.write(Data("LSSetDefaultRoleHandlerForContentType failed: \(status)".utf8))
+    exit(1)
+}"#;
+
+    let output = std::process::Command::new("swift")
+        .args(["-e", script, content_type, bundle_id])
+        .output()
+        .map_err(|e| AppError::internal_at(format!("设置默认打开方式失败: {}", e), Some(path.to_string_lossy().into_owned())))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(AppError::internal_at(
+        format!(
+            "设置默认打开方式失败: {}",
+            if stderr.is_empty() { "swift exited unexpectedly" } else { &stderr }
+        ),
+        Some(path.to_string_lossy().into_owned()),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_default_open_with(_content_type: &str, _bundle_id: &str, path: &Path) -> Result<(), AppError> {
+    Err(AppError::internal_at(
+        "当前系统不支持设置默认打开方式",
+        Some(path.to_string_lossy().into_owned()),
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn pick_application_path() -> Result<Option<String>, AppError> {
+    let script = r#"try
+POSIX path of (choose application with prompt "选择应用")
+on error number -128
+return "__CANCELLED__"
+end try"#;
+
+    let output = std::process::Command::new("osascript")
+        .args(["-e", script])
+        .output()
+        .map_err(|e| AppError::internal(format!("打开应用选择器失败: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::internal(format!(
+            "打开应用选择器失败: {}",
+            if stderr.is_empty() { "osascript exited unexpectedly" } else { &stderr }
+        )));
+    }
+
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if selected == "__CANCELLED__" {
+        return Ok(None);
+    }
+
+    normalize_selected_application_path(&selected)
+        .map(Some)
+        .ok_or_else(|| AppError::invalid_path("所选项目不是有效的 .app 应用程序", Some(selected)))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pick_application_path() -> Result<Option<String>, AppError> {
+    Err(AppError::internal("当前系统不支持选择应用程序"))
+}
+
 fn format_modified(metadata: &fs::Metadata) -> String {
     metadata
         .modified()
@@ -919,17 +1437,16 @@ fn format_system_time(time: Option<SystemTime>) -> String {
 
 #[cfg(target_os = "macos")]
 fn read_mdls_date(path: &Path, attr: &str) -> String {
-    std::process::Command::new("mdls")
-        .args(["-raw", "-name", attr])
-        .arg(path)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty() && value != "(null)" && value != "null")
-        .map(|value| value.split(" +").next().unwrap_or(&value).to_string())
-        .unwrap_or_default()
+    let value = read_mdls_string(path, attr);
+    if value.is_empty() {
+        return String::new();
+    }
+
+    value
+        .rsplit_once(" +")
+        .map(|(head, _)| head.to_string())
+        .or_else(|| value.rsplit_once(" -").map(|(head, _)| head.to_string()))
+        .unwrap_or(value)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -998,6 +1515,7 @@ fn list_directory_entries(
             created,
             added,
             last_opened,
+            open_with: String::new(),
             file_type,
             icon_path,
             child_count,
@@ -1475,11 +1993,11 @@ fn unique_destination(path: &Path) -> std::path::PathBuf {
 fn alias_duplicate_destination(path: &Path, is_dir: bool) -> Result<PathBuf, AppError> {
     let parent = path
         .parent()
-        .ok_or_else(|| AppError::invalid_path("无法确定替身目标目录", Some(path.to_string_lossy().into_owned())))?;
+        .ok_or_else(|| AppError::invalid_path("无法确定副本目标目录", Some(path.to_string_lossy().into_owned())))?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
-        .ok_or_else(|| AppError::invalid_path("无法确定替身名称", Some(path.to_string_lossy().into_owned())))?;
+        .ok_or_else(|| AppError::invalid_path("无法确定副本名称", Some(path.to_string_lossy().into_owned())))?;
 
     let (stem, ext) = if is_dir {
         (name, None)
@@ -1492,9 +2010,9 @@ fn alias_duplicate_destination(path: &Path, is_dir: bool) -> Result<PathBuf, App
 
     for index in 1..1000 {
         let suffix = if index == 1 {
-            "-替身".to_string()
+            "-副本".to_string()
         } else {
-            format!("-替身 {}", index)
+            format!("-副本 {}", index)
         };
         let file_name = match ext {
             Some(ext) if !ext.is_empty() => format!("{}{}.{}", stem, suffix, ext),
@@ -1506,7 +2024,79 @@ fn alias_duplicate_destination(path: &Path, is_dir: bool) -> Result<PathBuf, App
         }
     }
 
-    Err(AppError::internal_at("无法生成可用的替身名称", Some(path.to_string_lossy().into_owned())))
+    Err(AppError::internal_at("无法生成可用的副本名称", Some(path.to_string_lossy().into_owned())))
+}
+
+#[cfg(target_os = "macos")]
+fn read_mdls_string(path: &Path, attr: &str) -> String {
+    std::process::Command::new("mdls")
+        .args(["-raw", "-name", attr])
+        .arg(path)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != "(null)" && value != "null")
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_mdls_string(_path: &Path, _attr: &str) -> String {
+    String::new()
+}
+
+#[cfg(target_os = "macos")]
+fn app_display_name_from_path(path: &Path) -> String {
+    path.file_stem()
+        .or_else(|| path.file_name())
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn app_display_name_from_path(path: &Path) -> String {
+    path.file_stem()
+        .or_else(|| path.file_name())
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_default_open_with_path(path: &Path) -> Option<String> {
+    let script = r#"ObjC.import("AppKit");
+function run(argv) {
+  const url = $.NSURL.fileURLWithPath(argv[0]);
+  const appUrl = $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL(url);
+  return appUrl ? ObjC.unwrap(appUrl.path) : "";
+}"#;
+
+    std::process::Command::new("osascript")
+        .args(["-l", "JavaScript", "-e", script])
+        .arg(path)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_default_open_with_path(_path: &Path) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_default_open_with_name(path: &Path) -> String {
+    resolve_default_open_with_path(path)
+        .map(|value| app_display_name_from_path(Path::new(&value)))
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_default_open_with_name(_path: &Path) -> String {
+    String::new()
 }
 
 fn validate_child_name(name: &str) -> Result<String, AppError> {
@@ -2399,7 +2989,11 @@ fn start_move_files_task(
     conflict_strategy: Option<MoveConflictStrategy>,
 ) -> Result<String, AppError> {
     let state = state.inner().clone();
-    let (task_id, cancel_requested) = create_transfer_task(&state, "move", &srcs)?;
+    let strategy = conflict_strategy.unwrap_or(MoveConflictStrategy::Abort);
+    let (task_id, maybe_cancel_requested) = state.get_or_create_move_task(&srcs, &dst_dir, strategy)?;
+    let Some(cancel_requested) = maybe_cancel_requested else {
+        return Ok(task_id);
+    };
     let progress = TransferProgress {
         task_id: task_id.clone(),
         state: state.clone(),
@@ -2413,7 +3007,7 @@ fn start_move_files_task(
                 snapshot.status = "running".into();
             }
         });
-        let result = move_files_impl(srcs, dst_dir, conflict_strategy, Some(&progress));
+        let result = move_files_impl(srcs, dst_dir, Some(strategy), Some(&progress));
         finish_move_transfer_task(&state, &task_id_for_worker, result);
     });
 
@@ -2515,9 +3109,49 @@ fn duplicate_as_alias(path: String) -> Result<String, AppError> {
     let dst_path = alias_duplicate_destination(src_path, metadata.is_dir() && !metadata.file_type().is_symlink())?;
 
     copy_path_with_progress(src_path, &dst_path, None)
-        .map_err(|e| AppError::internal_at(format!("创建替身失败: {}", e), Some(path.clone())))?;
+        .map_err(|e| AppError::internal_at(format!("创建副本失败: {}", e), Some(path.clone())))?;
 
     Ok(dst_path.to_string_lossy().into())
+}
+
+#[tauri::command]
+fn calculate_file_hash(path: String) -> Result<FileHashResult, AppError> {
+    let metadata = fs::metadata(&path)
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("读取元数据失败: {}", e)))?;
+    if metadata.is_dir() {
+        return Err(AppError::invalid_path("文件夹暂不支持计算哈希值", Some(path)));
+    }
+
+    let output = std::process::Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(&path)
+        .output()
+        .map_err(|e| AppError::internal_at(format!("计算哈希值失败: {}", e), Some(path.clone())))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::internal_at(
+            format!("计算哈希值失败: {}", if stderr.is_empty() { "shasum exited unexpectedly" } else { &stderr }),
+            Some(path),
+        ));
+    }
+
+    let value = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if value.is_empty() {
+        return Err(AppError::internal_at("计算哈希值失败: 输出为空", Some(path)));
+    }
+
+    Ok(FileHashResult {
+        path,
+        algorithm: "SHA-256".into(),
+        value,
+    })
 }
 
 #[tauri::command]
@@ -2665,6 +3299,222 @@ fn dir_size_recursive(dir: &Path) -> DirectorySizeSummary {
     summary
 }
 
+const DIR_SIZE_TASK_PROGRESS_ENTRY_INTERVAL: u64 = 256;
+const DIR_SIZE_TASK_PROGRESS_TIME_INTERVAL_MS: u128 = 90;
+
+fn apply_directory_size_snapshot(
+    state: &DirectorySizeTaskState,
+    task_id: &str,
+    summary: &DirectorySizeSummary,
+    status: &str,
+    is_approximate: bool,
+    finished_at: Option<u64>,
+    error: Option<String>,
+) {
+    let bytes = summary.bytes;
+    let allocated_bytes = summary.allocated_bytes;
+    let file_count = summary.file_count;
+    let skipped_count = summary.skipped_count;
+    let formatted = format_size(bytes);
+    let formatted_allocated = format_size(allocated_bytes);
+
+    state.update(task_id, move |snapshot| {
+        snapshot.status = status.to_string();
+        snapshot.bytes = bytes;
+        snapshot.formatted = formatted;
+        snapshot.allocated_bytes = allocated_bytes;
+        snapshot.formatted_allocated = formatted_allocated;
+        snapshot.file_count = file_count;
+        snapshot.skipped_count = skipped_count;
+        snapshot.is_approximate = is_approximate;
+        snapshot.finished_at = finished_at;
+        snapshot.error = error;
+    });
+}
+
+fn dir_size_recursive_with_progress(
+    dir: &Path,
+    task_id: &str,
+    state: &DirectorySizeTaskState,
+    cancel_requested: &AtomicBool,
+) -> Result<DirectorySizeSummary, AppError> {
+    let mut summary = DirectorySizeSummary::default();
+    let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
+    let mut scanned_entries = 0_u64;
+    let mut last_progress_at = std::time::Instant::now();
+    let dir_path = dir.to_string_lossy().into_owned();
+
+    while let Some(current) = stack.pop() {
+        if cancel_requested.load(Ordering::SeqCst) {
+            return Err(AppError::cancelled("操作已取消", Some(dir_path.clone())));
+        }
+
+        let entries = match fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(_) => {
+                summary.skipped_count = summary.skipped_count.saturating_add(1);
+                continue;
+            }
+        };
+
+        for entry in entries {
+            if cancel_requested.load(Ordering::SeqCst) {
+                return Err(AppError::cancelled("操作已取消", Some(dir_path.clone())));
+            }
+
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => {
+                    summary.skipped_count = summary.skipped_count.saturating_add(1);
+                    continue;
+                }
+            };
+
+            scanned_entries = scanned_entries.saturating_add(1);
+            let path = entry.path();
+            match fs::symlink_metadata(&path) {
+                Ok(meta) => {
+                    let file_type = meta.file_type();
+                    if file_type.is_symlink() {
+                        summary.skipped_count = summary.skipped_count.saturating_add(1);
+                    } else if file_type.is_dir() {
+                        stack.push(path);
+                    } else {
+                        summary.bytes = summary.bytes.saturating_add(meta.len());
+                        summary.allocated_bytes = summary
+                            .allocated_bytes
+                            .saturating_add(meta.blocks().saturating_mul(512));
+                        summary.file_count = summary.file_count.saturating_add(1);
+                    }
+                }
+                Err(_) => {
+                    summary.skipped_count = summary.skipped_count.saturating_add(1);
+                }
+            }
+
+            if scanned_entries % DIR_SIZE_TASK_PROGRESS_ENTRY_INTERVAL == 0
+                || last_progress_at.elapsed().as_millis() >= DIR_SIZE_TASK_PROGRESS_TIME_INTERVAL_MS
+            {
+                apply_directory_size_snapshot(state, task_id, &summary, "running", false, None, None);
+                last_progress_at = std::time::Instant::now();
+            }
+        }
+    }
+
+    apply_directory_size_snapshot(state, task_id, &summary, "running", false, None, None);
+    Ok(summary)
+}
+
+const DIR_SIZE_ESTIMATE_MAX_DIRS_PER_REQUEST: usize = 64;
+const DIR_SIZE_ESTIMATE_MAX_STACK_ITEMS: usize = 128;
+const DIR_SIZE_ESTIMATE_MAX_FILES_SCANNED: u64 = 600;
+const DIR_SIZE_ESTIMATE_MAX_ENTRIES_SCANNED: u64 = 1800;
+const DIR_SIZE_ESTIMATE_TIME_BUDGET_MS: u128 = 16;
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct DirectorySizeEstimateSummary {
+    bytes: u64,
+    files_scanned: u64,
+    entries_scanned: u64,
+    timed_out: bool,
+    clipped: bool,
+}
+
+fn estimate_dir_size_fast(dir: &Path) -> DirectorySizeEstimateSummary {
+    let mut summary = DirectorySizeEstimateSummary::default();
+    let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
+    let started = std::time::Instant::now();
+
+    while let Some(current) = stack.pop() {
+        if started.elapsed().as_millis() >= DIR_SIZE_ESTIMATE_TIME_BUDGET_MS {
+            summary.timed_out = true;
+            break;
+        }
+        if summary.entries_scanned >= DIR_SIZE_ESTIMATE_MAX_ENTRIES_SCANNED
+            || summary.files_scanned >= DIR_SIZE_ESTIMATE_MAX_FILES_SCANNED
+        {
+            summary.clipped = true;
+            break;
+        }
+
+        let entries = match fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        for entry in entries {
+            if started.elapsed().as_millis() >= DIR_SIZE_ESTIMATE_TIME_BUDGET_MS {
+                summary.timed_out = true;
+                break;
+            }
+            if summary.entries_scanned >= DIR_SIZE_ESTIMATE_MAX_ENTRIES_SCANNED
+                || summary.files_scanned >= DIR_SIZE_ESTIMATE_MAX_FILES_SCANNED
+            {
+                summary.clipped = true;
+                break;
+            }
+
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            summary.entries_scanned = summary.entries_scanned.saturating_add(1);
+            let path = entry.path();
+            let meta = match fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let file_type = meta.file_type();
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            if file_type.is_file() {
+                summary.bytes = summary.bytes.saturating_add(meta.len());
+                summary.files_scanned = summary.files_scanned.saturating_add(1);
+                continue;
+            }
+
+            if file_type.is_dir() {
+                if stack.len() >= DIR_SIZE_ESTIMATE_MAX_STACK_ITEMS {
+                    summary.clipped = true;
+                    continue;
+                }
+                stack.push(path);
+            }
+        }
+
+        if summary.timed_out || summary.clipped {
+            break;
+        }
+    }
+
+    summary
+}
+
+#[tauri::command]
+fn estimate_dirs_size_fast(paths: Vec<String>) -> Result<Vec<DirectorySizeEstimate>, AppError> {
+    let mut results: Vec<DirectorySizeEstimate> = Vec::new();
+
+    for path in paths.into_iter().take(DIR_SIZE_ESTIMATE_MAX_DIRS_PER_REQUEST) {
+        let dir = Path::new(&path);
+        if !dir.is_dir() {
+            continue;
+        }
+        let estimate = estimate_dir_size_fast(dir);
+        results.push(DirectorySizeEstimate {
+            path,
+            bytes: estimate.bytes,
+            formatted: format_size(estimate.bytes),
+            is_approximate: estimate.timed_out || estimate.clipped,
+        });
+    }
+
+    Ok(results)
+}
+
 #[tauri::command]
 fn get_dir_size(path: String) -> Result<serde_json::Value, AppError> {
     let dir = Path::new(&path);
@@ -2681,6 +3531,121 @@ fn get_dir_size(path: String) -> Result<serde_json::Value, AppError> {
         "file_count": summary.file_count,
         "skipped_count": summary.skipped_count
     }))
+}
+
+fn start_dir_size_task_impl(state: &DirectorySizeTaskState, path: String) -> Result<String, AppError> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err(AppError::invalid_path("不是一个目录", Some(path)));
+    }
+
+    state.cleanup_finished();
+    let task_id = next_directory_size_task_id();
+    let cancel_requested = Arc::new(AtomicBool::new(false));
+    state.insert(
+        DirectorySizeTaskSnapshot {
+            id: task_id.clone(),
+            path: path.clone(),
+            status: "queued".into(),
+            bytes: 0,
+            formatted: format_size(0),
+            allocated_bytes: 0,
+            formatted_allocated: format_size(0),
+            file_count: 0,
+            skipped_count: 0,
+            is_approximate: true,
+            started_at: now_unix_seconds(),
+            finished_at: None,
+            error: None,
+        },
+        cancel_requested.clone(),
+    )?;
+
+    let state_for_worker = state.clone();
+    let task_id_for_worker = task_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        state_for_worker.update(&task_id_for_worker, |snapshot| {
+            if snapshot.status == "queued" {
+                snapshot.status = "running".into();
+            }
+        });
+
+        let result = dir_size_recursive_with_progress(
+            Path::new(&path),
+            &task_id_for_worker,
+            &state_for_worker,
+            cancel_requested.as_ref(),
+        );
+
+        match result {
+            Ok(summary) => {
+                apply_directory_size_snapshot(
+                    &state_for_worker,
+                    &task_id_for_worker,
+                    &summary,
+                    "completed",
+                    false,
+                    Some(now_unix_seconds()),
+                    None,
+                );
+            }
+            Err(error) => {
+                let status = if error.kind == AppErrorKind::Cancelled {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                let summary = state_for_worker
+                    .get(&task_id_for_worker)
+                    .ok()
+                    .flatten()
+                    .map(|snapshot| DirectorySizeSummary {
+                        bytes: snapshot.bytes,
+                        allocated_bytes: snapshot.allocated_bytes,
+                        file_count: snapshot.file_count,
+                        skipped_count: snapshot.skipped_count,
+                    })
+                    .unwrap_or_default();
+                apply_directory_size_snapshot(
+                    &state_for_worker,
+                    &task_id_for_worker,
+                    &summary,
+                    status,
+                    true,
+                    Some(now_unix_seconds()),
+                    Some(error.message),
+                );
+            }
+        }
+
+        state_for_worker.cleanup_finished();
+    });
+
+    Ok(task_id)
+}
+
+#[tauri::command]
+fn start_dir_size_task(
+    state: tauri::State<DirectorySizeTaskState>,
+    path: String,
+) -> Result<String, AppError> {
+    start_dir_size_task_impl(state.inner(), path)
+}
+
+#[tauri::command]
+fn get_dir_size_task(
+    state: tauri::State<DirectorySizeTaskState>,
+    task_id: String,
+) -> Result<Option<DirectorySizeTaskSnapshot>, AppError> {
+    state.get(&task_id)
+}
+
+#[tauri::command]
+fn cancel_dir_size_task(
+    state: tauri::State<DirectorySizeTaskState>,
+    task_id: String,
+) -> Result<(), AppError> {
+    state.cancel(&task_id)
 }
 
 /// 按需查目录的直接子项数（PERF_PLAN L2-B 配套）。
@@ -2756,6 +3721,75 @@ fn get_directory_signature(path: String, show_hidden: bool) -> Result<DirectoryS
 }
 
 #[tauri::command]
+fn get_open_with_options(path: String) -> Result<Vec<OpenWithOption>, AppError> {
+    let file_path = Path::new(&path);
+    let metadata = fs::metadata(file_path)
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("读取元数据失败: {}", e)))?;
+    if metadata.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let default_path = resolve_default_open_with_path(file_path);
+    let mut app_paths = list_open_with_paths(file_path)?;
+
+    if let Some(default_path) = default_path.as_ref() {
+        if !app_paths.iter().any(|candidate| candidate == default_path) {
+            app_paths.push(default_path.clone());
+        }
+    }
+
+    let options = app_paths
+        .into_iter()
+        .map(|candidate| OpenWithOption {
+            name: app_display_name_from_path(Path::new(&candidate)),
+            is_default: default_path.as_deref() == Some(candidate.as_str()),
+            path: candidate,
+        })
+        .filter(|option| !option.name.trim().is_empty())
+        .collect();
+
+    Ok(normalize_open_with_options(options))
+}
+
+#[tauri::command]
+fn set_default_open_with(path: String, app_path: String) -> Result<String, AppError> {
+    let file_path = Path::new(&path);
+    let file_metadata = fs::metadata(file_path)
+        .map_err(|e| AppError::from_io(&e, Some(&path), format!("读取元数据失败: {}", e)))?;
+    if file_metadata.is_dir() {
+        return Err(AppError::invalid_path("文件夹不支持设置默认打开方式", Some(path)));
+    }
+
+    let app_bundle_path = Path::new(&app_path);
+    let app_metadata = fs::metadata(app_bundle_path)
+        .map_err(|e| AppError::from_io(&e, Some(&app_path), format!("读取应用信息失败: {}", e)))?;
+    if !app_metadata.is_dir() || !app_path.to_lowercase().ends_with(".app") {
+        return Err(AppError::invalid_path("目标应用无效，必须选择 .app 应用程序", Some(app_path)));
+    }
+
+    let content_type = resolve_content_type_identifier(file_path);
+    if content_type.is_empty() {
+        return Err(AppError::internal_at("无法识别该文件的内容类型", Some(path)));
+    }
+
+    let bundle_id = resolve_bundle_identifier(app_bundle_path);
+    if bundle_id.is_empty() {
+        return Err(AppError::internal_at(
+            "无法识别所选应用的 Bundle Identifier",
+            Some(app_path.clone()),
+        ));
+    }
+
+    apply_default_open_with(&content_type, &bundle_id, file_path)?;
+    Ok(app_display_name_from_path(app_bundle_path))
+}
+
+#[tauri::command]
+fn pick_application() -> Result<Option<String>, AppError> {
+    pick_application_path()
+}
+
+#[tauri::command]
 fn get_file_info(path: String) -> Result<FileEntry, AppError> {
     let p = Path::new(&path);
     let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -2767,6 +3801,11 @@ fn get_file_info(path: String) -> Result<FileEntry, AppError> {
     let created = format_system_time(metadata.created().ok());
     let added = read_mdls_date(p, "kMDItemDateAdded");
     let last_opened = read_mdls_date(p, "kMDItemLastUsedDate");
+    let open_with = if is_dir {
+        String::new()
+    } else {
+        resolve_default_open_with_name(p)
+    };
     let file_type = detect_mime(&name, is_dir);
     let icon_path = if file_type == "application" {
         resolve_app_icon_png(p)
@@ -2782,16 +3821,17 @@ fn get_file_info(path: String) -> Result<FileEntry, AppError> {
         None
     };
 
-    Ok(FileEntry { name, path, is_dir, size, modified, created, added, last_opened, file_type, icon_path, child_count })
+    Ok(FileEntry { name, path, is_dir, size, modified, created, added, last_opened, open_with, file_type, icon_path, child_count })
 }
 
 #[tauri::command]
 fn open_with(path: String, app_name: String) -> Result<(), AppError> {
+    let app_target = resolve_open_with_application_target(&app_name)?;
     std::process::Command::new("open")
-        .args(["-a", &app_name])
+        .args(["-a", &app_target])
         .arg(&path)
         .spawn()
-        .map_err(|e| AppError::internal_at(format!("无法使用 {} 打开: {}", app_name, e), Some(path)))?;
+        .map_err(|e| AppError::internal_at(format!("无法使用 {} 打开: {}", app_target, e), Some(path)))?;
     Ok(())
 }
 
@@ -3415,6 +4455,7 @@ pub fn run() {
         .manage(FileDragState(Mutex::new(None)))
         .manage(DirectoryLoadState::default())
         .manage(TransferTaskState::default())
+        .manage(DirectorySizeTaskState::default())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -3518,11 +4559,19 @@ pub fn run() {
             create_file,
             create_folder,
             duplicate_as_alias,
+            calculate_file_hash,
             compress_files,
             decompress_file,
             get_file_info,
+            get_open_with_options,
+            set_default_open_with,
+            pick_application,
             get_app_icon,
+            estimate_dirs_size_fast,
             get_dir_size,
+            start_dir_size_task,
+            get_dir_size_task,
+            cancel_dir_size_task,
             get_child_count,
             get_directory_signature,
             open_devtools,
@@ -3634,23 +4683,23 @@ mod tests {
 
     #[test]
     fn format_size_kib_to_gib() {
-        assert_eq!(format_size(1024), "1.0 KB");
-        assert_eq!(format_size(1024 * 1024), "1.0 MB");
-        assert_eq!(format_size(1024_u64.pow(3)), "1.0 GB");
+        assert_eq!(format_size(1024), "1.0 K");
+        assert_eq!(format_size(1024 * 1024), "1.0 M");
+        assert_eq!(format_size(1024_u64.pow(3)), "1.0 G");
     }
 
     #[test]
     fn format_size_decimal_precision() {
-        assert_eq!(format_size(1536), "1.5 KB");
-        assert_eq!(format_size(1024 * 1024 * 3 / 2), "1.5 MB");
+        assert_eq!(format_size(1536), "1.5 K");
+        assert_eq!(format_size(1024 * 1024 * 3 / 2), "1.5 M");
     }
 
     // ── format_kib ──
     #[test]
     fn format_kib_parses_numeric_string() {
         // 输入 KiB 数字，输出人类可读
-        assert_eq!(format_kib("1"), "1.0 KB");
-        assert_eq!(format_kib("1024"), "1.0 MB");
+        assert_eq!(format_kib("1"), "1.0 K");
+        assert_eq!(format_kib("1024"), "1.0 M");
         assert_eq!(format_kib("0"), "0 B");
     }
 
@@ -3662,8 +4711,8 @@ mod tests {
 
     #[test]
     fn format_storage_size_uses_decimal_units_for_system_storage() {
-        assert_eq!(format_storage_size(494_384_795_648), "494.4 GB");
-        assert_eq!(format_storage_size(12_546_826_240), "12.5 GB");
+        assert_eq!(format_storage_size(494_384_795_648), "494.4 G");
+        assert_eq!(format_storage_size(12_546_826_240), "12.5 G");
     }
 
     #[test]
@@ -3712,9 +4761,9 @@ mod tests {
         let info = build_primary_apfs_disk_info(data_plist, Some(system_plist)).unwrap();
 
         assert_eq!(info.filesystem, "APFS");
-        assert_eq!(info.size, "494.4 GB");
-        assert_eq!(info.used, "361.2 GB");
-        assert_eq!(info.available, "133.2 GB");
+        assert_eq!(info.size, "494.4 G");
+        assert_eq!(info.used, "361.2 G");
+        assert_eq!(info.available, "133.2 G");
         assert_eq!(info.capacity, "73%");
         assert_eq!(info.capacity_value, 73);
         assert_eq!(info.mount, "/");
@@ -3768,7 +4817,7 @@ Filesystem   1024-blocks      Used Available Capacity  Mounted on
 
         assert_eq!(root.name, "Macintosh HD");
         assert_eq!(root.path, "/");
-        assert_eq!(root.used, "324.7 GB");
+        assert_eq!(root.used, "324.7 G");
         assert_eq!(root.capacity, "78%");
         assert_eq!(root.capacity_value, 78);
         assert_eq!(volumes.iter().filter(|volume| volume.is_root).count(), 1);
@@ -3899,7 +4948,7 @@ Filesystem   1024-blocks      Used Available Capacity  Mounted on
         let duplicated = duplicate_as_alias(src.to_string_lossy().into()).unwrap();
         let duplicated_path = Path::new(&duplicated);
 
-        assert_eq!(duplicated_path.file_name().unwrap().to_str().unwrap(), "note-替身.txt");
+        assert_eq!(duplicated_path.file_name().unwrap().to_str().unwrap(), "note-副本.txt");
         assert_eq!(std::fs::read_to_string(duplicated_path).unwrap(), "hello");
         assert!(!std::fs::symlink_metadata(duplicated_path).unwrap().file_type().is_symlink());
 
@@ -3919,10 +4968,91 @@ Filesystem   1024-blocks      Used Available Capacity  Mounted on
         let duplicated_path = Path::new(&duplicated);
         let metadata = std::fs::symlink_metadata(duplicated_path).unwrap();
 
-        assert_eq!(duplicated_path.file_name().unwrap().to_str().unwrap(), "Project-替身");
+        assert_eq!(duplicated_path.file_name().unwrap().to_str().unwrap(), "Project-副本");
         assert!(metadata.is_dir());
         assert!(!metadata.file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(duplicated_path.join("nested/readme.md")).unwrap(), "folder copy");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn calculate_file_hash_returns_sha256_for_file() {
+        let temp = std::env::temp_dir().join(format!("aether-hash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let src = temp.join("note.txt");
+        std::fs::write(&src, "hello").unwrap();
+
+        let result = calculate_file_hash(src.to_string_lossy().into()).unwrap();
+
+        assert_eq!(result.algorithm, "SHA-256");
+        assert_eq!(result.path, src.to_string_lossy());
+        assert_eq!(result.value, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn normalize_open_with_options_keeps_default_and_deduplicates_by_name() {
+        let normalized = normalize_open_with_options(vec![
+            OpenWithOption {
+                name: "Preview".into(),
+                path: "/Applications/Preview.app".into(),
+                is_default: false,
+            },
+            OpenWithOption {
+                name: "Preview".into(),
+                path: "/System/Applications/Preview.app".into(),
+                is_default: true,
+            },
+            OpenWithOption {
+                name: "Helper".into(),
+                path: "/Applications/App.app/Contents/Helpers/Helper.app".into(),
+                is_default: false,
+            },
+        ]);
+
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].name, "Preview");
+        assert_eq!(normalized[0].path, "/System/Applications/Preview.app");
+        assert!(normalized[0].is_default);
+    }
+
+    #[test]
+    fn normalize_selected_application_path_trims_trailing_slash() {
+        assert_eq!(
+            normalize_selected_application_path("/System/Applications/Preview.app/"),
+            Some("/System/Applications/Preview.app".into())
+        );
+        assert_eq!(
+            normalize_selected_application_path("  /Applications/TextEdit.app  \n"),
+            Some("/Applications/TextEdit.app".into())
+        );
+    }
+
+    #[test]
+    fn normalize_selected_application_path_rejects_non_app_paths() {
+        assert_eq!(normalize_selected_application_path(""), None);
+        assert_eq!(normalize_selected_application_path("/Applications"), None);
+        assert_eq!(normalize_selected_application_path("/Applications/Preview"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn get_file_info_includes_default_open_with_name() {
+        let temp = std::env::temp_dir().join(format!("aether-open-with-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let src = temp.join("note.txt");
+        std::fs::write(&src, "hello").unwrap();
+
+        let info = get_file_info(src.to_string_lossy().into()).unwrap();
+
+        assert_eq!(info.name, "note.txt");
+        assert!(!info.open_with.is_empty());
 
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -4749,6 +5879,24 @@ Filesystem   1024-blocks      Used Available Capacity  Mounted on
     }
 
     #[test]
+    fn estimate_dirs_size_fast_returns_estimate_for_directory() {
+        let temp = std::env::temp_dir().join(format!("aether-estimate-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join("a.txt"), vec![0u8; 1024]).unwrap();
+        std::fs::write(temp.join("b.txt"), vec![0u8; 2048]).unwrap();
+
+        let result = estimate_dirs_size_fast(vec![temp.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        let item = &result[0];
+        assert_eq!(item.path, temp.to_string_lossy());
+        assert!(!item.formatted.is_empty());
+        assert!(item.bytes >= 3072);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
     fn dir_size_recursive_skips_symlinks_without_following_them() {
         let temp = std::env::temp_dir().join(format!("aether-dir-size-symlink-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp);
@@ -4761,6 +5909,86 @@ Filesystem   1024-blocks      Used Available Capacity  Mounted on
         assert_eq!(summary.bytes, 4);
         assert_eq!(summary.file_count, 1);
         assert_eq!(summary.skipped_count, 1);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn dir_size_recursive_with_progress_updates_running_snapshot() {
+        let temp = std::env::temp_dir().join(format!("aether-dir-size-progress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join("a.txt"), vec![0u8; 1024]).unwrap();
+        std::fs::write(temp.join("b.txt"), vec![0u8; 2048]).unwrap();
+
+        let state = DirectorySizeTaskState::default();
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        state.insert(
+            DirectorySizeTaskSnapshot {
+                id: "dir-size-test".into(),
+                path: temp.to_string_lossy().into_owned(),
+                status: "queued".into(),
+                bytes: 0,
+                formatted: "0 B".into(),
+                allocated_bytes: 0,
+                formatted_allocated: "0 B".into(),
+                file_count: 0,
+                skipped_count: 0,
+                is_approximate: true,
+                started_at: now_unix_seconds(),
+                finished_at: None,
+                error: None,
+            },
+            cancel_requested.clone(),
+        ).unwrap();
+
+        let summary = dir_size_recursive_with_progress(&temp, "dir-size-test", &state, cancel_requested.as_ref()).unwrap();
+        let snapshot = state.get("dir-size-test").unwrap().unwrap();
+
+        assert_eq!(summary.bytes, 3072);
+        assert_eq!(summary.file_count, 2);
+        assert_eq!(snapshot.status, "running");
+        assert_eq!(snapshot.bytes, 3072);
+        assert_eq!(snapshot.file_count, 2);
+        assert!(!snapshot.is_approximate);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn dir_size_recursive_with_progress_stops_when_cancelled() {
+        let temp = std::env::temp_dir().join(format!("aether-dir-size-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join("a.txt"), vec![0u8; 1024]).unwrap();
+
+        let state = DirectorySizeTaskState::default();
+        let cancel_requested = Arc::new(AtomicBool::new(true));
+        state.insert(
+            DirectorySizeTaskSnapshot {
+                id: "dir-size-cancel-test".into(),
+                path: temp.to_string_lossy().into_owned(),
+                status: "queued".into(),
+                bytes: 0,
+                formatted: "0 B".into(),
+                allocated_bytes: 0,
+                formatted_allocated: "0 B".into(),
+                file_count: 0,
+                skipped_count: 0,
+                is_approximate: true,
+                started_at: now_unix_seconds(),
+                finished_at: None,
+                error: None,
+            },
+            cancel_requested.clone(),
+        ).unwrap();
+
+        let err = dir_size_recursive_with_progress(&temp, "dir-size-cancel-test", &state, cancel_requested.as_ref()).unwrap_err();
+
+        assert_eq!(err.kind, AppErrorKind::Cancelled);
+        let snapshot = state.get("dir-size-cancel-test").unwrap().unwrap();
+        assert_eq!(snapshot.bytes, 0);
+        assert_eq!(snapshot.file_count, 0);
 
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -4871,5 +6099,34 @@ Filesystem   1024-blocks      Used Available Capacity  Mounted on
         assert_eq!(std::fs::read_to_string(output_dir.join("same.txt")).unwrap(), "original");
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn resolve_open_with_application_accepts_named_apps() {
+        assert_eq!(
+            resolve_open_with_application_target(" Preview ").unwrap(),
+            "Preview"
+        );
+    }
+
+    #[test]
+    fn resolve_open_with_application_accepts_existing_app_bundle_paths() {
+        let temp = std::env::temp_dir().join(format!("aether-open-with-app-{}", std::process::id()));
+        let app_path = temp.join("Demo.app");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&app_path).unwrap();
+
+        assert_eq!(
+            resolve_open_with_application_target(&format!("{}/", app_path.to_string_lossy())).unwrap(),
+            app_path.to_string_lossy()
+        );
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn resolve_open_with_application_rejects_invalid_app_bundle_paths() {
+        let err = resolve_open_with_application_target("/tmp/not-an-app").unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::InvalidPath);
     }
 }

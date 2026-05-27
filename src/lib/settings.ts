@@ -15,7 +15,7 @@ import { isSafeShellOpenUrl } from './url-guard';
 import {
   AI_OP_HISTORY_DEFAULT_RETENTION_DAYS,
   normalizeOpHistoryRetentionDays,
-} from './ai-ops-log';
+} from './operation-history';
 
 export const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 export const CURRENT_SETTINGS_VERSION = 3;
@@ -36,6 +36,7 @@ const CONTEXT_ACTION_TYPES = new Set([
   'placeholder',
   'ai-assistant',
   'ai-history',
+  'calculate-hash',
 ]);
 
 function normalizeContextActionType(actionType: unknown): NonNullable<ContextMenuAction['actionType']> {
@@ -74,6 +75,7 @@ export const DEFAULT_THEME: ThemeSettings = {
   enableSpacePreview: true,
   crossWindowDropDefault: 'copy',
   aiOpsHistoryRetentionDays: AI_OP_HISTORY_DEFAULT_RETENTION_DAYS,
+  showFolderSizeInList: true,
   wallpaperBlur: 0,
   enableGradient: false,
   contextMenuExtensions: [
@@ -92,8 +94,12 @@ export const DEFAULT_THEME: ThemeSettings = {
       actionType: 'ai-assistant', confirmExecution: false, isSystem: true,
     },
     {
-      id: 'ai-history', label: 'AI 操作历史', enabled: true,
+      id: 'ai-history', label: '操作历史', enabled: true,
       actionType: 'ai-history', confirmExecution: false, isSystem: true,
+    },
+    {
+      id: 'calculate-hash', label: '计算哈希值', enabled: true,
+      actionType: 'calculate-hash', confirmExecution: false, isSystem: true,
     },
   ],
   terminalApp: 'Terminal',
@@ -246,6 +252,7 @@ const THEME_IMPORT_KEYS = new Set<keyof ThemeSettings>([
   'defaultHomePath',
   'crossWindowDropDefault',
   'aiOpsHistoryRetentionDays',
+  'showFolderSizeInList',
   'language',
   'followSystemLanguage',
   'languageOptions',

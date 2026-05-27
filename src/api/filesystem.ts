@@ -12,9 +12,35 @@ interface RawFileEntry {
   created?: string;
   added?: string;
   lastOpened?: string;
+  openWith?: string;
   type: string;
   iconPath?: string;
   childCount?: number;
+}
+
+export interface DirectorySizeEstimate {
+  path: string;
+  bytes: number;
+  formatted: string;
+  isApproximate: boolean;
+}
+
+export type DirectorySizeTaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface DirectorySizeTaskSnapshot {
+  id: string;
+  path: string;
+  status: DirectorySizeTaskStatus;
+  bytes: number;
+  formatted: string;
+  allocatedBytes: number;
+  formattedAllocated: string;
+  fileCount: number;
+  skippedCount: number;
+  isApproximate: boolean;
+  startedAt: number;
+  finishedAt?: number | null;
+  error?: string | null;
 }
 
 function mapEntry(item: RawFileEntry): FileItem {
@@ -27,6 +53,7 @@ function mapEntry(item: RawFileEntry): FileItem {
     created: item.created,
     added: item.added,
     lastOpened: item.lastOpened,
+    openWith: item.openWith,
     childCount: item.childCount,
     path: item.path,
   };
@@ -79,6 +106,23 @@ export interface DirectorySignature {
 
 export async function getDirectorySignature(path: string, showHidden = false): Promise<DirectorySignature> {
   return invokeFs('get_directory_signature', { path, showHidden });
+}
+
+export async function estimateDirsSizeFast(paths: string[]): Promise<DirectorySizeEstimate[]> {
+  if (!Array.isArray(paths) || paths.length === 0) return [];
+  return invokeFs<DirectorySizeEstimate[]>('estimate_dirs_size_fast', { paths });
+}
+
+export async function startDirSizeTask(path: string): Promise<string> {
+  return invokeFs<string>('start_dir_size_task', { path });
+}
+
+export async function getDirSizeTask(taskId: string): Promise<DirectorySizeTaskSnapshot | null> {
+  return invokeFs<DirectorySizeTaskSnapshot | null>('get_dir_size_task', { taskId });
+}
+
+export async function cancelDirSizeTask(taskId: string): Promise<void> {
+  return invokeFs('cancel_dir_size_task', { taskId });
 }
 
 export async function getAppIcon(path: string): Promise<string | null> {
@@ -269,6 +313,16 @@ export async function duplicateAsAlias(path: string): Promise<string> {
   return invokeFs('duplicate_as_alias', { path });
 }
 
+export interface FileHashResult {
+  path: string;
+  algorithm: string;
+  value: string;
+}
+
+export async function calculateFileHash(path: string): Promise<FileHashResult> {
+  return invokeFs<FileHashResult>('calculate_file_hash', { path });
+}
+
 export async function compressFiles(paths: string[], output: string): Promise<string> {
   return invokeFs('compress_files', { paths, output });
 }
@@ -280,4 +334,22 @@ export async function decompressFile(path: string, outputDir: string): Promise<s
 export async function getFileInfo(path: string): Promise<FileItem> {
   const entry: RawFileEntry = await invokeFs('get_file_info', { path });
   return mapEntry(entry);
+}
+
+export interface OpenWithOption {
+  name: string;
+  path: string;
+  isDefault: boolean;
+}
+
+export async function getOpenWithOptions(path: string): Promise<OpenWithOption[]> {
+  return invokeFs<OpenWithOption[]>('get_open_with_options', { path });
+}
+
+export async function setDefaultOpenWith(path: string, appPath: string): Promise<string> {
+  return invokeFs<string>('set_default_open_with', { path, appPath });
+}
+
+export async function pickApplication(): Promise<string | null> {
+  return invokeFs<string | null>('pick_application');
 }

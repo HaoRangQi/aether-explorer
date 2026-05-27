@@ -57,7 +57,7 @@ macOS 本地优先文件工作台，基于 Tauri v2 + React 19 + Rust 构建。
 - 外观 — 主题模式、强调色、字体、透明度、模糊强度
 - 右键菜单 — 可配置的扩展菜单，支持自定义终端命令
 - 语言 — 中/英双语，默认中文
-- AI 操作历史 — 真分页、按日期/文件名搜索、可配置保留期（默认 7 天，最长 90 天）
+- 操作历史（AI + 文件操作）— 真分页、按日期/文件名搜索、可配置保留期（默认 7 天，最长 90 天）
 
 ## 已知不足
 
@@ -138,6 +138,12 @@ aether-explorer/
 ## 功能清单
 
 详见 [FEATURES.md](./FEATURES.md) 的完整状态表。
+
+## 文档治理
+
+- 法典总索引：[`codex/README.md`](./codex/README.md)
+- 发版流程与验收：[`codex/06-release-runbook.md`](./codex/06-release-runbook.md)
+- 液态玻璃与文件工作台治理：[`codex/14-liquid-glass-file-workbench.md`](./codex/14-liquid-glass-file-workbench.md)
 
 ## 注意事项
 

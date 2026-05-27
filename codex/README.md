@@ -17,7 +17,7 @@
 | 03 | [导航栏与标签一致性 (Sidebar-Tab-Sync)](./03-sidebar-tab-sync.md) | ✅ | 2026-05-15 |
 | 04 | [应用图标系统重构 (App-Icon-System)](./04-app-icon-system.md) | ✅ | 2026-05-15 |
 | 05 | [收藏与颜色标签域 (Favorites-Tags-Domain)](./05-favorites-tags.md) | ✅ | 2026-05-15 |
-| 06 | [发布运行手册 (Release-Runbook)](./06-release-runbook.md) | ✅ | 2026-05-15 |
+| 06 | [发布运行手册 (Release-Runbook)](./06-release-runbook.md) | ✅ | 2026-05-26 |
 | 07 | [桌面壳与文件展示体验 (Desktop-Shell-File-Experience)](./07-desktop-shell-file-experience.md) | ✅ | 2026-05-23 |
 | 08 | [默认首页 (Default-Start-Page)](./08-default-start-page.md) | ✅ | 2026-05-17 |
 | 09 | [测试与发版安全基础 (Test-Release-Safety-Baseline)](./09-test-release-safety-baseline.md) | ✅ | 2026-05-17 |
@@ -25,7 +25,7 @@
 | 11 | [AI 文件助手系统 (AI-File-Assistant)](./11-ai-file-assistant.md) | ✅ | 2026-05-21 |
 | 12 | [macOS TCC 权限管理 (macOS-TCC-Permissions)](./12-macos-tcc-permissions.md) | ✅ | 2026-05-21 |
 | 13 | [文件操作 UX (File-Operation-UX)](./13-file-operation-ux.md) | ✅ | 2026-05-21 |
-| 14 | [原生玻璃与文件工作台治理 (Liquid-Glass-File-Workbench)](./14-liquid-glass-file-workbench.md) | ✅ | 2026-05-26 |
+| 14 | [原生玻璃与文件工作台治理 (Liquid-Glass-File-Workbench)](./14-liquid-glass-file-workbench.md) | ✅ | 2026-05-27 |
 | — | [草稿池 SCRATCH](./scratch.md) | — | — |
 
 新增章节时：在本表追加一行，文件命名为 `NN-<域名小写连字符>.md`，NN 取下一个未用编号。
