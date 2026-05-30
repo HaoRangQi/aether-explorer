@@ -142,6 +142,7 @@ See [FEATURES.md](./FEATURES.md) for the full status table.
 - Codex index: [`codex/README.md`](./codex/README.md)
 - Release workflow and acceptance: [`codex/06-release-runbook.md`](./codex/06-release-runbook.md)
 - Liquid Glass and file workbench governance: [`codex/14-liquid-glass-file-workbench.md`](./codex/14-liquid-glass-file-workbench.md)
+- Full-stack test report: [`docs/FULL_TEST_REPORT.md`](./docs/FULL_TEST_REPORT.md)
 
 ## Notes
 

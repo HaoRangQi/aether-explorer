@@ -6102,6 +6102,76 @@ Filesystem   1024-blocks      Used Available Capacity  Mounted on
     }
 
     #[test]
+    fn decompress_file_rejects_zip_slip_entries_without_writing_files() {
+        let temp = std::env::temp_dir().join(format!("aether-decompress-zipslip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let zip_path = temp.join("archive.zip");
+        let output_dir = temp.join("out");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            writer
+                .start_file("../evil.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, b"evil").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let result = decompress_file(
+            zip_path.to_string_lossy().to_string(),
+            output_dir.to_string_lossy().to_string(),
+        );
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::InvalidPath);
+        assert!(!temp.join("evil.txt").exists());
+        assert!(std::fs::read_dir(&output_dir).unwrap().next().is_none());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn decompress_file_rejects_duplicate_entries_before_writing_files() {
+        let temp = std::env::temp_dir().join(format!("aether-decompress-duplicate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let zip_path = temp.join("archive.zip");
+        let output_dir = temp.join("out");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            writer
+                .start_file("same.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, b"first").unwrap();
+            writer
+                .start_file("./same.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, b"second").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let result = decompress_file(
+            zip_path.to_string_lossy().to_string(),
+            output_dir.to_string_lossy().to_string(),
+        );
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind, AppErrorKind::Conflict);
+        assert!(err.path.as_deref().unwrap_or_default().ends_with("same.txt"));
+        assert!(!output_dir.join("same.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
     fn resolve_open_with_application_accepts_named_apps() {
         assert_eq!(
             resolve_open_with_application_target(" Preview ").unwrap(),

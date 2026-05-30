@@ -144,6 +144,7 @@ aether-explorer/
 - 法典总索引：[`codex/README.md`](./codex/README.md)
 - 发版流程与验收：[`codex/06-release-runbook.md`](./codex/06-release-runbook.md)
 - 液态玻璃与文件工作台治理：[`codex/14-liquid-glass-file-workbench.md`](./codex/14-liquid-glass-file-workbench.md)
+- 全栈测试报告：[`docs/FULL_TEST_REPORT.md`](./docs/FULL_TEST_REPORT.md)
 
 ## 注意事项
 
