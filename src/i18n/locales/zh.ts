@@ -48,6 +48,14 @@ export default {
     dismiss: '稍后处理',
     viewDiagnostics: '查看诊断'
   },
+  appPermissions: {
+    startupTitle: '一次性权限确认',
+    startupDescription: '将按顺序请求桌面、文稿、下载等目录权限，用于文件浏览与管理。你只需要在这里确认一次即可开始流程。',
+    systemBehaviorHint: 'macOS 会分别显示系统权限框；这是系统机制，应用无法合并成单个系统弹窗。',
+    later: '稍后',
+    continue: '开始授权',
+    requesting: '请求中...'
+  },
   shortcutHelp: {
     title: '快捷键',
     description: '按 ? 随时打开这张列表；在输入框、重命名和路径编辑时不会触发。',
@@ -621,7 +629,8 @@ export default {
     deleteThisLine: '删除此行',
     nextLangPackImport: '下一步接入 JSON 语言包导入与校验',
     createWindow: '新建窗口',
-    createTab: '新建标签页'
+    createTab: '新建标签页',
+    createTabDoubleClickWindow: '双击新建窗口'
   },
   placeholders: {
     beforeEnterDir: '可选：始终先进入选中目录，再执行这里的命令',

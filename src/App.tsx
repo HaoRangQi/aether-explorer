@@ -30,6 +30,9 @@ import {
 
 const MAX_RECENT_ITEMS = 100;
 const LIQUID_GLASS_PRIMARY = '#ffffff';
+const STARTUP_PERMISSION_PREFLIGHT_STATE_KEY = 'aether-startup-permission-preflight-state-v1';
+const STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY = 'aether-startup-permission-preflight-lock-v1';
+const STARTUP_PERMISSION_PREFLIGHT_LOCK_TTL_MS = 15_000;
 type ResolvedAppearance = 'light' | 'dark';
 const LIQUID_GLASS_COLOR_VARS: Record<ResolvedAppearance, Record<string, string>> = {
   light: {
@@ -151,6 +154,8 @@ export default function App() {
   const [isTransferring, setIsTransferring] = useState(false);
   const [settingsInitialCategory, setSettingsInitialCategory] = useState<SettingsCategory>('appearance');
   const [startupPanicPrompt, setStartupPanicPrompt] = useState<StartupPanicPrompt | null>(null);
+  const [startupPermissionPromptOpen, setStartupPermissionPromptOpen] = useState(false);
+  const [startupPermissionPromptLoading, setStartupPermissionPromptLoading] = useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [storeReady, setStoreReady] = useState(false);
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(
@@ -223,33 +228,11 @@ export default function App() {
     return () => document.removeEventListener('contextmenu', focusWindow, true);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      invoke<PermissionPreflightResult[]>('preflight_file_permissions')
-        .then(results => {
-          if (cancelled) return;
-          const denied = results.filter(result => !result.ok);
-          if (denied.length > 0) {
-            console.info('Permission preflight completed with denied paths:', denied.map(result => result.path));
-          }
-        })
-        .catch(err => {
-          console.warn('Permission preflight failed:', normalizeAppError(err).userMessage);
-        });
-    }, 400);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, []);
-
-  const resolveWindowTarget = useCallback((tab?: TabData) => {
+  const resolveWindowTarget = useCallback((path?: string, label?: string) => {
     const fallbackPath = theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
-    const path = tab?.currentPath || tab?.initialPath || fallbackPath;
-    const label = tab?.label || (path && !path.startsWith('aether://') ? getPathLeaf(path) : undefined);
-    return { path, label };
+    const resolvedPath = path || fallbackPath;
+    const resolvedLabel = label || (resolvedPath && !resolvedPath.startsWith('aether://') ? getPathLeaf(resolvedPath) : undefined);
+    return { path: resolvedPath, label: resolvedLabel };
   }, [theme.defaultHomePath]);
 
   const createStandaloneWindow = useCallback((path: string, label?: string) => {
@@ -259,15 +242,14 @@ export default function App() {
     });
   }, []);
 
-  const createNewWindow = useCallback((tab?: TabData) => {
-    // 关键：不传 tab 时（Cmd+N / 菜单 / 加号），把当前的默认首页带给新窗口，
-    // 否则新窗口的 ExplorerView 会因 initialPath 为空而走 fallback。
-    const { path, label } = resolveWindowTarget(tab);
-    if (!theme.enableMultiWindow) {
-      createLocalTab(path, label);
+  const createNewWindow = useCallback((path?: string, label?: string, options?: { forceStandalone?: boolean }) => {
+    // Cmd+N / 菜单默认遵循多窗口开关；工具栏按钮可用 forceStandalone 强制新建独立窗口。
+    const target = resolveWindowTarget(path, label);
+    if (!theme.enableMultiWindow && !options?.forceStandalone) {
+      createLocalTab(target.path, target.label);
       return;
     }
-    void createStandaloneWindow(path, label);
+    void createStandaloneWindow(target.path, target.label);
   }, [createLocalTab, createStandaloneWindow, resolveWindowTarget, theme.enableMultiWindow]);
 
   const removeTabAfterTransfer = useCallback((tabId: string) => {
@@ -288,12 +270,17 @@ export default function App() {
     });
   }, []);
 
+  const resolveTabWindowTarget = useCallback((tab: TabData) => {
+    const path = tab.currentPath || tab.initialPath;
+    return resolveWindowTarget(path, tab.label);
+  }, [resolveWindowTarget]);
+
   const handleDetachTab = useCallback((tab: TabData) => {
-    const { path, label } = resolveWindowTarget(tab);
+    const { path, label } = resolveTabWindowTarget(tab);
     createStandaloneWindow(path, label)
       .then(() => removeTabAfterTransfer(tab.id))
       .catch(() => {});
-  }, [createStandaloneWindow, removeTabAfterTransfer, resolveWindowTarget]);
+  }, [createStandaloneWindow, removeTabAfterTransfer, resolveTabWindowTarget]);
 
   const handleAcceptDraggedTab = useCallback((payload: TabTransferPayload) => {
     const sourceWindow = payload.sourceWindowLabel;
@@ -322,7 +309,6 @@ export default function App() {
       console.error('发送确认事件失败:', err);
     });
   }, []);
-
 
   // Initialize Tauri store and load persisted settings
   useEffect(() => {
@@ -438,6 +424,33 @@ export default function App() {
     setView('settings');
   }, [markStartupPanicPromptSeen]);
 
+  const markStartupPermissionPromptDone = useCallback(() => {
+    try {
+      localStorage.setItem(STARTUP_PERMISSION_PREFLIGHT_STATE_KEY, 'done');
+      localStorage.removeItem(STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY);
+    } catch {
+      // Ignore storage failures and just close prompt for this window.
+    }
+    setStartupPermissionPromptOpen(false);
+    setStartupPermissionPromptLoading(false);
+  }, []);
+
+  const runStartupPermissionPreflight = useCallback(async () => {
+    if (startupPermissionPromptLoading) return;
+    setStartupPermissionPromptLoading(true);
+    try {
+      const results = await invoke<PermissionPreflightResult[]>('preflight_file_permissions');
+      const denied = results.filter(result => !result.ok);
+      if (denied.length > 0) {
+        console.info('Permission preflight denied paths:', denied.map(result => result.path));
+      }
+      markStartupPermissionPromptDone();
+    } catch (err) {
+      console.warn('Permission preflight failed:', normalizeAppError(err).userMessage);
+      setStartupPermissionPromptLoading(false);
+    }
+  }, [markStartupPermissionPromptDone, startupPermissionPromptLoading]);
+
   // Apply theme to document
   useEffect(() => {
     const root = window.document.documentElement;
@@ -538,6 +551,48 @@ export default function App() {
 
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+
+    let shouldPrompt = false;
+    try {
+      const state = localStorage.getItem(STARTUP_PERMISSION_PREFLIGHT_STATE_KEY);
+      if (state !== 'done') {
+        const now = Date.now();
+        const lockRaw = localStorage.getItem(STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY);
+        const lockAt = lockRaw ? Number(lockRaw) : 0;
+        const lockValid = Number.isFinite(lockAt) && now - lockAt < STARTUP_PERMISSION_PREFLIGHT_LOCK_TTL_MS;
+        if (!lockValid) {
+          localStorage.setItem(STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY, String(now));
+          shouldPrompt = true;
+        }
+      }
+    } catch {
+      shouldPrompt = true;
+    }
+
+    if (shouldPrompt) {
+      timer = window.setTimeout(() => {
+        if (!cancelled) setStartupPermissionPromptOpen(true);
+      }, 550);
+    }
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === STARTUP_PERMISSION_PREFLIGHT_STATE_KEY && event.newValue === 'done') {
+        setStartupPermissionPromptOpen(false);
+        setStartupPermissionPromptLoading(false);
+      }
+    };
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+      window.removeEventListener('storage', onStorage);
     };
   }, []);
 
@@ -831,7 +886,7 @@ export default function App() {
                       onTitleChange={handleTabTitleChange}
                       onPathChange={handleTabPathChange}
                       onOpenTab={handleOpenTab}
-                      onCreateWindow={createNewWindow}
+                      onCreateWindow={(path, label) => createNewWindow(path, label, { forceStandalone: true })}
                       onStartTransfer={() => setIsTransferring(true)}
                       favorites={favorites}
                       onToggleFavorite={(id) => {
@@ -985,6 +1040,60 @@ export default function App() {
                   className="px-5 py-3 rounded-2xl bg-primary text-on-primary text-[12px] font-black shadow-lg shadow-primary/20 hover:bg-primary/90 transition-colors"
                 >
                   {t('appDiagnostics.viewDiagnostics')}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+        {startupPermissionPromptOpen && (
+          <motion.div
+            className="fixed inset-0 z-[119] flex items-center justify-center bg-black/35 backdrop-blur-sm px-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              initial={{ scale: 0.96, y: 12, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.96, y: 12, opacity: 0 }}
+              className={`${liquidGlassEnabled ? 'liquid-glass' : 'border border-primary/15 bg-surface/95'} w-full max-w-[560px] rounded-3xl shadow-2xl shadow-black/20 overflow-hidden`}
+            >
+              <div className="flex items-start gap-4 p-6">
+                <div className="w-11 h-11 rounded-2xl bg-primary/15 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-primary" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[17px] font-black text-on-surface">{t('appPermissions.startupTitle')}</h3>
+                  <p className="text-[13px] text-on-surface/55 mt-2 leading-relaxed">
+                    {t('appPermissions.startupDescription')}
+                  </p>
+                  <p className="text-[12px] text-on-surface/35 mt-3 leading-relaxed">
+                    {t('appPermissions.systemBehaviorHint')}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setStartupPermissionPromptOpen(false)}
+                  disabled={startupPermissionPromptLoading}
+                  className="p-2 rounded-xl hover:bg-primary/10 transition-colors shrink-0 disabled:opacity-50"
+                  title={t('common.cancel')}
+                >
+                  <X className="w-4 h-4 text-on-surface/45" />
+                </button>
+              </div>
+              <div className="flex items-center justify-end gap-3 p-6">
+                <button
+                  onClick={() => setStartupPermissionPromptOpen(false)}
+                  disabled={startupPermissionPromptLoading}
+                  className="px-5 py-3 rounded-2xl bg-primary/10 text-primary text-[12px] font-black hover:bg-primary/20 transition-colors disabled:opacity-50"
+                >
+                  {t('appPermissions.later')}
+                </button>
+                <button
+                  onClick={runStartupPermissionPreflight}
+                  disabled={startupPermissionPromptLoading}
+                  className="px-5 py-3 rounded-2xl bg-primary text-on-primary text-[12px] font-black shadow-lg shadow-primary/20 hover:bg-primary/90 transition-colors disabled:opacity-60"
+                >
+                  {startupPermissionPromptLoading ? t('appPermissions.requesting') : t('appPermissions.continue')}
                 </button>
               </div>
             </motion.div>

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw, History, Plus, Fingerprint } from 'lucide-react';
+import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, MoreVertical, ExternalLink, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, Puzzle, Sparkles, ChevronsUp, ChevronsDown, Shield, Terminal, Code2, X, RefreshCw, History, AppWindowMac, Fingerprint } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { interpolateFileActionTemplate, safeShellOpen } from '../lib/url-guard';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -421,6 +421,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const [isMarqueeDragging, setIsMarqueeDragging] = useState(false);
   const [typeaheadQuery, setTypeaheadQuery] = useState('');
   const typeaheadTimerRef = useRef<number | null>(null);
+  const createEntryClickTimerRef = useRef<number | null>(null);
+  const createEntryWindowLockRef = useRef(false);
+  const createEntryWindowLockTimerRef = useRef<number | null>(null);
   const [hasFileClipboard, setHasFileClipboard] = useState(false);
   const [isAppFileDragActive, setIsAppFileDragActive] = useState(false);
   const [incomingFileDrag, setIncomingFileDrag] = useState<IncomingFileDrag | null>(null);
@@ -1351,6 +1354,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (feedbackTimerRef.current) window.clearTimeout(feedbackTimerRef.current);
     if (marqueeResetTimerRef.current) window.clearTimeout(marqueeResetTimerRef.current);
     if (typeaheadTimerRef.current) window.clearTimeout(typeaheadTimerRef.current);
+    if (createEntryClickTimerRef.current) window.clearTimeout(createEntryClickTimerRef.current);
+    if (createEntryWindowLockTimerRef.current) window.clearTimeout(createEntryWindowLockTimerRef.current);
     if (submenuCloseTimerRef.current) window.clearTimeout(submenuCloseTimerRef.current);
   }, []);
 
@@ -4956,11 +4961,42 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (!onOpenTab) return;
     const targetPath = file
       ? (file.type === 'folder' ? file.path : getItemDirectory(file))
-      : currentPath;
+      : (currentPath || theme.defaultHomePath || FAVORITES_VIRTUAL_PATH);
     if (!targetPath) return;
     const label = targetPath.split('/').filter(Boolean).pop() || t('explorer.localStorage', '本地存储');
     onOpenTab(`tab-${Date.now()}`, 'tabs.volume', { label, initialPath: targetPath });
     setActiveDropdown(null);
+  };
+
+  const handleQuickCreateClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (event.detail >= 2) {
+      if (createEntryClickTimerRef.current) {
+        window.clearTimeout(createEntryClickTimerRef.current);
+        createEntryClickTimerRef.current = null;
+      }
+      if (createEntryWindowLockRef.current) return;
+      createEntryWindowLockRef.current = true;
+      if (createEntryWindowLockTimerRef.current) {
+        window.clearTimeout(createEntryWindowLockTimerRef.current);
+      }
+      createEntryWindowLockTimerRef.current = window.setTimeout(() => {
+        createEntryWindowLockRef.current = false;
+        createEntryWindowLockTimerRef.current = null;
+      }, 480);
+      const targetPath = currentPath || theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
+      const targetLabel = targetPath.split('/').filter(Boolean).pop() || t('explorer.localStorage', '本地存储');
+      onCreateWindow?.(targetPath, targetLabel);
+      setActiveDropdown(null);
+      return;
+    }
+
+    if (createEntryClickTimerRef.current) {
+      window.clearTimeout(createEntryClickTimerRef.current);
+    }
+    createEntryClickTimerRef.current = window.setTimeout(() => {
+      openCurrentInNewTab();
+      createEntryClickTimerRef.current = null;
+    }, 220);
   };
 
   const allColumns = displayMode === 'column'
@@ -5539,15 +5575,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                         {theme.showHiddenFiles ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </Tooltip>
-                    <Tooltip label={theme.enableMultiWindow ? t('tooltips.createWindow', '新建窗口') : t('tooltips.createTab', '新建标签页')}>
+                    <Tooltip label={t('tooltips.createTabDoubleClickWindow', '双击新建窗口')}>
                       <button
-                        onClick={() => onCreateWindow?.(
-                          currentPath || undefined,
-                          currentPath ? currentPath.split('/').filter(Boolean).pop() : undefined,
-                        )}
+                        onClick={handleQuickCreateClick}
                         className="p-1.5 hover:bg-primary/10 rounded-lg hover:text-on-surface transition-all active:scale-95 text-on-surface/60"
                       >
-                        <Plus className="w-4 h-4" />
+                        <AppWindowMac className="w-4 h-4" />
                       </button>
                     </Tooltip>
                     <Tooltip label={t('tooltips.refresh', '刷新')}>

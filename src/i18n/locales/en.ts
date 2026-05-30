@@ -48,6 +48,14 @@ export default {
     dismiss: 'Later',
     viewDiagnostics: 'View diagnostics'
   },
+  appPermissions: {
+    startupTitle: 'One-time Permission Confirmation',
+    startupDescription: 'Aether will request Desktop, Documents, Downloads, and related folder access in sequence for file browsing and management.',
+    systemBehaviorHint: 'macOS shows system prompts per folder category. These cannot be merged into one system dialog by the app.',
+    later: 'Later',
+    continue: 'Start authorization',
+    requesting: 'Requesting...'
+  },
   shortcutHelp: {
     title: 'Keyboard Shortcuts',
     description: 'Press ? anytime to open this list. It stays inactive while typing, renaming, or editing a path.',
@@ -614,7 +622,8 @@ export default {
     deleteThisLine: 'Delete this line',
     nextLangPackImport: 'Next: JSON language pack import and validation',
     createWindow: 'New window',
-    createTab: 'New tab'
+    createTab: 'New tab',
+    createTabDoubleClickWindow: 'Double-click for new window'
   },
   placeholders: {
     beforeEnterDir: 'Optional: Always enter selected directory first, then execute commands here',
