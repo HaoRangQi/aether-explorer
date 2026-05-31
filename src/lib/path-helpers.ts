@@ -9,6 +9,7 @@ import type { TabData } from '../types';
 export const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 export const RECENT_VIRTUAL_PATH = 'aether://recent';
 export const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
+export const REMOTE_PATH_PREFIX = 'aether-remote://';
 
 /**
  * 返回路径最后一段作为"叶子名"。
@@ -34,11 +35,65 @@ export function isVirtualPath(path: string | undefined | null): boolean {
 }
 
 /**
+ * 判断是否为远程连接路径。
+ */
+export function isRemotePath(path: string | undefined | null): boolean {
+  return !!path && path.startsWith(REMOTE_PATH_PREFIX);
+}
+
+export interface RemotePathParts {
+  connectionId: string;
+  remotePath: string;
+}
+
+/**
+ * 解析远程路径：aether-remote://<connectionId>/<remotePath>
+ */
+export function parseRemotePath(path: string): RemotePathParts | null {
+  if (!isRemotePath(path)) return null;
+  const rest = path.slice(REMOTE_PATH_PREFIX.length);
+  const [rawConnectionId, ...pathParts] = rest.split('/');
+  try {
+    const connectionId = decodeURIComponent(rawConnectionId || '').trim();
+    if (!connectionId) return null;
+    const remotePath = normalizeRemoteDirectoryPath(decodeURIComponent(pathParts.join('/')));
+    return { connectionId, remotePath };
+  } catch {
+    return null;
+  }
+}
+
+export function buildRemotePath(connectionId: string, remotePath = '/'): string {
+  const id = encodeURIComponent(connectionId.trim());
+  const normalizedPath = normalizeRemoteDirectoryPath(remotePath);
+  const encodedPath = normalizedPath === '/'
+    ? '/'
+    : `/${normalizedPath.split('/').filter(Boolean).map(encodeURIComponent).join('/')}`;
+  return `${REMOTE_PATH_PREFIX}${id}${encodedPath}`;
+}
+
+export function normalizeRemoteDirectoryPath(path: string | undefined | null): string {
+  if (!path) return '/';
+  const trimmed = path.trim();
+  if (!trimmed || trimmed === '/') return '/';
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.replace(/\/+/g, '/').replace(/\/+$/, '') || '/';
+}
+
+export function getRemoteParentPath(path: string): string {
+  const parsed = parseRemotePath(path);
+  if (!parsed) return '/';
+  const parent = parsed.remotePath.split('/').slice(0, -1).join('/') || '/';
+  return buildRemotePath(parsed.connectionId, parent);
+}
+
+/**
  * 返回真实文件系统路径的父目录。
  *
  * 保持 Explorer 键盘 Cmd+↑ 的既有语义：根目录和空路径都回到 `/`。
  */
 export function getParentPath(path: string): string {
+  if (isRemotePath(path)) return getRemoteParentPath(path);
   return path.split('/').slice(0, -1).join('/') || '/';
 }
 

@@ -18,12 +18,16 @@ import {
   Globe,
   Trash2,
   Circle,
-  Settings
+  Settings,
+  Plus,
+  Pencil,
+  Server
 } from 'lucide-react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { invoke } from '@tauri-apps/api/core';
-import { ViewMode, ThemeSettings, VolumeInfo, TabData } from '../types';
+import { ViewMode, ThemeSettings, VolumeInfo, TabData, RemoteConnection } from '../types';
 import { normalizeAppError } from '../lib/app-error';
+import { buildRemotePath, parseRemotePath } from '../lib/path-helpers';
+import { protocolLabel } from '../lib/remote-connections';
+import { safeCurrentWindow, safeInvoke } from '../lib/tauri-runtime';
 
 const FAVORITES_VIRTUAL_PATH = 'aether://favorites';
 const RECENT_VIRTUAL_PATH = 'aether://recent';
@@ -44,11 +48,14 @@ interface SidebarProps {
   currentPath?: string;
   onViewChange: (view: ViewMode) => void;
   onOpenTab: (id: string, labelKey: string, options?: { label?: string; initialPath?: string }) => void;
+  onAddRemoteConnection?: () => void;
+  onEditRemoteConnection?: (connection: RemoteConnection) => void;
   theme: ThemeSettings;
   tabs: TabData[];
+  remoteConnections?: RemoteConnection[];
 }
 
-export default function Sidebar({ currentView, currentPath, onViewChange, onOpenTab, theme, tabs }: SidebarProps) {
+export default function Sidebar({ currentView, currentPath, onViewChange, onOpenTab, onAddRemoteConnection, onEditRemoteConnection, theme, tabs, remoteConnections = [] }: SidebarProps) {
   const { t } = useTranslation();
   const liquidGlassEnabled = theme.enableLiquidGlass === true;
   const [diskInfo, setDiskInfo] = useState<DiskInfo | null>(null);
@@ -60,7 +67,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
   const menuClickTimerRef = useRef<number | null>(null);
 
   const loadVolumes = () => {
-    invoke<VolumeInfo[]>('list_volumes')
+    safeInvoke<VolumeInfo[]>('list_volumes')
       .then(items => setVolumes(items.filter(item => item.is_external)))
       .catch(() => setVolumes([]));
   };
@@ -92,7 +99,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
 
   useEffect(() => {
     let cancelled = false;
-    invoke<DiskInfo>('get_disk_info', { path: '/' })
+    safeInvoke<DiskInfo>('get_disk_info', { path: '/' })
       .then(info => {
         if (!cancelled) setDiskInfo(info);
       })
@@ -104,7 +111,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
 
   useEffect(() => {
     let cancelled = false;
-    invoke<string>('get_home_dir')
+    safeInvoke<string>('get_home_dir')
       .then(path => {
         if (!cancelled) setHomeDir(path);
       })
@@ -117,7 +124,7 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      invoke<VolumeInfo[]>('list_volumes')
+      safeInvoke<VolumeInfo[]>('list_volumes')
         .then(items => {
           if (!cancelled) setVolumes(items.filter(item => item.is_external));
         })
@@ -203,9 +210,28 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
     });
   };
 
+  const openRemoteConnection = (connection: RemoteConnection) => {
+    onOpenTab(`remote-${connection.id}`, 'tabs.volume', {
+      label: connection.name,
+      initialPath: buildRemotePath(connection.id, connection.basePath || '/'),
+    });
+  };
+
+  const handleAddRemoteConnection = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onAddRemoteConnection?.();
+  };
+
+  const handleEditRemoteConnection = (event: MouseEvent<HTMLButtonElement>, connection: RemoteConnection) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onEditRemoteConnection?.(connection);
+  };
+
   const ejectVolume = async (volume: VolumeInfo) => {
     try {
-      await invoke('eject_volume', { path: volume.path });
+      await safeInvoke('eject_volume', { path: volume.path });
       setVolumeMessage(t('messages.ejected', { name: volume.name }));
       loadVolumes();
     } catch (err) {
@@ -224,8 +250,8 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, input, a, [data-no-drag]')) return;
-    getCurrentWindow().startDragging().catch(() => {
-      invoke('start_window_drag').catch(() => {});
+    safeCurrentWindow().startDragging().catch(() => {
+      safeInvoke('start_window_drag').catch(() => {});
     });
   };
 
@@ -280,17 +306,17 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
       {/* Mac Window Controls */}
       <div className="flex items-center gap-2 px-5 mb-8" data-no-drag>
         <button
-          onClick={() => getCurrentWindow().close()}
+          onClick={() => safeCurrentWindow().close()}
           className="w-3 h-3 rounded-full bg-[#ff5f56] border border-[#e0443e] hover:brightness-90 cursor-pointer"
           title={t('tooltips.close')}
         />
         <button
-          onClick={() => getCurrentWindow().minimize()}
+          onClick={() => safeCurrentWindow().minimize()}
           className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123] hover:brightness-90 cursor-pointer"
           title={t('tooltips.minimize')}
         />
         <button
-          onClick={() => getCurrentWindow().toggleMaximize()}
+          onClick={() => safeCurrentWindow().toggleMaximize()}
           className="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29] hover:brightness-90 cursor-pointer"
           title={t('tooltips.maximize')}
         />
@@ -364,6 +390,72 @@ export default function Sidebar({ currentView, currentPath, onViewChange, onOpen
             })}
           </div>
         ))}
+
+        <div className="space-y-1">
+          <div className="w-full px-3 flex items-center justify-between text-[11px] font-black text-on-surface/45 mb-2 min-w-0">
+            <button
+              onClick={() => toggleSection('sidebar.remoteAccess')}
+              className="flex items-center gap-1 hover:text-icon transition-colors min-w-0"
+              title={collapsedSections['sidebar.remoteAccess'] ? '展开' : '收起'}
+            >
+              <span className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity shrink-0">
+                {collapsedSections['sidebar.remoteAccess'] ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </span>
+              <span className="truncate">{t('sidebar.remoteAccess', '远程访问')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleAddRemoteConnection}
+              className="p-0.5 rounded hover:bg-hover-custom hover:text-icon transition-all opacity-0 group-hover/sidebar:opacity-100 shrink-0"
+              title={t('tooltips.addRemoteConnection', '添加远程连接')}
+            >
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+          {!collapsedSections['sidebar.remoteAccess'] && (
+            <div className="space-y-1">
+              {remoteConnections.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={handleAddRemoteConnection}
+                  className="mx-3 w-[calc(100%-1.5rem)] max-w-full overflow-hidden px-2.5 py-2 rounded-lg bg-primary/5 border border-primary/10 text-[10.5px] text-on-surface/45 leading-snug break-words text-left hover:bg-primary/10"
+                >
+                  {t('sidebar.addRemoteConnection', '添加 SFTP / FTP / WebDAV 连接')}
+                </button>
+              ) : remoteConnections.map(connection => {
+                const activeRemote = currentPath ? parseRemotePath(currentPath) : null;
+                const isActive = activeRemote?.connectionId === connection.id;
+                return (
+                  <div key={connection.id} className="group/remote relative">
+                    <button
+                      onClick={() => openRemoteConnection(connection)}
+                      className={`w-full flex items-center px-3 py-1.5 pr-9 rounded-lg transition-all duration-300 relative cursor-pointer font-semibold ${isActive ? `${liquidGlassEnabled ? 'liquid-pill' : 'bg-panel-custom'} text-on-surface font-black` : 'text-on-surface/75 hover:bg-on-surface/[0.04] hover:text-on-surface'}`}
+                    >
+                      <div className="flex items-center gap-2 relative z-10 w-full text-left min-w-0">
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-all duration-300 ${isActive ? 'bg-active-icon text-on-primary shadow-md shadow-custom' : 'bg-panel-custom text-on-surface/40 group-hover:bg-hover-custom'}`}>
+                          <Server className="w-3.5 h-3.5" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[13px] truncate tracking-tight">{connection.name}</div>
+                          <div className="text-[9px] text-on-surface/35 font-black uppercase truncate">{protocolLabel(connection.protocol)} · {connection.host}</div>
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={event => handleEditRemoteConnection(event, connection)}
+                      className="absolute right-1.5 top-1/2 z-20 -translate-y-1/2 rounded-lg p-1.5 text-on-surface/30 opacity-45 transition-all hover:bg-hover-custom hover:text-icon hover:opacity-100 group-hover/remote:opacity-100"
+                      title="编辑"
+                      aria-label={`编辑 ${connection.name}`}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         <div className="space-y-1">
           <div className="w-full px-3 flex items-center justify-between text-[11px] font-black text-on-surface/45 mb-2 min-w-0">

@@ -1,7 +1,7 @@
 export interface FileItem {
   id: string;
   name: string;
-  type: 'file' | 'folder' | 'application' | 'image' | 'video' | 'audio' | 'pdf' | 'archive' | 'code' | 'text';
+  type: 'file' | 'folder' | 'application' | 'image' | 'video' | 'audio' | 'pdf' | 'archive' | 'code' | 'text' | 'remote-unknown';
   size?: string;
   modified: string;
   created?: string;
@@ -58,6 +58,25 @@ export interface VolumeInfo {
   is_root: boolean;
   is_external: boolean;
   is_ejectable?: boolean;
+}
+
+export type RemoteConnectionProtocol = 'sftp' | 'ftp' | 'webdav-https' | 'webdav-http';
+export type RemoteAuthMethod = 'password' | 'private-key';
+
+export interface RemoteConnection {
+  id: string;
+  name: string;
+  protocol: RemoteConnectionProtocol;
+  host: string;
+  port: number;
+  username?: string;
+  basePath: string;
+  createdAt: number;
+  updatedAt: number;
+  authMethod: RemoteAuthMethod;
+  hasPassword: boolean;
+  privateKeyPath?: string;
+  hasPrivateKeyPassphrase: boolean;
 }
 
 export interface ThemeSettings {

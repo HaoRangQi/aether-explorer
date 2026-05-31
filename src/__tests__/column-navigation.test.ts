@@ -94,6 +94,13 @@ describe('resolveColumnActionDirectory', () => {
     ])).toBe('/Users/jane/Projects');
   });
 
+  it('uses the last remote column path when browsing a remote tree', () => {
+    expect(resolveColumnActionDirectory('aether-remote://server/', 'column', [
+      'aether-remote://server/Sites',
+      'aether-remote://server/Sites/public',
+    ])).toBe('aether-remote://server/Sites/public');
+  });
+
   it('does not allow writes to a virtual root outside column mode', () => {
     expect(resolveColumnActionDirectory('aether://favorites', 'list', [])).toBe('');
   });
@@ -102,6 +109,13 @@ describe('resolveColumnActionDirectory', () => {
 describe('resolveColumnPaneDirectory', () => {
   it('uses a real column parent path for blank pane actions', () => {
     expect(resolveColumnPaneDirectory('aether://favorites', '/Users/jane/Projects')).toBe('/Users/jane/Projects');
+  });
+
+  it('uses a remote column parent path for blank pane actions', () => {
+    expect(resolveColumnPaneDirectory(
+      'aether-remote://server/',
+      'aether-remote://server/Sites',
+    )).toBe('aether-remote://server/Sites');
   });
 
   it('falls back to the current real path when pane parent is absent', () => {

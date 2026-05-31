@@ -1,4 +1,4 @@
-import { getParentPath, isVirtualPath } from './path-helpers';
+import { getParentPath, isRemotePath, isVirtualPath } from './path-helpers';
 
 function isValidColumnIndex(value: number | undefined, maxIndex: number): value is number {
   return typeof value === 'number'
@@ -11,6 +11,10 @@ function inferSourceColumnIndex(currentColumnPaths: string[], selectedFolderPath
   const parentPath = getParentPath(selectedFolderPath);
   const parentIndex = currentColumnPaths.indexOf(parentPath);
   return parentIndex >= 0 ? parentIndex + 1 : 0;
+}
+
+function isActionablePanePath(path: string | undefined): path is string {
+  return Boolean(path) && !isVirtualPath(path);
 }
 
 export function resolveColumnPathsAfterFolderSelection(
@@ -54,14 +58,17 @@ export function resolveColumnActionDirectory(
   columnPaths: string[],
 ): string {
   if (displayMode === 'column') {
-    const lastRealColumnPath = [...columnPaths].reverse().find(path => !isVirtualPath(path));
+    const currentIsRemote = isRemotePath(currentPath);
+    const lastRealColumnPath = [...columnPaths]
+      .reverse()
+      .find(path => isActionablePanePath(path) && isRemotePath(path) === currentIsRemote);
     if (lastRealColumnPath) return lastRealColumnPath;
   }
 
-  return currentPath && !isVirtualPath(currentPath) ? currentPath : '';
+  return isActionablePanePath(currentPath) ? currentPath : '';
 }
 
 export function resolveColumnPaneDirectory(currentPath: string, parentPath: string | undefined): string {
-  if (parentPath && !isVirtualPath(parentPath)) return parentPath;
-  return currentPath && !isVirtualPath(currentPath) ? currentPath : '';
+  if (isActionablePanePath(parentPath)) return parentPath;
+  return isActionablePanePath(currentPath) ? currentPath : '';
 }

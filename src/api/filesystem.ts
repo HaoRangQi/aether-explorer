@@ -1,7 +1,8 @@
-import { invoke } from '@tauri-apps/api/core';
-import type { FileItem } from '../types';
+import type { FileItem, RemoteAuthMethod, RemoteConnection, RemoteConnectionProtocol } from '../types';
 import { normalizeAppError } from '../lib/app-error';
 import { getCachedAssetUrl } from '../lib/asset-url-cache';
+import { isRemotePath } from '../lib/path-helpers';
+import { safeInvoke } from '../lib/tauri-runtime';
 
 interface RawFileEntry {
   name: string;
@@ -16,6 +17,18 @@ interface RawFileEntry {
   type: string;
   iconPath?: string;
   childCount?: number;
+}
+
+const REMOTE_REQUEST_TIMEOUT_MS = 5_000;
+
+function withRemoteRequestTimeout<T>(request: Promise<T>, message: string): Promise<T> {
+  let timeoutId: number | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), REMOTE_REQUEST_TIMEOUT_MS);
+  });
+  return Promise.race([request, timeout]).finally(() => {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  });
 }
 
 export interface DirectorySizeEstimate {
@@ -59,9 +72,9 @@ function mapEntry(item: RawFileEntry): FileItem {
   };
 
   // Generate asset URL for local media thumbnails and macOS app bundle icons.
-  if (item.type === 'image' || item.type === 'video') {
+  if ((item.type === 'image' || item.type === 'video') && !isRemotePath(item.path)) {
     mapped.thumbnail = getCachedAssetUrl(item.path);
-  } else if (item.type === 'application' && item.iconPath) {
+  } else if (item.type === 'application' && item.iconPath && !isRemotePath(item.iconPath)) {
     mapped.thumbnail = getCachedAssetUrl(item.iconPath);
   }
 
@@ -70,7 +83,7 @@ function mapEntry(item: RawFileEntry): FileItem {
 
 async function invokeFs<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
-    return await invoke<T>(command, args);
+    return await safeInvoke<T>(command, args);
   } catch (error) {
     throw normalizeAppError(error);
   }
@@ -352,4 +365,58 @@ export async function setDefaultOpenWith(path: string, appPath: string): Promise
 
 export async function pickApplication(): Promise<string | null> {
   return invokeFs<string | null>('pick_application');
+}
+
+export interface SaveRemoteConnectionInput {
+  id?: string;
+  name: string;
+  protocol: RemoteConnectionProtocol;
+  host: string;
+  port?: number;
+  username?: string;
+  basePath?: string;
+  authMethod?: RemoteAuthMethod;
+  password?: string;
+  privateKeyPath?: string;
+  privateKeyPassphrase?: string;
+}
+
+export interface ListRemoteDirectoryInput {
+  connectionId: string;
+  remotePath: string;
+  showHidden: boolean;
+}
+
+export async function listRemoteConnections(): Promise<RemoteConnection[]> {
+  return invokeFs<RemoteConnection[]>('list_remote_connections');
+}
+
+export async function saveRemoteConnection(input: SaveRemoteConnectionInput): Promise<RemoteConnection> {
+  return invokeFs<RemoteConnection>('save_remote_connection', { input });
+}
+
+export async function deleteRemoteConnection(connectionId: string): Promise<void> {
+  return invokeFs('delete_remote_connection', { connectionId });
+}
+
+export async function testRemoteConnection(connectionId: string): Promise<void> {
+  return withRemoteRequestTimeout(
+    invokeFs('test_remote_connection', { connectionId }),
+    '远程连接测试超时，请检查服务器地址、端口、账号凭据和网络。',
+  );
+}
+
+export async function testRemoteConnectionInput(input: SaveRemoteConnectionInput): Promise<void> {
+  return withRemoteRequestTimeout(
+    invokeFs('test_remote_connection_input', { input }),
+    '远程连接测试超时，请检查服务器地址、端口、账号凭据和网络。',
+  );
+}
+
+export async function listRemoteDirectory(input: ListRemoteDirectoryInput): Promise<FileItem[]> {
+  const entries = await withRemoteRequestTimeout(
+    invokeFs<RawFileEntry[]>('list_remote_directory', { input }),
+    '远程目录加载超时，请检查服务器地址、端口、账号凭据和网络。',
+  );
+  return entries.map(mapEntry);
 }

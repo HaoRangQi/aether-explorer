@@ -29,7 +29,9 @@ export default {
     used: 'Used',
     settings: 'Settings',
     favoritesList: 'My Favorites',
-    aetherUser: 'Aether User'
+    aetherUser: 'Aether User',
+    remoteAccess: 'Remote Access',
+    addRemoteConnection: 'Add SFTP / FTP / WebDAV connection'
   },
   footer: {
     title: 'Aether File Manager',
@@ -727,6 +729,7 @@ export default {
     defaultOpenWithUpdateFailed: 'Failed to change default app: {{error}}',
     favoriteAdded: 'Added {{count}} items to favorites',
     favoriteRemoved: 'Removed {{count}} items from favorites',
+    remoteReadOnly: 'Remote access V1 supports browsing only.',
     recentCleared: 'Recent items cleared',
     colorTagAdded: 'Added {{tag}} tag to {{count}} items',
     colorTagRemoved: 'Removed {{tag}} tag from {{count}} items',

@@ -29,7 +29,9 @@ export default {
     used: '已用',
     settings: '设置',
     aetherUser: 'Aether 用户',
-    favoritesList: '我的收藏'
+    favoritesList: '我的收藏',
+    remoteAccess: '远程访问',
+    addRemoteConnection: '添加 SFTP / FTP / WebDAV 连接'
   },
   footer: {
     title: 'Aether 文件管理器',
@@ -734,6 +736,7 @@ export default {
     defaultOpenWithUpdateFailed: '设置默认打开方式失败：{{error}}',
     favoriteAdded: '已收藏 {{count}} 个项目',
     favoriteRemoved: '已取消收藏 {{count}} 个项目',
+    remoteReadOnly: '远程访问第一版仅支持浏览。',
     recentCleared: '已清空最近使用',
     colorTagAdded: '已为 {{count}} 个项目添加{{tag}}标签',
     colorTagRemoved: '已为 {{count}} 个项目移除{{tag}}标签',

@@ -13,6 +13,8 @@ use tauri::{Emitter, Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_liquid_glass::{GlassMaterialVariant, LiquidGlassConfig, LiquidGlassExt};
 use tauri_plugin_log::{Target, TargetKind};
 
+mod remote;
+
 #[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 #[cfg(target_os = "macos")]
@@ -23,24 +25,24 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_updater::UpdaterExt;
 
 #[derive(Debug, Serialize, Clone)]
-struct FileEntry {
-    name: String,
-    path: String,
-    is_dir: bool,
-    size: String,
-    modified: String,
-    created: String,
-    added: String,
+pub(crate) struct FileEntry {
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) is_dir: bool,
+    pub(crate) size: String,
+    pub(crate) modified: String,
+    pub(crate) created: String,
+    pub(crate) added: String,
     #[serde(rename = "lastOpened")]
-    last_opened: String,
+    pub(crate) last_opened: String,
     #[serde(rename = "openWith")]
-    open_with: String,
+    pub(crate) open_with: String,
     #[serde(rename = "type")]
-    file_type: String,
+    pub(crate) file_type: String,
     #[serde(rename = "iconPath", skip_serializing_if = "Option::is_none")]
-    icon_path: Option<String>,
+    pub(crate) icon_path: Option<String>,
     #[serde(rename = "childCount", skip_serializing_if = "Option::is_none")]
-    child_count: Option<u64>,
+    pub(crate) child_count: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -184,7 +186,7 @@ impl DirectoryLoadToken {
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
-enum AppErrorKind {
+pub(crate) enum AppErrorKind {
     PermissionDenied,
     NotFound,
     DiskFull,
@@ -198,7 +200,7 @@ enum AppErrorKind {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct AppError {
+pub(crate) struct AppError {
     kind: AppErrorKind,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,7 +208,7 @@ struct AppError {
 }
 
 impl AppError {
-    fn new(kind: AppErrorKind, message: impl Into<String>, path: Option<String>) -> Self {
+    pub(crate) fn new(kind: AppErrorKind, message: impl Into<String>, path: Option<String>) -> Self {
         Self {
             kind,
             message: message.into(),
@@ -820,7 +822,7 @@ fn summarize_transfer_error(failed: &[MoveFailure], conflicts: &[MoveConflict]) 
     None
 }
 
-fn format_size(bytes: u64) -> String {
+pub(crate) fn format_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
@@ -1046,7 +1048,7 @@ fn volume_infos_from_df_rows(rows: &[DfRow]) -> Vec<VolumeInfo> {
     volumes
 }
 
-fn detect_mime(name: &str, is_dir: bool) -> String {
+pub(crate) fn detect_mime(name: &str, is_dir: bool) -> String {
     if is_dir {
         if name.to_lowercase().ends_with(".app") {
             return "application".into();
@@ -4574,6 +4576,12 @@ pub fn run() {
             cancel_dir_size_task,
             get_child_count,
             get_directory_signature,
+            remote::list_remote_connections,
+            remote::save_remote_connection,
+            remote::delete_remote_connection,
+            remote::test_remote_connection,
+            remote::test_remote_connection_input,
+            remote::list_remote_directory,
             open_devtools,
             quick_look,
             reveal_in_finder,

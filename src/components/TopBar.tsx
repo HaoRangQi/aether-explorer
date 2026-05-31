@@ -2,10 +2,8 @@ import type { DragEvent, MouseEvent } from 'react';
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, X } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { emit, listen } from '@tauri-apps/api/event';
 import { ViewMode, ThemeSettings, TabData } from '../types';
+import { currentWindowLabel, safeCurrentWindow, safeEmit, safeInvoke, safeListen } from '../lib/tauri-runtime';
 
 export interface TabTransferPayload {
   transferId: string;
@@ -46,7 +44,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
 
   // 监听全局拖拽事件
   useEffect(() => {
-    const unlisten = listen<TabTransferPayload>('aether-tab-drag-start', (event) => {
+    const unlisten = safeListen<TabTransferPayload>('aether-tab-drag-start', (event) => {
       // 如果已经接受了，忽略
       if (isAcceptedRef.current) return;
 
@@ -63,7 +61,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
       }, 5000);
     });
 
-    const unlisten2 = listen('aether-tab-drag-end', () => {
+    const unlisten2 = safeListen('aether-tab-drag-end', () => {
       clearDragState();
     });
 
@@ -78,14 +76,14 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, input, a, [data-no-drag]')) return;
-    getCurrentWindow().startDragging().catch(() => {
-      invoke('start_window_drag').catch(() => {});
+    safeCurrentWindow().startDragging().catch(() => {
+      safeInvoke('start_window_drag').catch(() => {});
     });
   };
 
   const createTransferPayload = (tab: TabData): TabTransferPayload => ({
     transferId: `tab-transfer-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    sourceWindowLabel: getCurrentWindow().label,
+    sourceWindowLabel: currentWindowLabel(),
     tab: {
       ...tab,
       initialPath: tab.currentPath || tab.initialPath,
@@ -102,7 +100,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
     localStorage.setItem(TAB_TRANSFER_STORAGE_KEY, serialized);
     event.currentTarget.dataset.transferId = payload.transferId;
 
-    emit('aether-tab-drag-start', payload).catch(() => {});
+    safeEmit('aether-tab-drag-start', payload).catch(() => {});
   };
 
   const handleTabDragEnd = (event: DragEvent<HTMLDivElement>, tab: TabData) => {
@@ -150,8 +148,8 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
     }
 
     // 检查是否是从其他窗口拖拽过来的
-    const currentWindowLabel = getCurrentWindow().label;
-    if (globalDragData.sourceWindowLabel === currentWindowLabel) {
+    const windowLabel = currentWindowLabel();
+    if (globalDragData.sourceWindowLabel === windowLabel) {
       return;
     }
 
@@ -198,7 +196,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
         style={{ minHeight: '48px' }}
       >
         {/* 拖拽放置提示 */}
-        {globalDragData && globalDragData.sourceWindowLabel !== getCurrentWindow().label && (
+        {globalDragData && globalDragData.sourceWindowLabel !== currentWindowLabel() && (
           <div
             className="absolute inset-0 flex items-center justify-center bg-primary/20 backdrop-blur-sm rounded-lg border-2 border-primary border-dashed z-50 cursor-pointer"
             onClick={(e) => {
@@ -208,7 +206,7 @@ export default function TopBar({ currentView, onViewChange, theme, tabs, onClose
               // 立即清除拖拽状态
               clearDragState();
               // 广播结束事件
-              emit('aether-tab-drag-end');
+              safeEmit('aether-tab-drag-end');
               // 执行标签页接受
               onAcceptDraggedTab(globalDragData);
               // 重置标记

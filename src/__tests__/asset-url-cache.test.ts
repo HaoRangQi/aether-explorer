@@ -54,4 +54,12 @@ describe('asset URL cache', () => {
     expect(getCachedAssetUrl('/tmp/a.png')).toBe('asset:///tmp/a.png');
     expect(convertFileSrcMock).toHaveBeenCalledTimes(2);
   });
+
+  it('returns remote URLs unchanged without caching them', () => {
+    const remotePath = 'aether-remote://server/Sites/logo.png';
+
+    expect(getCachedAssetUrl(remotePath)).toBe(remotePath);
+    expect(getAssetUrlCacheSize()).toBe(0);
+    expect(convertFileSrcMock).not.toHaveBeenCalled();
+  });
 });

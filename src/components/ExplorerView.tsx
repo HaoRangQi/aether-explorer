@@ -7,12 +7,9 @@ import { confirm } from '@tauri-apps/plugin-dialog';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { Menu, MenuItem, PredefinedMenuItem, Submenu } from '@tauri-apps/api/menu';
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { invoke } from '@tauri-apps/api/core';
-import { emit, emitTo, listen } from '@tauri-apps/api/event';
-import { listDirectory, cancelDirectoryLoads, getHomeDir, getFileInfo, getOpenWithOptions, setDefaultOpenWith, pickApplication, getAppIcon, getDirectorySignature, estimateDirsSizeFast, startDirSizeTask, getDirSizeTask, cancelDirSizeTask, previewCopyFileConflicts, previewMoveFileConflicts, startCopyFilesTask, startMoveFilesTask, listTransferTasks, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, duplicateAsAlias, calculateFileHash, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload } from '../api/filesystem';
+import { listDirectory, cancelDirectoryLoads, getHomeDir, getFileInfo, getOpenWithOptions, setDefaultOpenWith, pickApplication, getAppIcon, getDirectorySignature, estimateDirsSizeFast, startDirSizeTask, getDirSizeTask, cancelDirSizeTask, previewCopyFileConflicts, previewMoveFileConflicts, startCopyFilesTask, startMoveFilesTask, listTransferTasks, moveFile, moveFiles, renameFile, deleteToTrash, createFile, createFolder, compressFiles, decompressFile, duplicateAsAlias, calculateFileHash, setFileClipboard, getFileClipboard, clearFileClipboard, setFileDragPayload, getFileDragPayload, clearFileDragPayload, listRemoteDirectory } from '../api/filesystem';
 import type { DirectorySizeTaskSnapshot, DirectorySizeTaskStatus, FileHashResult, FileTransferPayload, MoveConflict, MoveConflictStrategy, OpenWithOption, TransferTaskSnapshot } from '../api/filesystem';
-import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction, OperationCategory, OperationEffect, OperationStatus } from '../types';
+import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, ContextMenuAction, OperationCategory, OperationEffect, OperationStatus, RemoteConnection } from '../types';
 import { QUICK_ACCESS } from '../constants';
 import AIRenamePanel from './AIRenamePanel';
 import OperationHistoryPanel from './OperationHistoryPanel';
@@ -45,7 +42,7 @@ import {
   resolveColumnPathsAfterFolderSelection,
 } from '../lib/column-navigation';
 import { resolveExplorerShortcut, resolveNextTypeaheadQuery, resolveTypeaheadTarget } from '../lib/keyboard-shortcuts';
-import { getParentPath, isVirtualPath } from '../lib/path-helpers';
+import { buildRemotePath, getParentPath, isRemotePath, isVirtualPath, parseRemotePath } from '../lib/path-helpers';
 import {
   NATIVE_MENU_COMMAND_EVENT,
   resolveNativeMenuDisplayMode,
@@ -54,6 +51,7 @@ import {
 import { getCachedAssetUrl } from '../lib/asset-url-cache';
 import { formatMediaDuration } from '../lib/media-metadata';
 import { saveOperationSession } from '../lib/operation-history';
+import { currentWindowLabel, safeCurrentWindow, safeEmit, safeEmitTo, safeInvoke, safeListen } from '../lib/tauri-runtime';
 
 const TAG_COLORS: Record<string, string> = {
   'tag-red': '#ff5f56',
@@ -152,8 +150,10 @@ const OPEN_WITH_SELECT_PLACEHOLDER = '__aether-open-with-placeholder__';
 const OPEN_WITH_SELECT_OTHER = '__aether-open-with-other__';
 const OPEN_WITH_APPS = ['Finder', 'Preview', 'TextEdit', 'Safari', 'Google Chrome', 'Visual Studio Code'];
 const PROTECTED_ROOT_APPROVALS_KEY = 'aether-protected-root-approvals';
+const REMOTE_DIRECTORY_UI_TIMEOUT_MS = 5000;
+const REMOTE_DIRECTORY_TIMEOUT_MESSAGE = '远程目录加载超时（5 秒）。请检查服务器地址、端口、账号凭据和网络。';
 const logDragDebug = (message: string) => {
-  invoke('debug_log', { message }).catch(() => {});
+  safeInvoke('debug_log', { message }).catch(() => {});
 };
 
 const formatAppError = (error: unknown) => normalizeAppError(error).userMessage;
@@ -339,6 +339,7 @@ interface ExplorerViewProps {
   isActive?: boolean;
   currentTabLabelKey?: string;
   initialPath?: string;
+  remoteConnections?: RemoteConnection[];
   theme: ThemeSettings;
   selectedFileIds: string[];
   onSelectFiles: (ids: string[]) => void;
@@ -359,7 +360,7 @@ interface ExplorerViewProps {
   onPathChange?: (tabId: string, path: string) => void;
 }
 
-export default function ExplorerView({ view, isActive = false, currentTabLabelKey, initialPath, theme, selectedFileIds, onSelectFiles, onSelectionCountChange, onStartTransfer, onOpenTab, onCreateWindow, favorites, onToggleFavorite, fileTags, onFileTagsChange, recentItems, onRecordRecent, onClearRecent, onThemeChange, onViewChange, onTitleChange, onPathChange }: ExplorerViewProps) {
+export default function ExplorerView({ view, isActive = false, currentTabLabelKey, initialPath, remoteConnections = [], theme, selectedFileIds, onSelectFiles, onSelectionCountChange, onStartTransfer, onOpenTab, onCreateWindow, favorites, onToggleFavorite, fileTags, onFileTagsChange, recentItems, onRecordRecent, onClearRecent, onThemeChange, onViewChange, onTitleChange, onPathChange }: ExplorerViewProps) {
   const { t } = useTranslation();
   const liquidGlassEnabled = theme.enableLiquidGlass === true;
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, fileIds: string[], isBlank?: boolean, targetDir?: string } | null>(null);
@@ -470,7 +471,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const selectedFileIdsRef = useRef<string[]>(selectedFileIds);
   const dragOverFolderIdRef = useRef<string | null>(null);
   const internalDragRef = useRef<InternalDragState | null>(null);
-  const windowLabelRef = useRef(getCurrentWindow().label);
+  const windowLabelRef = useRef(currentWindowLabel());
   const directoryLoadScopes = useMemo(() => {
     const prefix = `${windowLabelRef.current}:${view}`;
     return {
@@ -611,6 +612,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (preferredPath && !isVirtualPath(preferredPath)) return preferredPath;
     return activeDirectoryPath;
   }, [activeDirectoryPath]);
+
+  const isLocalFilesystemPath = useCallback((path?: string | null) => (
+    Boolean(path) && !isVirtualPath(path) && !isRemotePath(path)
+  ), []);
 
   const confirmLargeBatchOperation = useCallback(async (count: number) => {
     if (count <= LARGE_BATCH_OPERATION_THRESHOLD) return true;
@@ -834,7 +839,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       activeTransferRef.current = null;
       clearAppFileDragActive();
       void clearFileDragPayload();
-      void emit(FILE_DRAG_END_EVENT);
+      void safeEmit(FILE_DRAG_END_EVENT);
     };
     if (delayMs > 0) {
       fileDragClearTimerRef.current = window.setTimeout(finish, delayMs);
@@ -845,7 +850,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   finishSharedFileDragRef.current = finishSharedFileDrag;
 
   const focusCurrentWindow = async () => {
-    const currentWindow = getCurrentWindow();
+    const currentWindow = safeCurrentWindow();
     try {
       await currentWindow.show();
       await currentWindow.unminimize();
@@ -863,14 +868,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   // 请求 Rust 端把光标下的非源窗口 raise。50ms 节流避免轰炸。
   const startCursorRaiseTracking = () => {
     if (dragCursorHandlerRef.current) return;
-    const sourceLabel = getCurrentWindow().label;
+    const sourceLabel = currentWindowLabel();
     const handler = (e: DragEvent) => {
       const now = Date.now();
       if (now - lastRaiseAtRef.current < 50) return;
       // screenX/Y 在 drag 期间 0,0 是 Webkit 旧 bug，在 Tauri/wkwebview 上 Safari 17+ 已修
       if (e.screenX === 0 && e.screenY === 0) return;
       lastRaiseAtRef.current = now;
-      invoke<string | null>('raise_window_at', {
+      safeInvoke<string | null>('raise_window_at', {
         screenX: e.screenX,
         screenY: e.screenY,
         exceptWindow: sourceLabel,
@@ -898,7 +903,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const writeDragPayload = (file: FileItem) => {
     const paths = getTransferPathsForFile(file);
-    const sourceWindow = getCurrentWindow().label;
+    if (paths.some(isRemotePath)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return [];
+    }
+    const sourceWindow = currentWindowLabel();
     const transferId = `xfer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const previewName = paths.length === 1 ? file.name : `${file.name} 等 ${paths.length} 项`;
     localFileDropHandledRef.current = false;
@@ -914,7 +923,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       previewName,
       count: paths.length,
     })
-      .then(() => emit(FILE_DRAG_START_EVENT, {
+      .then(() => safeEmit(FILE_DRAG_START_EVENT, {
         paths,
         sourceWindow,
         transferId,
@@ -955,6 +964,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleCopyToClipboard = async (items = selectedFiles) => {
     if (items.length === 0) return;
+    if (items.some(item => isRemotePath(item.path))) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     await setFileClipboard(items.map(f => f.path), false);
     setHasFileClipboard(true);
     showFeedback(t('messages.copied', { count: items.length }));
@@ -964,6 +978,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleCutToClipboard = async (items = selectedFiles) => {
     if (items.length === 0) return;
+    if (items.some(item => isRemotePath(item.path))) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     await setFileClipboard(items.map(f => f.path), true);
     setHasFileClipboard(true);
     showFeedback(t('messages.cut', { count: items.length }));
@@ -978,7 +997,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       showFeedback(t('messages.clipboardEmpty'));
       return;
     }
+    if (paths.some(isRemotePath)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return;
+    }
     const targetDir = getActionDirectory(targetPath || contextMenu?.targetDir);
+    if (isRemotePath(targetDir)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return;
+    }
     if (!targetDir) {
       showFeedback(t('messages.crossWindowNoTarget', { defaultValue: '当前没有可作为目标的真实目录' }));
       return;
@@ -1058,6 +1085,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const isRecentRoot = currentPath === RECENT_VIRTUAL_PATH;
   const isTagRoot = currentPath.startsWith(TAGS_VIRTUAL_PREFIX);
   const isVirtualRoot = isFavoritesRoot || isRecentRoot || isTagRoot;
+  const remotePathParts = useMemo(() => parseRemotePath(currentPath), [currentPath]);
+  const isRemoteRoot = Boolean(remotePathParts);
+  const remoteConnectionDisplayName = remotePathParts
+    ? remoteConnections.find(connection => connection.id === remotePathParts.connectionId)?.name || remotePathParts.connectionId
+    : '';
+  const loadingRemoteConnectionName = remoteConnectionDisplayName;
   const virtualRootLabel = isFavoritesRoot
     ? t('sidebar.favoritesList', '我的收藏')
     : isRecentRoot
@@ -1233,10 +1266,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   useEffect(() => {
-    const startListener = listen<FileTransferPayload>(FILE_DRAG_START_EVENT, (event) => {
+    const startListener = safeListen<FileTransferPayload>(FILE_DRAG_START_EVENT, (event) => {
       if (event.payload?.paths.length) markAppFileDragActive();
     });
-    const endListener = listen(FILE_DRAG_END_EVENT, () => {
+    const endListener = safeListen(FILE_DRAG_END_EVENT, () => {
       clearAppFileDragActive();
     });
 
@@ -1287,6 +1320,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   navigateToPathRef.current = navigateToPath;
   const currentPathRef = useRef(currentPath);
   currentPathRef.current = currentPath;
+  const remotePathPartsRef = useRef(remotePathParts);
+  remotePathPartsRef.current = remotePathParts;
 
   const restoreHistoryPath = useCallback((path: string) => {
     setCurrentPath(path);
@@ -1381,6 +1416,51 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   useEffect(() => {
     let cancelled = false;
     if (!currentPath || isVirtualRoot) return;
+    if (remotePathParts) {
+      const requestId = ++loadRequestSeqRef.current;
+      let timedOut = false;
+      setLoading(true);
+      setLoadError('');
+      setDirectoryErrorKind(null);
+      const timeoutId = window.setTimeout(() => {
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
+        timedOut = true;
+        setFiles([]);
+        setLoadError(REMOTE_DIRECTORY_TIMEOUT_MESSAGE);
+        setDirectoryErrorKind('generic');
+        setLoading(false);
+      }, REMOTE_DIRECTORY_UI_TIMEOUT_MS);
+      listRemoteDirectory({
+        connectionId: remotePathParts.connectionId,
+        remotePath: remotePathParts.remotePath,
+        showHidden: Boolean(theme.showHiddenFiles),
+      })
+      .then(f => {
+        if (timedOut || cancelled || requestId !== loadRequestSeqRef.current) return;
+        window.clearTimeout(timeoutId);
+        setFiles(f);
+        setLoadError('');
+        setDirectoryErrorKind(null);
+        setLoading(false);
+      })
+        .catch(err => {
+          if (timedOut || cancelled || requestId !== loadRequestSeqRef.current) return;
+          window.clearTimeout(timeoutId);
+          const appError = normalizeAppError(err);
+          setFiles([]);
+          setLoadError(appError.userMessage);
+          setDirectoryErrorKind(classifyDirectoryError(appError));
+          setLoading(false);
+        })
+        .finally(() => {
+          window.clearTimeout(timeoutId);
+          if (!cancelled && requestId === loadRequestSeqRef.current) setLoading(false);
+        });
+      return () => {
+        cancelled = true;
+        window.clearTimeout(timeoutId);
+      };
+    }
     if (isProtectedPathBlocked) {
       setFiles([]);
       setLoading(false);
@@ -1426,6 +1506,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     currentPath,
     theme.showHiddenFiles,
     isVirtualRoot,
+    remotePathParts,
     needsProtectedPathConsent,
     isProtectedPathBlocked,
     protectedRoot,
@@ -1609,6 +1690,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   }, [view, onSelectFiles, resetColumnState]);
   
   const displayedFiles = isFavoritesRoot ? favoriteFiles : isRecentRoot ? recentFiles : isTagRoot ? taggedFiles : files;
+  const hasDisplayableFiles = displayedFiles.length > 0;
+  const showBlockingLoading = loading && (!isRemoteRoot || !hasDisplayableFiles);
   const folderSizeEstimateEnabled = theme.showFolderSizeInList !== false;
 
   const filesWithFolderSizeEstimates = useMemo(() => {
@@ -1638,14 +1721,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   useEffect(() => {
     if (!folderSizeEstimateEnabled || displayMode !== 'list' || displayedFiles.length === 0) return;
-    if (isVirtualRoot) return;
+    if (isVirtualRoot || isRemoteRoot) return;
 
     const now = Date.now();
     const pending = pendingFolderEstimatePathsRef.current;
 
     for (const file of displayedFiles) {
       if (file.type !== 'folder') continue;
-      if (!file.path || isVirtualPath(file.path)) continue;
+      if (!isLocalFilesystemPath(file.path)) continue;
       if (pending.has(file.path)) continue;
       const cached = folderSizeEstimateMetaRef.current.get(file.path);
       if (cached && now - cached.ts < FOLDER_SIZE_ESTIMATE_CACHE_TTL_MS) continue;
@@ -1693,7 +1776,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     };
 
     folderSizeEstimateTimerRef.current = window.setTimeout(flushEstimates, FOLDER_SIZE_ESTIMATE_DEBOUNCE_MS);
-  }, [displayMode, displayedFiles, folderSizeEstimateEnabled, isVirtualRoot]);
+  }, [displayMode, displayedFiles, folderSizeEstimateEnabled, isLocalFilesystemPath, isRemoteRoot, isVirtualRoot]);
 
   useEffect(() => {
     if (folderSizeEstimateEnabled) return;
@@ -1845,9 +1928,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
     };
 
-    listen<FileDragBroadcastPayload>(FILE_DRAG_START_EVENT, ({ payload }) => {
+    safeListen<FileDragBroadcastPayload>(FILE_DRAG_START_EVENT, ({ payload }) => {
       if (cancelled) return;
-      if (payload.sourceWindow === getCurrentWindow().label) return;
+      if (payload.sourceWindow === currentWindowLabel()) return;
       if (!payload.paths || payload.paths.length === 0) return;
       clearIncomingTimer();
       setIncomingFileDrag({
@@ -1869,7 +1952,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     // 源端 dragEnd 只是“这次拖拽已经结束”的信号。
     // 真正命中本窗口时，accept 逻辑会立刻清掉 banner；
     // 没命中或事件丢失时，这里做一个短延迟兜底，避免提示挂到超时。
-    listen(FILE_DRAG_END_EVENT, () => {
+    safeListen(FILE_DRAG_END_EVENT, () => {
       if (cancelled) return;
 
       const current = incomingFileDragRef.current;
@@ -1887,11 +1970,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     // ⭐ 关键：松手即处理 — 收到源端 dragEnd 携带的屏幕坐标，
     // 若坐标落在本窗口范围内，立即执行 copy/move，无需用户点 banner。
-    listen<FileDragEndAtPayload>(FILE_DRAG_END_AT_EVENT, async ({ payload }) => {
+    safeListen<FileDragEndAtPayload>(FILE_DRAG_END_AT_EVENT, async ({ payload }) => {
       if (cancelled) return;
-      if (payload.sourceWindow === getCurrentWindow().label) return;
+      if (payload.sourceWindow === currentWindowLabel()) return;
 
-      const win = getCurrentWindow();
+      const win = safeCurrentWindow();
       try {
         const [pos, size, factor] = await Promise.all([
           win.outerPosition(),
@@ -1935,7 +2018,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
     }).then(fn => unlistens.push(fn)).catch(() => {});
 
-    listen<FileDropAcceptedPayload>(FILE_DROP_ACCEPTED_EVENT, ({ payload }) => {
+    safeListen<FileDropAcceptedPayload>(FILE_DROP_ACCEPTED_EVENT, ({ payload }) => {
       if (cancelled) return;
       const active = activeTransferRef.current;
       if (!active || active.transferId !== payload.transferId) return;
@@ -1970,7 +2053,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
     }).then(fn => unlistens.push(fn)).catch(() => {});
 
-    listen<FileDropStartedPayload>(FILE_DROP_STARTED_EVENT, ({ payload }) => {
+    safeListen<FileDropStartedPayload>(FILE_DROP_STARTED_EVENT, ({ payload }) => {
       if (cancelled) return;
       const active = activeTransferRef.current;
       if (!active || active.transferId !== payload.transferId) return;
@@ -2008,7 +2091,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       let acceptedOp: FileDropAcceptedPayload['op'] = op;
       let moved = 0;
       let copiedCrossDevice = 0;
-      const notifyStarted = () => emitTo(drag.sourceWindow, FILE_DROP_STARTED_EVENT, {
+      const notifyStarted = () => safeEmitTo(drag.sourceWindow, FILE_DROP_STARTED_EVENT, {
         transferId: drag.transferId,
       } satisfies FileDropStartedPayload);
       await notifyStarted();
@@ -2027,11 +2110,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         if (!task) return;
         copiedCrossDevice = task.copiedCrossDevice;
       }
-      await emitTo(drag.sourceWindow, FILE_DROP_ACCEPTED_EVENT, {
+      await safeEmitTo(drag.sourceWindow, FILE_DROP_ACCEPTED_EVENT, {
         transferId: drag.transferId,
         paths: drag.paths,
         op: acceptedOp,
-        targetWindow: getCurrentWindow().label,
+        targetWindow: currentWindowLabel(),
         moved,
         copiedCrossDevice,
       } satisfies FileDropAcceptedPayload);
@@ -2050,6 +2133,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (cleanPaths.length === 0) return false;
 
     const targetDir = getActionDirectory(targetPath);
+    if (isRemotePath(targetDir)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return false;
+    }
     if (!targetDir) {
       showFeedback(t('messages.crossWindowNoTarget', {
         defaultValue: '当前没有可作为目标的真实目录',
@@ -2193,6 +2280,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     paths: string[],
     targetFolder: FileItem,
   ): Promise<TransferTaskSnapshot | null> {
+    if (paths.some(isRemotePath) || isRemotePath(targetFolder.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return null;
+    }
     const conflicts = await previewCopyFileConflicts(paths, targetFolder.path);
     if (conflicts.length > 0) {
       setMoveConflictDialog({
@@ -2215,6 +2306,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     paths: string[],
     targetFolder: FileItem,
   ): Promise<TransferTaskSnapshot | null> {
+    if (paths.some(isRemotePath) || isRemotePath(targetFolder.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return null;
+    }
     const conflicts = await previewMoveFileConflicts(paths, targetFolder.path);
     if (conflicts.length > 0) {
       setMoveConflictDialog({
@@ -2279,6 +2374,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     conflictStrategy: MoveConflictStrategy,
     options: FileOperationOptions = {},
   ) => {
+    if (filesToMove.some(file => isRemotePath(file.path)) || isRemotePath(targetFolder.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return false;
+    }
     if (!options.skipLargeBatchConfirm) {
       const shouldContinue = await confirmLargeBatchOperation(filesToMove.length);
       if (!shouldContinue) return false;
@@ -2388,19 +2487,19 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     const unlistens: Array<() => void> = [];
     let cancelled = false;
 
-    listen<TauriDragDropPayload>(TAURI_DRAG_ENTER_EVENT, ({ payload }) => {
+    safeListen<TauriDragDropPayload>(TAURI_DRAG_ENTER_EVENT, ({ payload }) => {
       if (cancelled) return;
       // 仅当包含真实路径时才认为是 Finder 类系统拖入
       if (!Array.isArray(payload?.paths) || payload.paths.length === 0) return;
       setIsReceivingExternalDrag(true);
     }).then(fn => unlistens.push(fn)).catch(() => {});
 
-    listen(TAURI_DRAG_LEAVE_EVENT, () => {
+    safeListen(TAURI_DRAG_LEAVE_EVENT, () => {
       if (cancelled) return;
       setIsReceivingExternalDrag(false);
     }).then(fn => unlistens.push(fn)).catch(() => {});
 
-    listen<TauriDragDropPayload>(TAURI_DRAG_DROP_EVENT, async ({ payload }) => {
+    safeListen<TauriDragDropPayload>(TAURI_DRAG_DROP_EVENT, async ({ payload }) => {
       if (cancelled) return;
       setIsReceivingExternalDrag(false);
       const paths = Array.isArray(payload?.paths) ? payload.paths.filter(Boolean) : [];
@@ -2410,6 +2509,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       // 系统拖入和 HTML5 拖入可能同时触发；用 surface 元素 onDrop 也会收到 e.dataTransfer.files。
       // 这里只处理"webview onDrop 没拿到"的兜底场景：检查 paths 是否已被处理过。
       if (recentExternalDropRef.current.has(paths[0])) return;
+      if (isRemotePath(targetDir)) {
+        showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+        return;
+      }
       recentExternalDropRef.current.add(paths[0]);
       window.setTimeout(() => recentExternalDropRef.current.delete(paths[0]), 1500);
 
@@ -2420,7 +2523,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       cancelled = true;
       unlistens.forEach(fn => fn());
     };
-  }, [getActionDirectory, isActive]);
+  }, [getActionDirectory, isActive, showFeedback, t]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -2499,10 +2602,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       onTitleChange(view, virtualRootLabel);
       return;
     }
+    if (remotePathParts) {
+      const leaf = remotePathParts.remotePath.split('/').filter(Boolean).pop();
+      const title = leaf || remoteConnectionDisplayName || (currentTabLabelKey ? t(currentTabLabelKey) : 'Remote');
+      onTitleChange(view, title);
+      return;
+    }
     const leaf = currentPath.split('/').filter(Boolean).pop();
     const title = leaf || (currentPath === '/' ? '/' : currentTabLabelKey ? t(currentTabLabelKey) : t('explorer.localStorage', '本地存储'));
     onTitleChange(view, title);
-  }, [isActive, currentPath, currentTabLabelKey, view, t, onTitleChange, isVirtualRoot, virtualRootLabel]);
+  }, [isActive, currentPath, currentTabLabelKey, view, t, onTitleChange, isVirtualRoot, virtualRootLabel, remotePathParts, remoteConnectionDisplayName]);
 
   useEffect(() => {
     if (!currentPath || !onPathChange) return;
@@ -2527,6 +2636,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       e.preventDefault();
 
       if (action === 'aiRename') {
+        if (isRemoteRoot || selectedFiles.some(file => isRemotePath(file.path))) {
+          showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+          return;
+        }
         setShowAIRename(true);
       } else if (action === 'selectAll') {
         onSelectFiles(currentLevelFiles.map(f => f.id));
@@ -2589,7 +2702,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isActive, currentLevelFiles, onSelectFiles, selectedFiles, lastSelectedFile, theme, typeaheadQuery, displayMode, currentPath, navigateBack, navigateForward, getActionDirectory]);
+  }, [isActive, currentLevelFiles, onSelectFiles, selectedFiles, lastSelectedFile, theme, typeaheadQuery, displayMode, currentPath, navigateBack, navigateForward, getActionDirectory, isRemoteRoot, showFeedback, t]);
 
   useEffect(() => () => {
     if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
@@ -2660,6 +2773,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
     if (displayMode === 'column') {
       if (file.type === 'folder') {
+        if (isRemotePath(file.path)) {
+          navigateToPath(file.path);
+          return;
+        }
         setColumnPaths(paths => resolveColumnPathsAfterFolderSelection(paths, file.path, sourceColumnIndex));
       } else {
         setColumnPaths(paths => resolveColumnPathsAfterFileSelection(paths, file.path, sourceColumnIndex));
@@ -2740,6 +2857,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, input, textarea, select, [data-no-drag]')) return;
+    if (isRemotePath(file.path)) return;
 
     internalDragRef.current = {
       id: file.id,
@@ -2827,6 +2945,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
       e.preventDefault();
       localFileDropHandledRef.current = true;
+      if (payload.paths.some(isRemotePath) || isRemotePath(targetDir)) {
+        showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+        return;
+      }
       await executeMoveFiles(makeFileItemsFromPaths(payload.paths), makeFolderItemFromPath(targetDir), 'abort', {
         clearDragPayloadOnSuccess: true,
         useTransferTask: true,
@@ -2848,6 +2970,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       logDragDebug(`moveAbort reason=target-not-folder targetExists=${Boolean(targetFolder)} targetType=${targetFolder?.type ?? ''}`);
       return;
     }
+    if (isRemotePath(targetFolder.path)) {
+      logDragDebug('moveAbort reason=remote-target');
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return;
+    }
 
     const idsToMove = selectedFileIds.includes(draggedFileId) ? selectedFileIds : [draggedFileId];
     const filesToMove = idsToMove
@@ -2856,6 +2983,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     logDragDebug(`moveResolve targetPath=${targetFolder.path} ids=${idsToMove.join('|')} files=${filesToMove.map(file => file.path).join('|')}`);
     if (filesToMove.length === 0) {
       logDragDebug('moveAbort reason=no-files-to-move');
+      return;
+    }
+    if (filesToMove.some(file => isRemotePath(file.path))) {
+      logDragDebug('moveAbort reason=remote-source');
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
       return;
     }
 
@@ -2886,6 +3018,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       skipped: 0,
     };
     try {
+      if (filesToMove.some(file => isRemotePath(file.path)) || isRemotePath(targetFolder.path)) {
+        showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+        return emptySummary;
+      }
       if (!options.skipLargeBatchConfirm) {
         const shouldContinue = await confirmLargeBatchOperation(filesToMove.length);
         if (!shouldContinue) return emptySummary;
@@ -2973,6 +3109,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     options: FileOperationOptions = {},
   ) => {
     try {
+      if (filesToCopy.some(file => isRemotePath(file.path)) || isRemotePath(targetFolder.path)) {
+        showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+        return false;
+      }
       if (!options.skipLargeBatchConfirm) {
         const shouldContinue = await confirmLargeBatchOperation(filesToCopy.length);
         if (!shouldContinue) return false;
@@ -3063,11 +3203,20 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleDragStart = (e: React.DragEvent, file: FileItem) => {
+    if (isRemotePath(file.path)) {
+      e.preventDefault();
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return;
+    }
     nativeFileDragActiveRef.current = true;
     internalDragRef.current = null;
     draggedFileIdRef.current = file.id;
     localFileDropHandledRef.current = false;
     const paths = writeDragPayload(file);
+    if (paths.length === 0) {
+      e.preventDefault();
+      return;
+    }
     const payload: FileTransferPayload = { paths, cut: true };
     const serialized = JSON.stringify(payload);
     e.dataTransfer.setData(INTERNAL_FILE_DRAG_MIME, serialized);
@@ -3136,14 +3285,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     if (active && !localDropHandled) {
-      void emit(FILE_DRAG_END_AT_EVENT, {
+      void safeEmit(FILE_DRAG_END_AT_EVENT, {
         transferId: active.transferId,
         screenX: e.screenX,
         screenY: e.screenY,
         metaKey: e.metaKey,
         altKey: e.altKey,
         shiftKey: e.shiftKey,
-        sourceWindow: getCurrentWindow().label,
+        sourceWindow: currentWindowLabel(),
       } satisfies FileDragEndAtPayload);
     }
 
@@ -3192,7 +3341,17 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       finishSharedFileDrag();
       return;
     }
+    if (isRemotePath(targetFolder.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      finishSharedFileDrag();
+      return;
+    }
     if (payload?.paths.length) {
+      if (payload.paths.some(isRemotePath)) {
+        showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+        finishSharedFileDrag();
+        return;
+      }
       await executeMoveFiles(makeFileItemsFromPaths(payload.paths), targetFolder, 'abort', {
         clearDragPayloadOnSuccess: true,
         useTransferTask: true,
@@ -3225,7 +3384,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setPulseFileId(file.id);
     if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
     pulseTimerRef.current = window.setTimeout(() => setPulseFileId(null), 260);
-    if (file.type === 'folder' && displayMode !== 'column') {
+    if ((file.type === 'folder' || file.type === 'remote-unknown') && isRemotePath(file.path)) {
+      navigateToPath(file.path);
+    } else if (file.type === 'folder' && displayMode !== 'column') {
       navigateToPath(file.path);
     } else if (file.type !== 'folder') {
       handleOpenFile(file);
@@ -3270,6 +3431,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       case 'archive': return t('explorer.archive', '压缩包');
       case 'code': return t('explorer.code', '代码');
       case 'text': return t('explorer.text', '文本');
+      case 'remote-unknown': return t('explorer.remoteItem', '远程项目');
       default: return t('explorer.file', '文件');
     }
   }, [t]);
@@ -3362,7 +3524,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable={renamingFile?.id !== file.id}
+          draggable={renamingFile?.id !== file.id && !isRemotePath(file.path)}
           onMouseDown={(e) => { if (renamingFile?.id === file.id) return; handleFileMouseDown(e, file); }}
           onDragStart={(e) => { if (renamingFile?.id === file.id) { e.preventDefault(); return; } handleDragStart(e, file); }}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
@@ -3456,7 +3618,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable={renamingFile?.id !== file.id}
+          draggable={renamingFile?.id !== file.id && !isRemotePath(file.path)}
           onMouseDown={(e) => { if (renamingFile?.id === file.id) return; handleFileMouseDown(e, file); }}
           onDragStart={(e) => { if (renamingFile?.id === file.id) { e.preventDefault(); return; } handleDragStart(e, file); }}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
@@ -3512,7 +3674,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         <motion.div
           key={file.id}
           data-id={file.id}
-          draggable={renamingFile?.id !== file.id}
+          draggable={renamingFile?.id !== file.id && !isRemotePath(file.path)}
           onMouseDown={(e) => { if (renamingFile?.id === file.id) return; handleFileMouseDown(e, file); }}
           onDragStart={(e) => { if (renamingFile?.id === file.id) { e.preventDefault(); return; } handleDragStart(e, file); }}
           onDragOver={file.type === 'folder' ? (e) => handleDragOver(e, file.id) : undefined}
@@ -3618,7 +3780,42 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   findFileByIdRef.current = findFileById;
 
   const loadColumnFiles = useCallback((colPath: string) => {
-    if (!colPath || isVirtualPath(colPath)) return;
+    const remote = parseRemotePath(colPath);
+    if (remote) {
+      if (columnFilesCache[colPath]) return;
+      const generation = columnLoadGenerationRef.current;
+      if (pendingColumnLoadsRef.current.get(colPath) === generation) return;
+      pendingColumnLoadsRef.current.set(colPath, generation);
+      setColumnLoadErrors(prev => {
+        if (!prev[colPath]) return prev;
+        const next = { ...prev };
+        delete next[colPath];
+        return next;
+      });
+      listRemoteDirectory({
+        connectionId: remote.connectionId,
+        remotePath: remote.remotePath,
+        showHidden: Boolean(theme.showHiddenFiles),
+      }).then(entries => {
+        if (generation !== columnLoadGenerationRef.current) return;
+        setColumnFilesCache(prev => ({ ...prev, [colPath]: entries }));
+        setColumnLoadErrors(prev => {
+          if (!prev[colPath]) return prev;
+          const next = { ...prev };
+          delete next[colPath];
+          return next;
+        });
+      }).catch(err => {
+        if (generation !== columnLoadGenerationRef.current) return;
+        setColumnLoadErrors(prev => ({ ...prev, [colPath]: normalizeAppError(err).userMessage }));
+      }).finally(() => {
+        if (pendingColumnLoadsRef.current.get(colPath) === generation) {
+          pendingColumnLoadsRef.current.delete(colPath);
+        }
+      });
+      return;
+    }
+    if (!isLocalFilesystemPath(colPath)) return;
     if (columnFilesCache[colPath]) return;
     const generation = columnLoadGenerationRef.current;
     if (pendingColumnLoadsRef.current.get(colPath) === generation) return;
@@ -3651,7 +3848,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         pendingColumnLoadsRef.current.delete(colPath);
       }
     });
-  }, [columnFilesCache, directoryLoadScopes.column, theme.showHiddenFiles]);
+  }, [columnFilesCache, directoryLoadScopes.column, isLocalFilesystemPath, theme.showHiddenFiles]);
 
   useEffect(() => {
     if (displayMode !== 'column') return;
@@ -3771,10 +3968,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     let cancelled = false;
     setImagePreviewFailed(false);
     setPdfPreviewFailed(false);
-    setPdfPreviewLoading(Boolean(f && f.type === 'pdf'));
+    const isRemoteFile = Boolean(f && isRemotePath(f.path));
+    setPdfPreviewLoading(Boolean(f && f.type === 'pdf' && !isRemoteFile));
+    if (isRemoteFile) {
+      setTextPreview('');
+      setTextPreviewLoading(false);
+      return () => { cancelled = true; };
+    }
     if (f && (f.type === 'text' || f.type === 'code')) {
       setTextPreviewLoading(true);
-      invoke<string>('read_text_preview', { path: f.path })
+      safeInvoke<string>('read_text_preview', { path: f.path })
         .then(text => {
           if (!cancelled) setTextPreview(text);
         })
@@ -3793,8 +3996,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const pathSegments = useMemo(() => {
     if (!currentPath) return [];
+    if (remotePathParts) return remotePathParts.remotePath.split('/').filter(Boolean);
     return currentPath.split('/').filter(Boolean);
-  }, [currentPath]);
+  }, [currentPath, remotePathParts]);
 
   const breadcrumbSegments = useMemo(() => {
     const homeName = homeDir?.split('/').filter(Boolean).pop();
@@ -3802,13 +4006,17 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       .map((segment, index) => ({
         segment,
         index,
-        path: `/${pathSegments.slice(0, index + 1).join('/')}`,
+        path: remotePathParts
+          ? buildRemotePath(remotePathParts.connectionId, `/${pathSegments.slice(0, index + 1).join('/')}`)
+          : `/${pathSegments.slice(0, index + 1).join('/')}`,
       }))
       .filter(item => item.segment !== 'Users' && item.segment !== homeName);
-  }, [homeDir, pathSegments]);
+  }, [homeDir, pathSegments, remotePathParts]);
 
   const currentDisplayTitle = isVirtualRoot
     ? virtualRootLabel
+    : remotePathParts
+      ? (pathSegments[pathSegments.length - 1] || remoteConnectionDisplayName || 'Remote')
     : pathSegments.length > 0
       ? pathSegments[pathSegments.length - 1]
       : t('tabs.downloads', 'Downloads');
@@ -3832,7 +4040,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     targetDir?: string,
   ) => {
     await focusCurrentWindow();
-    const currentWindow = getCurrentWindow();
+    const currentWindow = safeCurrentWindow() as never;
     const primary = targetFiles[0] ?? null;
     const items: Array<
       | Awaited<ReturnType<typeof MenuItem.new>>
@@ -3845,6 +4053,19 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     };
 
     if (isBlank || !primary) {
+      if (isRemoteRoot) {
+        items.push(await MenuItem.new({
+          text: t('explorer.refresh', '刷新'),
+          action: () => { void refreshCurrentDir(true); },
+        }));
+        items.push(await MenuItem.new({
+          text: t('explorer.getInfo', '查看简介'),
+          action: () => { void handleShowInspector(true); },
+        }));
+        const menu = await Menu.new({ items });
+        await menu.popup(theme.useSystemContextMenu ? undefined : (position ? new PhysicalPosition(position.x, position.y) : undefined), currentWindow);
+        return;
+      }
       // 第1分组: 新建文件夹 + 新建文件
       items.push(await MenuItem.new({
         text: t('explorer.newFolder', '新建文件夹'),
@@ -3890,13 +4111,41 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       await addSeparator();
       items.push(await MenuItem.new({
         text: t('explorer.aiAssistant', 'AI 文件助手'),
-        action: () => { setShowAIRename(true); },
+        action: () => {
+          if (isRemoteRoot) {
+            showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+            return;
+          }
+          setShowAIRename(true);
+        },
       }));
       items.push(await MenuItem.new({
         text: t('explorer.aiHistory', '操作历史'),
         action: () => { setShowOperationHistory(true); },
       }));
     } else {
+      const primaryIsRemote = isRemotePath(primary.path);
+      if (primaryIsRemote) {
+        items.push(await MenuItem.new({
+          text: t('explorer.open', '打开'),
+          action: () => { void handleOpenFile(primary); },
+        }));
+        items.push(await MenuItem.new({
+          text: t('explorer.getInfo', '查看简介'),
+          action: () => { void handleShowInspector(); },
+        }));
+        items.push(await MenuItem.new({
+          text: t('explorer.copyName', '复制文件名'),
+          action: () => { void handleCopyNames(getActionFiles(primary)); },
+        }));
+        items.push(await MenuItem.new({
+          text: t('explorer.copyPath', '复制路径'),
+          action: () => { void handleCopyPaths(getActionFiles(primary)); },
+        }));
+        const menu = await Menu.new({ items });
+        await menu.popup(theme.useSystemContextMenu ? undefined : (position ? new PhysicalPosition(position.x, position.y) : undefined), currentWindow);
+        return;
+      }
       // 第1分组: 打开 + 重命名
       items.push(await MenuItem.new({
         text: t('explorer.open', '打开'),
@@ -3921,7 +4170,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }));
       items.push(await MenuItem.new({
         text: t('explorer.aiAssistant', 'AI 文件助手'),
-        action: () => { setShowAIRename(true); },
+        action: () => {
+          if (getActionFiles(primary).some(file => isRemotePath(file.path))) {
+            showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+            return;
+          }
+          setShowAIRename(true);
+        },
       }));
       await addSeparator();
       // 第2分组: 复制 + 剪切 + 创建副本
@@ -4049,9 +4304,28 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const refreshCurrentDir = useCallback(async (fullRefresh = false, targetPath?: string) => {
-    const refreshPath = targetPath && !isVirtualPath(targetPath) ? targetPath : '';
+    const refreshPath = targetPath && (isLocalFilesystemPath(targetPath) || isRemotePath(targetPath)) ? targetPath : '';
     const refreshColumnPath = Boolean(refreshPath && refreshPath !== currentPath);
     const requestId = refreshColumnPath ? 0 : ++loadRequestSeqRef.current;
+    let remoteRefreshTimedOut = false;
+    let remoteRefreshTimeoutId: number | undefined;
+    const armRemoteRefreshTimeout = () => {
+      if (!fullRefresh || refreshColumnPath || !remotePathPartsRef.current) return;
+      remoteRefreshTimeoutId = window.setTimeout(() => {
+        if (requestId !== loadRequestSeqRef.current) return;
+        remoteRefreshTimedOut = true;
+        setFiles([]);
+        setLoadError(REMOTE_DIRECTORY_TIMEOUT_MESSAGE);
+        setDirectoryErrorKind('generic');
+        setLoading(false);
+      }, REMOTE_DIRECTORY_UI_TIMEOUT_MS);
+    };
+    const clearRemoteRefreshTimeout = () => {
+      if (remoteRefreshTimeoutId !== undefined) {
+        window.clearTimeout(remoteRefreshTimeoutId);
+        remoteRefreshTimeoutId = undefined;
+      }
+    };
     if (protectedRoot) {
       setBlockedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
       setApprovedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
@@ -4059,14 +4333,22 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (fullRefresh && !refreshColumnPath) {
       setLoading(true);
       resetTabTransientState();
+      armRemoteRefreshTimeout();
     }
     try {
       if (refreshColumnPath) {
         const generation = columnLoadGenerationRef.current;
-        const entries = await listDirectory(refreshPath, theme.showHiddenFiles, {
-          requestScope: directoryLoadScopes.column,
-          requestId: generation,
-        });
+        const remote = parseRemotePath(refreshPath);
+        const entries = remote
+          ? await listRemoteDirectory({
+            connectionId: remote.connectionId,
+            remotePath: remote.remotePath,
+            showHidden: Boolean(theme.showHiddenFiles),
+          })
+          : await listDirectory(refreshPath, theme.showHiddenFiles, {
+            requestScope: directoryLoadScopes.column,
+            requestId: generation,
+          });
         if (generation !== columnLoadGenerationRef.current) return [] as FileItem[];
         setColumnFilesCache(prev => ({ ...prev, [refreshPath]: entries }));
         if (fullRefresh) showFeedback(t('messages.refreshed'));
@@ -4102,6 +4384,25 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }
         return entries;
       }
+      if (remotePathPartsRef.current) {
+        const remote = remotePathPartsRef.current;
+        const entries = await listRemoteDirectory({
+          connectionId: remote.connectionId,
+          remotePath: remote.remotePath,
+          showHidden: Boolean(theme.showHiddenFiles),
+        });
+        if (remoteRefreshTimedOut) return [] as FileItem[];
+        clearRemoteRefreshTimeout();
+        if (requestId !== loadRequestSeqRef.current) return [] as FileItem[];
+        setFiles(entries);
+        setLoadError('');
+        setDirectoryErrorKind(null);
+        setLoading(false);
+        if (fullRefresh) {
+          showFeedback(t('messages.refreshed'));
+        }
+        return entries;
+      }
       const entries = await listDirectory(currentPath, theme.showHiddenFiles, {
         requestScope: directoryLoadScopes.main,
         requestId,
@@ -4114,6 +4415,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       }
       return entries;
     } catch (err) {
+      if (remoteRefreshTimedOut) return [] as FileItem[];
+      clearRemoteRefreshTimeout();
       if (fullRefresh && !refreshColumnPath) setLoading(false);
       const appError = normalizeAppError(err);
       if (appError.kind === 'Cancelled') return [] as FileItem[];
@@ -4128,6 +4431,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }
       }
       return [] as FileItem[];
+    } finally {
+      clearRemoteRefreshTimeout();
     }
   }, [
     baseView,
@@ -4139,6 +4444,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     isFavoritesRoot,
     isRecentRoot,
     isTagRoot,
+    isLocalFilesystemPath,
     protectedRoot,
     directoryLoadScopes.main,
     recentItems,
@@ -4159,7 +4465,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     if (!isActive) return;
     let unlisten: (() => void) | undefined;
 
-    listen<NativeMenuCommand>(NATIVE_MENU_COMMAND_EVENT, event => {
+    safeListen<NativeMenuCommand>(NATIVE_MENU_COMMAND_EVENT, event => {
       const command = event.payload;
       if (command === 'refresh') {
         void refreshCurrentDir(true);
@@ -4187,7 +4493,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   }, [isActive, onThemeChange, refreshCurrentDir, resetColumnState, theme]);
 
   useEffect(() => {
-    if (!shouldPollDirectorySignature(isActive, currentPath, isVirtualRoot)) return;
+    if (isRemoteRoot || !shouldPollDirectorySignature(isActive, currentPath, isVirtualRoot)) return;
     let cancelled = false;
     let lastSignature: string | null = null;
 
@@ -4212,14 +4518,16 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [currentPath, isActive, isVirtualRoot, refreshCurrentDir, theme.showHiddenFiles]);
+  }, [currentPath, isActive, isRemoteRoot, isVirtualRoot, refreshCurrentDir, theme.showHiddenFiles]);
 
   const handleOpenFile = (file: FileItem) => {
     onRecordRecent(file.path);
-    if (file.type === 'folder') {
+    if (file.type === 'folder' || (file.type === 'remote-unknown' && isRemotePath(file.path))) {
       navigateToPath(file.path);
+    } else if (isRemotePath(file.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
     } else {
-      invoke('open_path', { path: file.path }).catch(err => {
+      safeInvoke('open_path', { path: file.path }).catch(err => {
         showFeedback(t('messages.openFailed', {
           error: normalizeAppError(err).userMessage,
           defaultValue: '打开失败：{{error}}',
@@ -4233,8 +4541,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   handleOpenFileRef.current = handleOpenFile;
 
   const handleOpenWith = async (file: FileItem, appName: string) => {
+    if (isRemotePath(file.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return;
+    }
     try {
-      await invoke('open_with', { path: file.path, appName });
+      await safeInvoke('open_with', { path: file.path, appName });
       onRecordRecent(file.path);
     } catch (err) {
       showFeedback(t('messages.openWithFailed', { error: normalizeAppError(err).userMessage }));
@@ -4245,10 +4557,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleOpenWithOther = async (file: FileItem) => {
+    if (isRemotePath(file.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return;
+    }
     try {
       const selected = await pickApplication();
       if (!selected) return;
-      await invoke('open_with', { path: file.path, appName: selected });
+      await safeInvoke('open_with', { path: file.path, appName: selected });
       onRecordRecent(file.path);
     } catch (err) {
       showFeedback(t('messages.openWithFailed', { error: normalizeAppError(err).userMessage }));
@@ -4299,8 +4615,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleQuickLook = async (file = lastSelectedFile) => {
     if (!file) return;
+    if (isRemotePath(file.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      return;
+    }
     try {
-      await invoke('quick_look', { path: file.path });
+      await safeInvoke('quick_look', { path: file.path });
     } catch (err) {
       showFeedback(t('messages.quickLookFailed', { error: normalizeAppError(err).userMessage }));
     }
@@ -4309,8 +4629,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleRevealInFinder = async (file = lastSelectedFile) => {
     if (!file) return;
+    if (isRemotePath(file.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     try {
-      await invoke('reveal_in_finder', { path: file.path });
+      await safeInvoke('reveal_in_finder', { path: file.path });
     } catch (err) {
       showFeedback(t('messages.finderFailed', { error: normalizeAppError(err).userMessage }));
     }
@@ -4321,10 +4646,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     const target = file || lastSelectedFile;
     const path = target?.path || currentPath || homeDir;
     if (!path) return;
+    if (isRemotePath(path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     try {
       // 合并启动脚本：terminalScripts 优先，否则用 terminalArgs
       const scriptLines = (theme.terminalScripts || []).filter(s => s.enabled && s.script.trim()).map(s => s.script.trim());
-      await invoke('open_terminal_at', {
+      await safeInvoke('open_terminal_at', {
         path,
         terminalApp: theme.terminalApp || 'Terminal',
         args: theme.terminalArgs || '',
@@ -4366,6 +4696,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleCalculateHash = async (file: FileItem) => {
     const target = getActionFiles(file)[0] || file;
+    if (isRemotePath(target.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     if (target.type === 'folder') {
       showFeedback(t('messages.hashFolderUnsupported', { defaultValue: '文件夹暂不支持计算哈希值' }));
       setContextMenu(null);
@@ -4405,6 +4740,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleRenameStart = (file: FileItem) => {
+    if (isRemotePath(file.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     setRenamingFile(file);
     setRenameInput(file.name);
     setContextMenu(null);
@@ -4416,6 +4756,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return;
     }
     const file = renamingFile;
+    if (isRemotePath(file.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setRenamingFile(null);
+      return;
+    }
     const nextName = renameInput.trim();
     try {
       const renamedPath = await renameFile(file.path, nextName);
@@ -4465,6 +4810,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleDeleteFile = async (file: FileItem) => {
     const targets = getActionFiles(file);
+    if (targets.some(item => isRemotePath(item.path))) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     const ok = await confirm(t('dialogs.moveToTrash', { count: targets.length }));
     if (ok) {
       const results = await Promise.allSettled(targets.map(item => deleteToTrash(item.path)));
@@ -4518,6 +4868,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setContextMenu(null);
     setActiveDropdown('copy-move');
     const targets = getActionFiles(file);
+    if (targets.some(item => isRemotePath(item.path))) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setActiveDropdown(null);
+      return;
+    }
     let targetDir: string | null = null;
     try {
       const selected = await openDialog({
@@ -4538,6 +4893,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleMoveFile = async (file: FileItem) => {
     const targets = getActionFiles(file);
+    if (targets.some(item => isRemotePath(item.path))) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     let targetDir: string | null = null;
     try {
       const selected = await openDialog({
@@ -4558,6 +4918,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleNewFile = async (targetPath?: string) => {
     setActiveDropdown(null);
+    if (isRemoteRoot || isRemotePath(targetPath || contextMenu?.targetDir || currentPath)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     const targetDir = getActionDirectory(targetPath || contextMenu?.targetDir);
     if (!targetDir) {
       showFeedback(t('messages.crossWindowNoTarget', {
@@ -4645,6 +5010,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   // 虚拟根目录（收藏 / 最近 / 标签）也支持作为首页。
   const handleSetCurrentAsHome = () => {
     if (!currentPath) return;
+    if (isRemoteRoot) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     onThemeChange({ ...theme, defaultHomePath: currentPath });
     showFeedback(t('messages.setAsHome', {
       defaultValue: '已将当前位置设为首页',
@@ -4654,6 +5024,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleNewFolder = async (targetPath?: string) => {
     setActiveDropdown(null);
+    if (isRemoteRoot || isRemotePath(targetPath || contextMenu?.targetDir || currentPath)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     const targetDir = getActionDirectory(targetPath || contextMenu?.targetDir);
     if (!targetDir) {
       showFeedback(t('messages.crossWindowNoTarget', {
@@ -4735,6 +5110,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
   const handleCompress = async (file: FileItem) => {
     const targets = getActionFiles(file);
+    if (isRemoteRoot || targets.some(item => isRemotePath(item.path))) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     const defaultName = targets.length === 1 ? `${targets[0].name}.zip` : `Aether Selection ${new Date().toISOString().slice(0, 10)}.zip`;
     let output = `${currentPath}/${defaultName}`;
     const exists = files.some(f => f.name === defaultName);
@@ -4793,6 +5173,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleDecompress = async (file: FileItem) => {
+    if (isRemoteRoot || isRemotePath(file.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     const baseName = file.name.replace(/\.[^.]+$/, '');
     let outputDir = `${currentPath}/${baseName}`;
     const exists = files.some(f => f.name === baseName && f.type === 'folder');
@@ -4821,6 +5206,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleAlias = async (file: FileItem) => {
+    if (isRemotePath(file.path)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     try {
       const copiedPath = await duplicateAsAlias(file.path);
       await recordManualOperationHistory({
@@ -4866,6 +5256,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleExtensionAction = async (id: string, file: FileItem) => {
+    if (isRemotePath(file.path) || isRemotePath(currentPath)) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setContextMenu(null);
+      return;
+    }
     const extension = (theme.contextMenuExtensions || []).find(ext => ext.id === id);
     if (!extension) {
       showFeedback(t('messages.extensionMissing', { id, defaultValue: `扩展「${id}」不存在或已被移除。` }));
@@ -4885,7 +5280,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }
       }
       if (actionType === 'terminal') {
-        await invoke('open_terminal_at', {
+        await safeInvoke('open_terminal_at', {
           path: workingPath,
           terminalApp: extension.terminalApp || theme.terminalApp || 'Terminal',
           args: interpolateFileActionTemplate(extension.terminalArgs || '', buildTemplateValues(file), 'shell'),
@@ -4897,7 +5292,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         if (!command) {
           showFeedback(t('messages.extensionCommandMissing', { label: extension.label, defaultValue: `扩展「${extension.label}」未配置命令。` }));
         } else {
-          await invoke('open_terminal_at', {
+          await safeInvoke('open_terminal_at', {
             path: workingPath,
             terminalApp: extension.terminalApp || theme.terminalApp || 'Terminal',
             args: '',
@@ -4922,6 +5317,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           }
         }
       } else if (actionType === 'ai-assistant') {
+        if (isRemotePath(file.path) || isRemotePath(currentPath)) {
+          showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+          setContextMenu(null);
+          return;
+        }
         setContextMenu(null);
         setShowAIRename(true);
         return;
@@ -4946,6 +5346,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   };
 
   const handleImportFiles = async () => {
+    if (isRemoteRoot) {
+      showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+      setActiveDropdown(null);
+      return;
+    }
     try {
       const selected = await openDialog({ multiple: true, directory: false });
       const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
@@ -5031,7 +5436,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     inspectorFile
     && inspectorFile.type !== 'folder'
     && inspectorFile.type !== 'application'
-    && !isVirtualPath(inspectorFile.path),
+    && isLocalFilesystemPath(inspectorFile.path),
   );
   const inspectorDefaultOpenWith = openWithOptions.find(option => option.isDefault) ?? null;
   const inspectorOpenWithValue = inspectorDefaultOpenWith?.path ?? OPEN_WITH_SELECT_PLACEHOLDER;
@@ -5058,7 +5463,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     : '';
 
   useEffect(() => {
-    if (!inspectorVisible || !inspectorSourceFile?.path || isVirtualPath(inspectorSourceFile.path)) {
+    if (!inspectorVisible || !inspectorSourceFile?.path || !isLocalFilesystemPath(inspectorSourceFile.path)) {
       setInspectorDetails(null);
       setInspectorDetailsLoading(false);
       return;
@@ -5083,10 +5488,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     return () => {
       disposed = true;
     };
-  }, [inspectorSourceFile, inspectorVisible]);
+  }, [inspectorSourceFile, inspectorVisible, isLocalFilesystemPath]);
 
   useEffect(() => {
-    if (!inspectorVisible || !inspectorSourceFile?.path || isVirtualPath(inspectorSourceFile.path) || inspectorSourceFile.type === 'folder') {
+    if (!inspectorVisible || !inspectorSourceFile?.path || !isLocalFilesystemPath(inspectorSourceFile.path) || inspectorSourceFile.type === 'folder') {
       setOpenWithOptions([]);
       setOpenWithOptionsLoading(false);
       setOpenWithUpdating(false);
@@ -5112,7 +5517,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     return () => {
       disposed = true;
     };
-  }, [inspectorSourceFile, inspectorVisible]);
+  }, [inspectorSourceFile, inspectorVisible, isLocalFilesystemPath]);
 
   const applyInspectorDefaultOpenWith = useCallback(async (targetAppPath: string) => {
     if (!inspectorFile || !inspectorSupportsOpenWith) return;
@@ -5191,7 +5596,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return;
     }
 
-    if (inspectorType !== 'folder' || isVirtualPath(inspectorPath)) {
+    if (inspectorType !== 'folder' || !isLocalFilesystemPath(inspectorPath)) {
       clearDirSizePolling(true);
       setDirSize(null);
       setDirSizeLoading(false);
@@ -5313,7 +5718,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       disposed = true;
       clearDirSizePolling(true);
     };
-  }, [clearDirSizePolling, inspectorVisible, inspectorPath, inspectorType, t]);
+  }, [clearDirSizePolling, inspectorVisible, inspectorPath, inspectorType, isLocalFilesystemPath, t]);
 
   useEffect(() => () => {
     clearDirSizePolling(true);
@@ -5664,7 +6069,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                               <button onClick={() => handleOpenTerminal(lastSelectedFile)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.openInTerminal', '在终端打开')}</button>
                               <button onClick={() => handleCopyPaths(lastSelectedFile ? getActionFiles(lastSelectedFile) : [])} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px]">{t('explorer.copyPath', '拷贝为路径名')}</button>
                               <div className="my-1 h-px bg-primary/10" />
-                              <button onClick={() => { setShowAIRename(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
+                              <button onClick={() => {
+                                if (isRemoteRoot || selectedFiles.some(file => isRemotePath(file.path))) {
+                                  showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+                                  setActiveDropdown(null);
+                                  return;
+                                }
+                                setShowAIRename(true);
+                                setActiveDropdown(null);
+                              }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
                                 <Sparkles className="w-3.5 h-3.5 text-primary" /> {t('explorer.aiAssistant', 'AI 文件助手')}
                               </button>
                               <button onClick={() => { setShowOperationHistory(true); setActiveDropdown(null); }} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-primary/20 text-[13px] flex items-center gap-2">
@@ -5772,10 +6185,29 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   </div>
                 </div>
               )}
-              {loading && (
-                <div className="flex-1 min-h-0 flex items-center justify-center text-on-surface/40 text-sm">{t('explorer.loading')}</div>
+              {showBlockingLoading && (
+                <div className="flex-1 min-h-0 flex items-center justify-center px-6">
+                  {isRemoteRoot ? (
+                    <div className="flex max-w-lg flex-col items-center gap-3 text-center">
+                      <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                        <RefreshCw className="w-5 h-5 animate-spin text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-[14px] font-black text-on-surface/70">
+                          {t('explorer.remoteLoadingTitle', '正在连接远程服务器')}
+                        </p>
+                        <p className="mt-1 break-all text-[12px] font-semibold text-on-surface/35">
+                          {loadingRemoteConnectionName}
+                          {remotePathParts?.remotePath ? ` · ${remotePathParts.remotePath}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-on-surface/40 text-sm">{t('explorer.loading')}</div>
+                  )}
+                </div>
               )}
-              {!loading && !loadError && needsProtectedPathConsent && protectedRoot && (
+              {!showBlockingLoading && !loadError && needsProtectedPathConsent && protectedRoot && (
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6">
                   <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
                     <Shield className="w-8 h-8 text-primary" />
@@ -5805,20 +6237,24 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   </div>
                 </div>
               )}
-              {!loading && loadError && (
+              {!showBlockingLoading && loadError && (
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6">
                   <div className="w-16 h-16 rounded-full bg-red-400/10 flex items-center justify-center">
                     <Shield className="w-8 h-8 text-red-400" />
                   </div>
                   <p className="text-on-surface/50 text-sm font-bold">
-                    {directoryErrorKind === 'permission'
+                    {isRemoteRoot
+                      ? t('explorer.remoteLoadFailedTitle', '远程目录加载失败')
+                      : directoryErrorKind === 'permission'
                       ? t('dialogs.permissionDeniedTitle', '无权访问此目录')
                       : directoryErrorKind === 'notFound'
                         ? t('dialogs.notFoundTitle', '目录不存在或暂不可用')
                         : t('dialogs.readFailedTitle', '目录读取失败')}
                   </p>
                   <p className="text-on-surface/30 text-xs max-w-md text-center px-4 whitespace-pre-line">
-                    {directoryErrorKind === 'permission'
+                    {isRemoteRoot
+                      ? t('explorer.remoteLoadFailedDescription', '请检查服务器地址、端口、账号凭据和起始路径，然后重试。')
+                      : directoryErrorKind === 'permission'
                       ? t('dialogs.permissionDeniedDescription', '此目录被 macOS 隐私策略保护，或当前运行实例没有继承到已授权的稳定应用身份。若你明明在系统设置里开过权限，但每次启动还是反复弹框，通常不是你不会配，而是当前构建没有用稳定签名身份启动，系统把它当成了新的 app。')
                       : directoryErrorKind === 'notFound'
                         ? t('dialogs.notFoundDescription', '这个路径当前不存在，或者对应位置还没挂载完成。先确认目录、磁盘或 iCloud 位置还在。')
@@ -5827,7 +6263,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   <div className="flex gap-3">
                     {directoryErrorKind === 'permission' && (
                       <button
-                        onClick={() => invoke('open_system_settings').catch(() => {})}
+                        onClick={() => safeInvoke('open_system_settings').catch(() => {})}
                         className="px-6 py-3 bg-primary text-on-primary font-black rounded-2xl text-[13px] shadow-lg shadow-primary/20 hover:scale-[1.02] transition-all"
                       >
                         {t('dialogs.openSystemSettings', '打开系统设置')}
@@ -5850,10 +6286,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   </p>
                 </div>
               )}
-              {!loading && !loadError && currentLevelFiles.length === 0 && displayedFiles.length > 0 && (
+              {!showBlockingLoading && !loadError && currentLevelFiles.length === 0 && displayedFiles.length > 0 && (
                 <div className="flex-1 min-h-0 flex items-center justify-center text-on-surface/30 text-sm">{t('explorer.noResults', '没有匹配结果')}</div>
               )}
-              {!loading && !loadError && displayedFiles.length === 0 && (
+              {!showBlockingLoading && !loadError && displayedFiles.length === 0 && (
                 <div className="flex-1 min-h-0 flex items-center justify-center text-on-surface/30 text-sm">
                   {isFavoritesRoot
                     ? t('explorer.emptyFavorites', '暂无收藏')
@@ -6132,7 +6568,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   <pre className="w-full h-full p-3 overflow-hidden text-[10.5px] leading-relaxed text-on-surface/70 whitespace-pre-wrap break-all font-mono bg-primary/5">
                     {textPreview}
                   </pre>
-                ) : lastSelectedFile.type === 'pdf' && !pdfPreviewFailed ? (
+                ) : lastSelectedFile.type === 'pdf' && !isRemotePath(lastSelectedFile.path) && !pdfPreviewFailed ? (
                   <div className="relative w-full h-full bg-white">
                     {pdfPreviewLoading && (
                       <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/5 text-[12px] text-on-surface/35 font-bold">
@@ -6150,7 +6586,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                       }}
                     />
                   </div>
-                ) : lastSelectedFile.type === 'pdf' && pdfPreviewFailed ? (
+                ) : lastSelectedFile.type === 'pdf' && !isRemotePath(lastSelectedFile.path) && pdfPreviewFailed ? (
                   <div className="w-full h-full flex items-center justify-center px-6 text-center text-[12px] text-on-surface/35 font-bold leading-relaxed">
                     {t('explorer.pdfPreviewFailed', 'PDF 预览加载失败')}
                   </div>
@@ -6454,7 +6890,15 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
                   );
                 })()}
                 <div className="my-1 h-px bg-primary/10" />
-                <button onClick={() => { setShowAIRename(true); setContextMenu(null); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+                <button onClick={() => {
+                  if (isRemoteRoot) {
+                    showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
+                    setContextMenu(null);
+                    return;
+                  }
+                  setShowAIRename(true);
+                  setContextMenu(null);
+                }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
                   <Sparkles className="w-4 h-4 text-primary" /> {t('explorer.aiAssistant', 'AI 文件助手')}
                 </button>
                 <button onClick={() => { setShowOperationHistory(true); setContextMenu(null); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
@@ -6768,8 +7212,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
       {showAIRename && (
         <AIRenamePanel
-          files={selectedFiles.length > 0 ? selectedFiles : currentLevelFiles}
-          currentDir={currentPath}
+          files={(selectedFiles.length > 0 ? selectedFiles : currentLevelFiles).filter(file => !isRemotePath(file.path))}
+          currentDir={isRemoteRoot ? '' : currentPath}
           theme={theme}
           onClose={() => setShowAIRename(false)}
           onComplete={() => { setShowAIRename(false); refreshCurrentDir(); }}

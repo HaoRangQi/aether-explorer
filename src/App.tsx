@@ -2,14 +2,19 @@ import { useCallback, useMemo, useState, useEffect, useRef, lazy, Suspense } fro
 import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Keyboard, Terminal, X } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
-import { emitTo, listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { load } from '@tauri-apps/plugin-store';
 import Sidebar from './components/Sidebar';
 import TopBar, { TabTransferPayload } from './components/TopBar';
+import RemoteConnectionDialog from './components/RemoteConnectionDialog';
 import type { SettingsCategory } from './components/SettingsView';
-import { ThemeSettings, ViewMode, TabData } from './types';
+import { ThemeSettings, ViewMode, TabData, RemoteConnection } from './types';
+import {
+  deleteRemoteConnection,
+  listRemoteConnections,
+  saveRemoteConnection,
+  testRemoteConnectionInput,
+  type SaveRemoteConnectionInput,
+} from './api/filesystem';
 import {
   DEFAULT_THEME,
   FAVORITES_VIRTUAL_PATH,
@@ -17,10 +22,11 @@ import {
   loadThemeFromLocalStorage,
   redactThemeSecrets,
 } from './lib/settings';
-import { getPathLeaf, getInitialTabs as buildInitialTabs } from './lib/path-helpers';
+import { getPathLeaf, getInitialTabs as buildInitialTabs, parseRemotePath } from './lib/path-helpers';
 import { normalizeAppError } from './lib/app-error';
 import { resolveAppShortcut } from './lib/keyboard-shortcuts';
 import { NATIVE_MENU_COMMAND_EVENT, type NativeMenuCommand } from './lib/native-menu';
+import { currentWindowLabel, safeCurrentWindow, safeEmitTo, safeInvoke, safeListen } from './lib/tauri-runtime';
 import { isValidWallpaperUrl } from './lib/url-guard';
 import {
   STARTUP_PANIC_LOG_SEEN_KEY,
@@ -157,6 +163,9 @@ export default function App() {
   const [startupPermissionPromptOpen, setStartupPermissionPromptOpen] = useState(false);
   const [startupPermissionPromptLoading, setStartupPermissionPromptLoading] = useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
+  const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
+  const [editingRemoteConnection, setEditingRemoteConnection] = useState<RemoteConnection | null>(null);
+  const [remoteConnections, setRemoteConnections] = useState<RemoteConnection[]>([]);
   const [storeReady, setStoreReady] = useState(false);
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(
     window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -222,7 +231,7 @@ export default function App() {
 
   useEffect(() => {
     const focusWindow = () => {
-      void getCurrentWindow().setFocus().catch(() => {});
+      void safeCurrentWindow().setFocus().catch(() => {});
     };
     document.addEventListener('contextmenu', focusWindow, true);
     return () => document.removeEventListener('contextmenu', focusWindow, true);
@@ -236,7 +245,7 @@ export default function App() {
   }, [theme.defaultHomePath]);
 
   const createStandaloneWindow = useCallback((path: string, label?: string) => {
-    return invoke<string>('create_app_window', { initialPath: path, tabLabel: label }).catch(err => {
+    return safeInvoke<string>('create_app_window', { initialPath: path, tabLabel: label }).catch(err => {
       console.error('创建新窗口失败:', normalizeAppError(err).userMessage);
       throw err;
     });
@@ -258,7 +267,7 @@ export default function App() {
       if (!tabExists) return prev;
 
       if (prev.length <= 1) {
-        getCurrentWindow().close().catch(() => {});
+        safeCurrentWindow().close().catch(() => {});
         return prev;
       }
       const nextTabs = prev.filter(tab => tab.id !== tabId);
@@ -284,7 +293,7 @@ export default function App() {
 
   const handleAcceptDraggedTab = useCallback((payload: TabTransferPayload) => {
     const sourceWindow = payload.sourceWindowLabel;
-    const currentWindow = getCurrentWindow().label;
+    const currentWindow = currentWindowLabel();
 
     if (sourceWindow === currentWindow) {
       return;
@@ -294,7 +303,7 @@ export default function App() {
     setTabs(prev => [...prev, nextTab]);
     setView(nextTab.id as ViewMode);
 
-    emitTo(sourceWindow, 'aether-tab-transfer-accepted', {
+    safeEmitTo(sourceWindow, 'aether-tab-transfer-accepted', {
       transferId: payload.transferId,
       tabId: payload.tab.id,
       targetWindow: currentWindow,
@@ -346,6 +355,18 @@ export default function App() {
 
     initStore();
 
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    listRemoteConnections()
+      .then(connections => {
+        if (mounted) setRemoteConnections(connections);
+      })
+      .catch(() => {
+        if (mounted) setRemoteConnections([]);
+      });
     return () => { mounted = false; };
   }, []);
 
@@ -439,7 +460,7 @@ export default function App() {
     if (startupPermissionPromptLoading) return;
     setStartupPermissionPromptLoading(true);
     try {
-      const results = await invoke<PermissionPreflightResult[]>('preflight_file_permissions');
+      const results = await safeInvoke<PermissionPreflightResult[]>('preflight_file_permissions');
       const denied = results.filter(result => !result.ok);
       if (denied.length > 0) {
         console.info('Permission preflight denied paths:', denied.map(result => result.path));
@@ -512,7 +533,7 @@ export default function App() {
     const enabled = theme.enableLiquidGlass === true;
     const appearance = resolveAppearance(theme.mode, systemTheme);
 
-    invoke<NativeLiquidGlassStatus>('set_native_liquid_glass_enabled', { enabled, appearance })
+    safeInvoke<NativeLiquidGlassStatus>('set_native_liquid_glass_enabled', { enabled, appearance })
       .then((status) => {
         if (!cancelled && enabled && !status.applied) {
           setTheme(prev => prev.enableLiquidGlass ? { ...prev, enableLiquidGlass: false } : prev);
@@ -532,7 +553,7 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    invoke<string | null>('read_last_panic_log')
+    safeInvoke<string | null>('read_last_panic_log')
       .then(log => {
         let seenFingerprint: string | null = null;
         try {
@@ -598,7 +619,7 @@ export default function App() {
 
   // DevTools 打开
   const handleOpenDevTools = useCallback(() => {
-    invoke('open_devtools').catch(err => console.error('打开控制台失败:', normalizeAppError(err).userMessage));
+    safeInvoke('open_devtools').catch(err => console.error('打开控制台失败:', normalizeAppError(err).userMessage));
   }, []);
 
   // Listen for system theme changes when in auto mode
@@ -618,8 +639,8 @@ export default function App() {
   useEffect(() => {
     let unlistenAccepted: (() => void) | undefined;
 
-    listen<{ transferId: string; tabId: string; targetWindow: string }>('aether-tab-transfer-accepted', (event) => {
-      const currentWindow = getCurrentWindow().label;
+    safeListen<{ transferId: string; tabId: string; targetWindow: string }>('aether-tab-transfer-accepted', (event) => {
+      const currentWindow = currentWindowLabel();
 
       if (processedTransfersRef.current.has(event.payload.transferId)) {
         return;
@@ -649,7 +670,7 @@ export default function App() {
   const handleCloseTab = useCallback((id: string) => {
     setTabs(prev => {
       if (prev.length === 1) {
-        getCurrentWindow().close().catch(() => {});
+        safeCurrentWindow().close().catch(() => {});
         return prev;
       }
 
@@ -695,7 +716,7 @@ export default function App() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen<NativeMenuCommand>(NATIVE_MENU_COMMAND_EVENT, event => {
+    safeListen<NativeMenuCommand>(NATIVE_MENU_COMMAND_EVENT, event => {
       if (event.payload === 'open-settings') {
         setView('settings');
       }
@@ -720,6 +741,60 @@ export default function App() {
     setTabs(prev => [...prev, newTab]);
     setView(uniqueId as ViewMode);
   };
+
+  const handleSaveRemoteConnection = useCallback(async (input: SaveRemoteConnectionInput) => {
+    const saved = await saveRemoteConnection(input);
+    setRemoteConnections(prev => {
+      const next = prev.filter(item => item.id !== saved.id);
+      next.push(saved);
+      return next.sort((a, b) => a.name.localeCompare(b.name));
+    });
+    return saved;
+  }, []);
+
+  const handleAddRemoteConnection = useCallback(() => {
+    setEditingRemoteConnection(null);
+    setRemoteDialogOpen(true);
+  }, []);
+
+  const handleEditRemoteConnection = useCallback((connection: RemoteConnection) => {
+    setEditingRemoteConnection(connection);
+    setRemoteDialogOpen(true);
+  }, []);
+
+  const handleDeleteRemoteConnection = useCallback(async (connectionId: string) => {
+    await deleteRemoteConnection(connectionId);
+    setRemoteConnections(prev => prev.filter(connection => connection.id !== connectionId));
+    const remainingTabs = tabs.filter(tab => {
+      const tabPath = tab.currentPath || tab.initialPath || '';
+      return parseRemotePath(tabPath)?.connectionId !== connectionId;
+    });
+    const nextTabs = remainingTabs.length > 0
+      ? remainingTabs
+      : (() => {
+        const defaultHomePath = theme.defaultHomePath || FAVORITES_VIRTUAL_PATH;
+        const fallbackTab: TabData = {
+          id: `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          labelTranslationKey:
+            defaultHomePath === FAVORITES_VIRTUAL_PATH ? 'tabs.favorites' :
+            defaultHomePath === 'aether://recent' ? 'tabs.recent' :
+            'tabs.home',
+          label: defaultHomePath.startsWith('aether://') ? undefined : getPathLeaf(defaultHomePath),
+          initialPath: defaultHomePath,
+          currentPath: defaultHomePath,
+        };
+        return [fallbackTab];
+      })();
+    setTabs(nextTabs);
+    setView(current => nextTabs.some(tab => tab.id === current) ? current : nextTabs[nextTabs.length - 1].id as ViewMode);
+    setRemoteDialogOpen(false);
+    setEditingRemoteConnection(null);
+  }, [tabs, theme.defaultHomePath]);
+
+  const handleCloseRemoteConnectionDialog = useCallback(() => {
+    setRemoteDialogOpen(false);
+    setEditingRemoteConnection(null);
+  }, []);
 
   const handleTabTitleChange = useCallback((tabId: string, title: string) => {
     setTabs(prev => prev.map(tab => {
@@ -832,7 +907,17 @@ export default function App() {
           className="flex flex-1 relative z-10 overflow-hidden"
           style={{ backdropFilter: backgroundUrl && theme.blurIntensity ? `blur(${theme.blurIntensity}px)` : undefined }}
         >
-          <Sidebar currentView={view} currentPath={activeTabPath} onViewChange={setView} onOpenTab={handleOpenTab} theme={theme} tabs={tabs} />
+          <Sidebar
+            currentView={view}
+            currentPath={activeTabPath}
+            onViewChange={setView}
+            onOpenTab={handleOpenTab}
+            onAddRemoteConnection={handleAddRemoteConnection}
+            onEditRemoteConnection={handleEditRemoteConnection}
+            theme={theme}
+            tabs={tabs}
+            remoteConnections={remoteConnections}
+          />
 
           <main className="flex-1 flex flex-col h-full overflow-hidden">
             <TopBar
@@ -877,6 +962,7 @@ export default function App() {
                       isActive={tab.id === view}
                       currentTabLabelKey={tab.labelTranslationKey}
                       initialPath={tab.initialPath}
+                      remoteConnections={remoteConnections}
                       theme={theme}
                       onThemeChange={setTheme}
                       onViewChange={setView}
@@ -1103,6 +1189,15 @@ export default function App() {
           <Suspense fallback={null}>
             <TransferModal onClose={() => setIsTransferring(false)} theme={theme} />
           </Suspense>
+        )}
+        {remoteDialogOpen && (
+          <RemoteConnectionDialog
+            connection={editingRemoteConnection}
+            onClose={handleCloseRemoteConnectionDialog}
+            onSave={handleSaveRemoteConnection}
+            onTest={testRemoteConnectionInput}
+            onDelete={handleDeleteRemoteConnection}
+          />
         )}
       </AnimatePresence>
     </div>

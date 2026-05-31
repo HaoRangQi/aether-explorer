@@ -1,10 +1,13 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { isRemotePath } from './path-helpers';
 
 const DEFAULT_ASSET_URL_CACHE_LIMIT = 512;
 
 const assetUrlCache = new Map<string, string>();
 
 export function getCachedAssetUrl(path: string, limit = DEFAULT_ASSET_URL_CACHE_LIMIT): string {
+  if (isRemotePath(path)) return path;
+
   const cached = assetUrlCache.get(path);
   if (cached) {
     assetUrlCache.delete(path);

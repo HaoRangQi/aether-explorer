@@ -2,6 +2,7 @@
 
 ## Specs
 
+- 2026-06-01 — [远程访问 SFTP 性能与兼容性边界](./specs/2026-06-01-remote-access-sftp-performance.md)
 - 2026-05-27 — [操作历史与撤销设计](./specs/2026-05-27-operation-history-undo-design.md)
 
 ## Plans

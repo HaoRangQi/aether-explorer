@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   getPathLeaf,
   getParentPath,
+  isRemotePath,
   isVirtualPath,
+  buildRemotePath,
+  parseRemotePath,
+  normalizeRemoteDirectoryPath,
   getInitialTabs,
   commonParent,
 } from '../lib/path-helpers';
@@ -42,6 +46,44 @@ describe('isVirtualPath', () => {
   });
 });
 
+describe('remote path helpers', () => {
+  it('recognizes remote paths separately from virtual paths', () => {
+    expect(isRemotePath('aether-remote://conn-1/')).toBe(true);
+    expect(isVirtualPath('aether-remote://conn-1/')).toBe(false);
+    expect(isRemotePath('aether://favorites')).toBe(false);
+  });
+
+  it('builds and parses remote paths', () => {
+    const path = buildRemotePath('server 1', '/Sites/public/');
+
+    expect(path).toBe('aether-remote://server%201/Sites/public');
+    expect(parseRemotePath(path)).toEqual({
+      connectionId: 'server 1',
+      remotePath: '/Sites/public',
+    });
+  });
+
+  it('encodes remote path segments without treating slashes as one segment', () => {
+    const path = buildRemotePath('server/1', '/Sites/My Files/#draft?.txt');
+
+    expect(path).toBe('aether-remote://server%2F1/Sites/My%20Files/%23draft%3F.txt');
+    expect(parseRemotePath(path)).toEqual({
+      connectionId: 'server/1',
+      remotePath: '/Sites/My Files/#draft?.txt',
+    });
+  });
+
+  it('rejects malformed remote path escapes', () => {
+    expect(parseRemotePath('aether-remote://server/%E0%A4%A')).toBeNull();
+  });
+
+  it('normalizes remote directory paths', () => {
+    expect(normalizeRemoteDirectoryPath('')).toBe('/');
+    expect(normalizeRemoteDirectoryPath('foo//bar/')).toBe('/foo/bar');
+    expect(normalizeRemoteDirectoryPath('/foo/bar/')).toBe('/foo/bar');
+  });
+});
+
 describe('getParentPath', () => {
   it('returns parent directory for filesystem paths', () => {
     expect(getParentPath('/Users/jane/Pictures')).toBe('/Users/jane');
@@ -49,6 +91,12 @@ describe('getParentPath', () => {
     expect(getParentPath('/Users')).toBe('/');
     expect(getParentPath('/')).toBe('/');
     expect(getParentPath('')).toBe('/');
+  });
+
+  it('returns parent directory for remote paths', () => {
+    expect(getParentPath('aether-remote://conn/Sites/public')).toBe('aether-remote://conn/Sites');
+    expect(getParentPath('aether-remote://conn/Sites')).toBe('aether-remote://conn/');
+    expect(getParentPath('aether-remote://conn/')).toBe('aether-remote://conn/');
   });
 });
 
