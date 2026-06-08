@@ -1,0 +1,12 @@
+{
+  "id": "fda-aware-directory-errors",
+  "title": "Classify directory permission errors with Full Disk Access status",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "desktop-frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task record",
+  "createdAt": "2026-06-09T01:50:00+08:00",
+  "branch": "codex/remote-access"
+}

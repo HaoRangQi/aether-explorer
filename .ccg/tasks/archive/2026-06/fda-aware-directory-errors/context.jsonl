@@ -1,0 +1,7 @@
+{"file":"/Users/macos/Downloads/Projects/mole-ui/docs/macos-file-manager-fda-permission-coordinator-spec.zh-CN.md","reason":"FDA recovery should only handle permission failures when FDA probe is not granted"}
+{"file":"src/lib/app-error.ts","reason":"Directory error classification"}
+{"file":"src/components/explorer/useExplorerDirectoryData.ts","reason":"Local directory loading error handling"}
+{"file":"src/components/explorer/ExplorerShell.tsx","reason":"Permission recovery UI actions"}
+{"file":"src/lib/full-disk-access.ts","reason":"Shared FDA status/probe coordinator"}
+{"file":"src/__tests__/app-error.test.ts","reason":"App error classification regression tests"}
+{"file":"src/__tests__/permission-ux.test.ts","reason":"Permission UX source wiring tests"}
