@@ -1,0 +1,12 @@
+{
+  "id": "permission-ux-entitlements-audit",
+  "title": "Audit and remove macOS permission entitlement gaps",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-08T21:40:06Z",
+  "branch": "codex/remote-access"
+}
