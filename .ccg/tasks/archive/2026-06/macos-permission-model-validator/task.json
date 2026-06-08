@@ -1,0 +1,12 @@
+{
+  "id": "macos-permission-model-validator",
+  "title": "Add preflight validation for macOS permission model configuration",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-08T22:01:36Z",
+  "branch": "codex/remote-access"
+}
