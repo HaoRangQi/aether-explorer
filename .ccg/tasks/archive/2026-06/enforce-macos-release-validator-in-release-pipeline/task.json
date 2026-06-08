@@ -1,0 +1,12 @@
+{
+  "id": "enforce-macos-release-validator-in-release-pipeline",
+  "title": "Run macOS release app validator before publishing release artifacts",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task and commit CCG metadata only",
+  "createdAt": "2026-06-09T00:00:00Z",
+  "branch": "codex/remote-access"
+}
