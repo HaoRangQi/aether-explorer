@@ -1,0 +1,4 @@
+{"file":"src/components/ExplorerView.tsx","role":"thin entry in progress; still large"}
+{"file":"src-tauri/src/lib.rs","role":"Rust root; transfer/fs code still large"}
+{"file":"src/components/SettingsView.tsx","role":"settings container after category extraction"}
+{"file":"src-tauri/src/commands.rs","role":"command module registry"}

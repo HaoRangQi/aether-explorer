@@ -1,0 +1,12 @@
+{
+  "id": "refactor-top-three-large-files",
+  "title": "拆分前三个巨型源码文件并保持行为兼容",
+  "status": "completed",
+  "complexity": "L+",
+  "risk": "medium",
+  "domain": "frontend+backend",
+  "currentPhase": "completed",
+  "nextAction": "用户已明确豁免 Gemini 第二模型审查；归档任务并保留现有 Claude 审查与全量验证证据",
+  "createdAt": "2026-06-06T00:00:00+08:00",
+  "branch": "codex/remote-access"
+}
