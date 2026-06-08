@@ -1,0 +1,13 @@
+{
+  "id": "settings-permission-evidence-copy",
+  "title": "Copy Full Disk Access evidence from Settings",
+  "status": "in_progress",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-08T20:48:22Z",
+  "completedAt": "2026-06-08T20:59:14Z",
+  "branch": "codex/remote-access"
+}
