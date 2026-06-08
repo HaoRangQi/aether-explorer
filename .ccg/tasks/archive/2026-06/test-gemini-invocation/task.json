@@ -1,0 +1,12 @@
+{
+  "id": "test-gemini-invocation",
+  "title": "Test Gemini backend invocation",
+  "status": "completed",
+  "complexity": "S",
+  "risk": "low",
+  "domain": "tooling",
+  "currentPhase": "completed",
+  "nextAction": "Set GEMINI_API_KEY in the Codex environment or project .env, then retry",
+  "createdAt": "2026-06-08T18:37:49Z",
+  "branch": "codex/remote-access"
+}
