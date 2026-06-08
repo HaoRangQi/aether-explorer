@@ -1,0 +1,13 @@
+{
+  "id": "permission-app-path-guidance",
+  "title": "Show app install path guidance in permission settings",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-backend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task after verified app path guidance slice",
+  "createdAt": "2026-06-09T04:00:00+08:00",
+  "completedAt": "2026-06-09T04:00:00+08:00",
+  "branch": "codex/remote-access"
+}
