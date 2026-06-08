@@ -1,0 +1,13 @@
+{
+  "id": "remove-legacy-permission-preflight",
+  "title": "Remove legacy directory permission preflight command",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "backend-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-08T21:15:31Z",
+  "completedAt": "2026-06-08T21:23:28Z",
+  "branch": "codex/remote-access"
+}
