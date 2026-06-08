@@ -1,0 +1,12 @@
+{
+  "id": "permission-ux-completion-audit",
+  "title": "Audit macOS permission UX completion against MoleUI FDA requirements",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task record",
+  "createdAt": "2026-06-09T02:20:00+08:00",
+  "branch": "codex/remote-access"
+}

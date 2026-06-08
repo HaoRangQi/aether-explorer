@@ -1,0 +1,10 @@
+{"file":"/Users/macos/Downloads/Projects/mole-ui/docs/README.zh-CN.md","reason":"Source acceptance standard for FDA-first file manager UX"}
+{"file":"docs/SMOKE_TEST.md","reason":"Project smoke verification entry point"}
+{"file":"docs/TEST_PLAN.md","reason":"Project test plan evidence"}
+{"file":"src/lib/full-disk-access.ts","reason":"Shared frontend FDA coordinator"}
+{"file":"src/App.tsx","reason":"Startup FDA setup and polling"}
+{"file":"src/components/settings/PermissionsDiagnosticsSettings.tsx","reason":"Settings recovery UI"}
+{"file":"src/components/explorer/useExplorerDirectoryData.ts","reason":"Directory permission failure classification"}
+{"file":"src/components/explorer/ExplorerShell.tsx","reason":"Remote/local recovery UI guard"}
+{"file":"src-tauri/src/commands/fs.rs","reason":"Tauri FDA probes and legacy preflight compatibility"}
+{"file":"src-tauri/src/commands/diagnostics.rs","reason":"System Settings and reveal app recovery commands"}
