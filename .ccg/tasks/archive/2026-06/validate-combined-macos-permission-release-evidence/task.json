@@ -1,0 +1,12 @@
+{
+  "id": "validate-combined-macos-permission-release-evidence",
+  "title": "Validate signed macOS app and FDA evidence as one release gate",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T00:00:00Z",
+  "branch": "codex/remote-access"
+}
