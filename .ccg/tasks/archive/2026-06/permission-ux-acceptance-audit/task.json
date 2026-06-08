@@ -1,0 +1,13 @@
+{
+  "id": "permission-ux-acceptance-audit",
+  "title": "Audit remaining permission UX acceptance evidence",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-backend-docs",
+  "currentPhase": "completed",
+  "nextAction": "Archive task after verified app identity permission UX slice",
+  "createdAt": "2026-06-09T00:00:00+08:00",
+  "completedAt": "2026-06-09T03:43:00+08:00",
+  "branch": "codex/remote-access"
+}
