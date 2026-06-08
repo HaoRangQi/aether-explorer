@@ -8,6 +8,12 @@ const appSource = readSource('src/App.tsx');
 const sidebarSource = readSource('src/components/Sidebar.tsx');
 const remoteDialogSource = readSource('src/components/RemoteConnectionDialog.tsx');
 const explorerSource = readSource('src/components/ExplorerView.tsx');
+const explorerShellSource = readSource('src/components/explorer/ExplorerShell.tsx');
+const explorerDirectoryDataSource = readSource('src/components/explorer/useExplorerDirectoryData.ts');
+const explorerKeyboardSource = readSource('src/components/explorer/useExplorerKeyboard.ts');
+const explorerSelectionSource = readSource('src/components/explorer/useExplorerSelection.ts');
+const explorerStateSource = readSource('src/components/explorer/useExplorerState.ts');
+const explorerConstantsSource = readSource('src/components/explorer/explorer-constants.ts');
 const filesystemSource = readSource('src/api/filesystem.ts');
 
 describe('remote access UI wiring', () => {
@@ -80,9 +86,9 @@ describe('remote access UI wiring', () => {
     expect(explorerSource).toContain("loadingRemoteConnectionName");
     expect(explorerSource).toContain("remoteConnectionDisplayName");
     expect(explorerSource).toContain("showBlockingLoading");
-    expect(explorerSource).toContain("正在连接远程服务器");
-    expect(explorerSource).toContain("远程目录加载失败");
-    expect(explorerSource).toContain("setLoading(false);");
+    expect(explorerShellSource).toContain("正在连接远程服务器");
+    expect(explorerShellSource).toContain("远程目录加载失败");
+    expect(explorerDirectoryDataSource).toContain("setLoading(false);");
   });
 
   it('does not leave remote directory browsing in an infinite loading state', () => {
@@ -92,12 +98,12 @@ describe('remote access UI wiring', () => {
     expect(filesystemSource).toContain('远程连接测试超时');
     expect(explorerSource).toContain('useMemo(() => parseRemotePath(currentPath), [currentPath])');
     expect(explorerSource).not.toContain('const remotePathParts = parseRemotePath(currentPath);');
-    expect(explorerSource).toContain('const hasDisplayableFiles = displayedFiles.length > 0;');
-    expect(explorerSource).toContain('const showBlockingLoading = loading && (!isRemoteRoot || !hasDisplayableFiles);');
-    expect(explorerSource).toContain('REMOTE_DIRECTORY_UI_TIMEOUT_MS = 5000');
-    expect(explorerSource).toContain('REMOTE_DIRECTORY_TIMEOUT_MESSAGE');
-    expect(explorerSource).toContain('timedOut = true');
-    expect(explorerSource).toContain('if (timedOut || cancelled || requestId !== loadRequestSeqRef.current) return;');
+    expect(explorerStateSource).toContain('const hasDisplayableFiles = displayedFiles.length > 0;');
+    expect(explorerStateSource).toContain('const showBlockingLoading = loading && (!isRemoteRoot || !hasDisplayableFiles);');
+    expect(explorerConstantsSource).toContain('REMOTE_DIRECTORY_UI_TIMEOUT_MS = 5000');
+    expect(explorerConstantsSource).toContain('REMOTE_DIRECTORY_TIMEOUT_MESSAGE');
+    expect(explorerDirectoryDataSource).toContain('timedOut = true');
+    expect(explorerDirectoryDataSource).toContain('if (timedOut || cancelled || requestId !== loadRequestSeqRef.current) return;');
   });
 
   it('does not leave the remote connection test button spinning forever', () => {
@@ -108,8 +114,8 @@ describe('remote access UI wiring', () => {
   });
 
   it('lets remote folders navigate instead of being trapped in column expansion', () => {
-    expect(explorerSource).toContain("file.type === 'folder' || file.type === 'remote-unknown'");
-    expect(explorerSource).toContain('if (isRemotePath(file.path)) {\n          navigateToPath(file.path);');
+    expect(explorerKeyboardSource).toContain("file.type === 'folder' || file.type === 'remote-unknown'");
+    expect(explorerSelectionSource).toContain('if (isRemotePath(file.path)) {\n          navigateToPath(file.path);');
   });
 
   it('keeps remote backend operations on a strict short timeout budget', () => {
