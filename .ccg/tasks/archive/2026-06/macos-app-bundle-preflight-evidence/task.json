@@ -1,0 +1,12 @@
+{
+  "id": "macos-app-bundle-preflight-evidence",
+  "title": "Validate packaged macOS app bundle permission metadata",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task and commit CCG metadata only",
+  "createdAt": "2026-06-09T00:00:00Z",
+  "branch": "codex/remote-access"
+}
