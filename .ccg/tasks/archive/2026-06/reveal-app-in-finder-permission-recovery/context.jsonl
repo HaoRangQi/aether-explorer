@@ -1,0 +1,5 @@
+{"file":"/Users/macos/Downloads/Projects/mole-ui/docs/macos-file-manager-fda-permission-coordinator-spec.zh-CN.md","reason":"Settings recovery expectations include Reveal App in Finder"}
+{"file":"src/components/settings/PermissionsDiagnosticsSettings.tsx","reason":"Permission recovery actions"}
+{"file":"src-tauri/src/commands/diagnostics.rs","reason":"Diagnostics/open commands"}
+{"file":"src-tauri/src/lib.rs","reason":"Tauri command registration"}
+{"file":"src/__tests__/permission-ux.test.ts","reason":"Permission UX wiring regression test"}

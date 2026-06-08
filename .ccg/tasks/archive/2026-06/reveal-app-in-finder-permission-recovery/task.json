@@ -1,0 +1,12 @@
+{
+  "id": "reveal-app-in-finder-permission-recovery",
+  "title": "Add Reveal App in Finder to Full Disk Access recovery",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archived after Reveal App in Finder recovery implementation and Claude-only review",
+  "createdAt": "2026-06-09T01:26:00+08:00",
+  "branch": "codex/remote-access"
+}
