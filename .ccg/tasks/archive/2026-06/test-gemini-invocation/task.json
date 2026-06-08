@@ -6,7 +6,8 @@
   "risk": "low",
   "domain": "tooling",
   "currentPhase": "completed",
-  "nextAction": "Set GEMINI_API_KEY in the Codex environment or project .env, then retry",
+  "nextAction": "Gemini backend connectivity verified; optionally export GEMINI_API_KEY and GEMINI_CLI_TRUST_WORKSPACE for future wrapper calls",
   "createdAt": "2026-06-08T18:37:49Z",
+  "completedAt": "2026-06-08T20:07:00Z",
   "branch": "codex/remote-access"
 }
