@@ -1,0 +1,12 @@
+{
+  "id": "folder-size-permission-ux-audit",
+  "title": "Audit folder-size scanning permission UX",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-backend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task after recording verification and Claude-only review",
+  "createdAt": "2026-06-08T18:40:05Z",
+  "branch": "codex/remote-access"
+}
