@@ -1,0 +1,12 @@
+{
+  "id": "improve-permission-ux",
+  "title": "Improve desktop permission settings experience",
+  "status": "completed",
+  "complexity": "L+",
+  "risk": "high",
+  "domain": "desktop-frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-09T00:00:00+08:00",
+  "branch": "codex/remote-access"
+}

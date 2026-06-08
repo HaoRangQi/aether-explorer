@@ -1,0 +1,6 @@
+{"file":"/Users/macos/Downloads/Projects/mole-ui/docs/README.zh-CN.md","reason":"Reference permission UX model"}
+{"file":"src-tauri/src/commands/fs.rs","reason":"Current permission preflight and filesystem commands"}
+{"file":"src/components/settings/useSettingsPermissions.ts","reason":"Current settings permission probe logic"}
+{"file":"src/components/settings/PermissionsDiagnosticsSettings.tsx","reason":"Current permission UI"}
+{"file":"src/App.tsx","reason":"Startup permission prompt"}
+{"file":"src-tauri/Info.plist","reason":"macOS usage descriptions"}
