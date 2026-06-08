@@ -1,0 +1,12 @@
+{
+  "id": "core-permission-paths-audit",
+  "title": "Audit core file operation permission paths",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-backend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task after recording verification and Claude-only review",
+  "createdAt": "2026-06-08T18:56:23Z",
+  "branch": "codex/remote-access"
+}
