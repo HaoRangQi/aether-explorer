@@ -1,0 +1,12 @@
+{
+  "id": "permission-ux-runtime-verification",
+  "title": "Runtime verify Full Disk Access permission UX",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "desktop-frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archived after runtime verification; clean-machine FDA verification remains external evidence",
+  "createdAt": "2026-06-09T00:00:00+08:00",
+  "branch": "codex/remote-access"
+}

@@ -1,0 +1,5 @@
+{"file":".ccg/tasks/archive/2026-06/improve-permission-ux/review.md","reason":"Previous implementation verification and Claude review evidence"}
+{"file":"/Users/macos/Downloads/Projects/mole-ui/docs/README.zh-CN.md","reason":"Reference acceptance criteria for FDA UX"}
+{"file":"src-tauri/src/commands/fs.rs","reason":"FDA probe implementation"}
+{"file":"src/App.tsx","reason":"Startup permission gate"}
+{"file":"src/components/settings/PermissionsDiagnosticsSettings.tsx","reason":"Settings permission recovery UI"}
