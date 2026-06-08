@@ -1,0 +1,13 @@
+{
+  "id": "release-permission-evidence-helper",
+  "title": "Make FDA evidence helper available in release candidates",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archived; remaining overall permission UX gate is clean-user Full Disk Access acceptance",
+  "createdAt": "2026-06-08T20:39:42Z",
+  "completedAt": "2026-06-08T20:45:46Z",
+  "branch": "codex/remote-access"
+}
