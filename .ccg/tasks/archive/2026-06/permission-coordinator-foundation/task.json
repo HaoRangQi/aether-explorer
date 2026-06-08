@@ -1,0 +1,12 @@
+{
+  "id": "permission-coordinator-foundation",
+  "title": "Add shared Full Disk Access permission coordinator foundation",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "desktop-frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archived after shared FDA coordinator foundation implementation and Claude-only review",
+  "createdAt": "2026-06-09T01:12:06+08:00",
+  "branch": "codex/remote-access"
+}

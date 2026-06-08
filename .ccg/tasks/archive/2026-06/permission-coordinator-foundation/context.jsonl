@@ -1,0 +1,6 @@
+{"file":"/Users/macos/Downloads/Projects/mole-ui/docs/macos-file-manager-fda-permission-coordinator-spec.zh-CN.md","reason":"Reference model for shared FDA state and one active request"}
+{"file":"src/App.tsx","reason":"Current startup permission setup flow"}
+{"file":"src/components/SettingsView.tsx","reason":"Settings page consumes permission hook"}
+{"file":"src/components/settings/useSettingsPermissions.ts","reason":"Current isolated Settings permission state"}
+{"file":"src/components/settings/PermissionsDiagnosticsSettings.tsx","reason":"Settings permission recovery UI"}
+{"file":"src/__tests__/permission-ux.test.ts","reason":"Current permission UX wiring regression tests"}
