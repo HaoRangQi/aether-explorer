@@ -1,0 +1,12 @@
+{
+  "id": "macos-app-bundle-permission-validator",
+  "title": "Add validation for packaged macOS app permission model",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task and commit CCG metadata only",
+  "createdAt": "2026-06-08T22:16:32Z",
+  "branch": "codex/remote-access"
+}

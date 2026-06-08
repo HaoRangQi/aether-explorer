@@ -12,3 +12,4 @@
 - Keep default Full Disk Access probes limited to TCC paths; do not probe Mail, Safari, Messages, Contacts, Calendars, Photos, Reminders, Desktop, Documents, Downloads, or application data directories for FDA status.
 - Saved Full Disk Access acceptance JSON from Settings or `window.__aether.permissionEvidence()` must pass `npm run validate:fda-evidence -- /path/to/fda-evidence.json` before it can be used as release evidence.
 - macOS permission configuration changes must pass `npm run lint:macos-permissions`; `npm run lint` includes this preflight.
+- Packaged release candidates must pass `npm run validate:macos-app -- /path/to/Aether\ Explorer.app` before clean-user Full Disk Access acceptance; this validates bundle id/name/version, `Info.plist` privacy keys, and inspectable entitlements only, and does not replace FDA evidence.
