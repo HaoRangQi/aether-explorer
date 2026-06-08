@@ -1,0 +1,12 @@
+{
+  "id": "align-public-macos-permission-guidance",
+  "title": "Align public macOS permission guidance with FDA-first release gates",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T00:00:00Z",
+  "branch": "codex/remote-access"
+}
