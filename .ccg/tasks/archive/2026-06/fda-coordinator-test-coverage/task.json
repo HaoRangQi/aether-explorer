@@ -1,0 +1,12 @@
+{
+  "id": "fda-coordinator-test-coverage",
+  "title": "Add automated regression coverage for Full Disk Access coordinator",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task record",
+  "createdAt": "2026-06-09T02:35:00+08:00",
+  "branch": "codex/remote-access"
+}

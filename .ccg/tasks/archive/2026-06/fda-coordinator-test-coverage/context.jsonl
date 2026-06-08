@@ -1,0 +1,5 @@
+{"file":"src/lib/full-disk-access.ts","reason":"Shared frontend FDA coordinator under test"}
+{"file":"src/lib/smoke.ts","reason":"DevTools smoke validation for FDA command shape"}
+{"file":"src/__tests__/full-disk-access.test.ts","reason":"New executable coordinator tests"}
+{"file":"src/__tests__/smoke.test.ts","reason":"New smoke probe shape tests"}
+{"file":"/Users/macos/Downloads/Projects/mole-ui/docs/README.zh-CN.md","reason":"FDA acceptance criteria require real probes and shared coordinator"}
