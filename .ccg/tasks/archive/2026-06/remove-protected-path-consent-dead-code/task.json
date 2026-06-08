@@ -1,0 +1,12 @@
+{
+  "id": "remove-protected-path-consent-dead-code",
+  "title": "Remove legacy protected path consent dead code",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-08T21:27:22Z",
+  "branch": "codex/remote-access"
+}
