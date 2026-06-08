@@ -1,0 +1,12 @@
+{
+  "id": "startup-fda-polling",
+  "title": "Auto-poll Full Disk Access while startup permission setup is visible",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "desktop-frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archived after startup FDA polling implementation and Claude-only review",
+  "createdAt": "2026-06-09T01:40:00+08:00",
+  "branch": "codex/remote-access"
+}

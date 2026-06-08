@@ -1,0 +1,6 @@
+{"file":"/Users/macos/Downloads/Projects/mole-ui/docs/macos-file-manager-fda-permission-coordinator-spec.zh-CN.md","reason":"Polling rules for visible FDA setup/recovery UI"}
+{"file":"src/App.tsx","reason":"Startup Full Disk Access setup modal and startup probe"}
+{"file":"src/lib/full-disk-access.ts","reason":"Shared FDA status/check coordinator"}
+{"file":"src/i18n/locales/en.ts","reason":"Startup permission guidance copy"}
+{"file":"src/i18n/locales/zh.ts","reason":"Startup permission guidance copy"}
+{"file":"src/__tests__/permission-ux.test.ts","reason":"Permission UX wiring regression tests"}
