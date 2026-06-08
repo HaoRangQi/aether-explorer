@@ -1,0 +1,12 @@
+{
+  "id": "audit-macos-permission-ux-completion",
+  "title": "Audit macOS permission UX completion against MoleUI-inspired goal",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T00:00:00Z",
+  "branch": "codex/remote-access"
+}
