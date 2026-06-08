@@ -1,0 +1,13 @@
+{
+  "id": "permission-model-gap-audit",
+  "title": "Audit remaining MoleUI permission model gaps",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-08T21:02:00Z",
+  "completedAt": "2026-06-08T21:12:32Z",
+  "branch": "codex/remote-access"
+}
