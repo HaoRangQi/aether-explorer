@@ -1,0 +1,12 @@
+{
+  "id": "require-signed-entitlements-for-release-candidates",
+  "title": "Require inspectable app entitlements for macOS release-candidate validation",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task and commit CCG metadata only",
+  "createdAt": "2026-06-09T00:00:00Z",
+  "branch": "codex/remote-access"
+}
