@@ -1,0 +1,13 @@
+{
+  "id": "permission-verification-doc-refresh",
+  "title": "Refresh permission verification documentation",
+  "status": "completed",
+  "complexity": "S",
+  "risk": "low",
+  "domain": "docs",
+  "currentPhase": "completed",
+  "nextAction": "Archived after verification",
+  "createdAt": "2026-06-08T19:23:38Z",
+  "completedAt": "2026-06-09T00:00:00+08:00",
+  "branch": "codex/remote-access"
+}
