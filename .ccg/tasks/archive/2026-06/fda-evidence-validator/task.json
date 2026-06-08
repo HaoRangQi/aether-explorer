@@ -1,0 +1,12 @@
+{
+  "id": "fda-evidence-validator",
+  "title": "Add local validation for Full Disk Access acceptance evidence",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "desktop-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-08T21:49:18Z",
+  "branch": "codex/remote-access"
+}
