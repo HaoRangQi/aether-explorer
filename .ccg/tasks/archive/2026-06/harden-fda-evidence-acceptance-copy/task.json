@@ -1,0 +1,12 @@
+{
+  "id": "harden-fda-evidence-acceptance-copy",
+  "title": "Prevent copying non-granted Full Disk Access acceptance evidence",
+  "status": "in_progress",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T01:11:21Z",
+  "branch": "codex/remote-access"
+}
