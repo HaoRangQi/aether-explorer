@@ -1,0 +1,12 @@
+{
+  "id": "audit-fda-clean-user-evidence-readiness",
+  "title": "Audit clean-user Full Disk Access evidence readiness",
+  "status": "in_progress",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "tooling",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T01:21:09Z",
+  "branch": "codex/remote-access"
+}
