@@ -1,0 +1,12 @@
+{
+  "id": "audit-permission-antipattern-guards",
+  "title": "Audit remaining macOS permission anti-pattern guards",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T11:45:00+08:00",
+  "branch": "codex/remote-access"
+}

@@ -9,6 +9,7 @@
   - `com.apple.security.files.downloads.read-write`
   - `com.apple.security.files.bookmarks.app-scope`
 - Do not add Apple Events entitlement or `NSAppleEventsUsageDescription` unless a future task explicitly designs a separate, optional Apple Events feature and its recovery UX.
+- Core copy/move/rename/trash operations must not route through AppleScript/Finder/System Events, `NSOpenPanel`, security-scoped bookmarks, or automatic `tccutil reset`; keep `npm run lint:macos-permissions` guarding these anti-patterns.
 - Keep default Full Disk Access probes limited to TCC paths; do not probe Mail, Safari, Messages, Contacts, Calendars, Photos, Reminders, Desktop, Documents, Downloads, or application data directories for FDA status.
 - FDA recovery may retry the captured protected local operation exactly once after a forced probe reports `granted`; if that retry still fails, treat it as a normal file error and do not reopen or loop the FDA recovery flow.
 - Manual retry from a blocked protected local directory must run a forced FDA probe first; while the probe is still `denied` or `unknown`, do not re-read the protected directory just because the user clicked retry.
