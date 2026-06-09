@@ -18,6 +18,7 @@
 | 构建架构 | `--target universal-apple-darwin` | 一个包覆盖 Apple Silicon 和 Intel，`latest.json` 两个平台指向同一个 updater 包 |
 | 上传策略 | 构建、签名、manifest 齐全后再上传 | 避免远程 release 只出现半包资产 |
 | 签名密钥 | GitHub Secrets 是 CI 真相源，本地 key 只服务应急脚本 | CI 不能依赖某台机器的 shell 环境 |
+| macOS 代码签名 | CI 必须配置 `APPLE_CERTIFICATE` 和 `APPLE_CERTIFICATE_PASSWORD` | `TAURI_SIGNING_PRIVATE_KEY` 只签 updater artifact，不能替代 Developer ID `.app` 签名 |
 | 验收标准 | 命令验收，不靠页面肉眼判断 | GitHub 页面刷新慢，且缺 `latest.json` 时页面看起来也像“有包了” |
 
 不可违反的不变量：
@@ -27,6 +28,7 @@
 - CI 必须 checkout 到发布 tag，且 tag、package、lockfile、Tauri version、Cargo version 五者必须一致。
 - `src-tauri/tauri.conf.json` 的 `bundle.createUpdaterArtifacts` 必须是 `true`。
 - `src-tauri/tauri.conf.json` 的 updater `pubkey` 必须匹配 `TAURI_SIGNING_PRIVATE_KEY`。
+- CI 正式发布必须有 `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`、`APPLE_CERTIFICATE` 和 `APPLE_CERTIFICATE_PASSWORD` secrets；缺少 Apple `.p12` 证书时不能进入打包。
 - Release 缺 `latest.json` 就不算完成，哪怕 `.dmg` 已经上传。
 - Release 缺 `SHA256SUMS` 或 `stable/latest.json` 未同步当前版本，也不算完成。
 
@@ -80,6 +82,25 @@ cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
 任何一步失败都不打 tag。
+
+### 3.1 CI 发布 secret 预检
+
+正式 release workflow 依赖两类签名材料：
+
+- `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：生成 updater `.app.tar.gz.sig`。
+- `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD`：base64 编码的 Developer ID Application `.p12`，用于 macOS `.app` 代码签名和稳定 `TeamIdentifier`。
+
+推 tag 前先确认仓库 secrets 至少包含下面四项：
+
+```bash
+gh secret list -R HaoRangQi/aether-explorer
+```
+
+如果缺少 `APPLE_CERTIFICATE`，release job 会在 `Validate release inputs` 阶段失败并输出：
+
+```text
+missing APPLE_CERTIFICATE secret; updater signing is not macOS app code signing
+```
 
 ### 4. 提交、打 tag、推远程
 
@@ -166,6 +187,7 @@ curl -fsSL "https://github.com/$REPO/releases/download/$TAG/SHA256SUMS" \
 ```bash
 # 前置：gh auth status 正常
 # 前置：~/.tauri/aether-updater.key 存在，且与 tauri.conf.json 的 pubkey 匹配
+# 前置：本机 Keychain 有 Developer ID Application 身份，或导出了 APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD
 
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='私钥密码，没有密码则留空或不设置'
 bash scripts/release.sh
@@ -182,6 +204,8 @@ bash scripts/release.sh
 | CI 日志显示 `Missing script: tauri` | `tauri-action` 默认跑 `npm run tauri`，仓库没有该 script | 直接使用 `npx @tauri-apps/cli build --target universal-apple-darwin` |
 | CI 日志显示 `Missing comment in secret key` | `TAURI_SIGNING_PRIVATE_KEY` secret 为空或内容不是完整私钥 | 用 `gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/aether-updater.key` 重写 secret |
 | CI 日志显示 `Wrong password for that key` | 私钥有密码但 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 不匹配 | 重写 password secret，或更换无密码 key 并同步 pubkey |
+| CI 日志显示 `missing APPLE_CERTIFICATE secret` | 仓库没有 Developer ID Application `.p12` secret | 从 Apple Developer 证书导出 `.p12`，base64 后写入 `APPLE_CERTIFICATE`，并同步 `APPLE_CERTIFICATE_PASSWORD` |
+| CI 日志显示 `Failed to read APPLE_CERTIFICATE as valid .p12` | `.p12` 内容或密码错误 | 重新导出 Developer ID Application 证书，确认 base64 没有被截断并更新密码 secret |
 | CI 日志显示 version 不匹配 | tag、`package.json`、`package-lock.json`、`tauri.conf.json`、`Cargo.toml` 任一不一致 | 修四个版本源后重新提交并打新 tag，不要复用错误 tag |
 | `latest.json.version` 还是旧版本 | tag、Tauri version、manifest 生成参数不一致 | 重新核对 `RELEASE_TAG` 和四个版本源，不要手改 manifest 凑数 |
 | Release 缺 `SHA256SUMS` | 上传或 staging 校验步骤失败 | 重新跑 release workflow；不要在本地随手生成与远程资产不匹配的 checksum |

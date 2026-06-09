@@ -1,0 +1,12 @@
+{
+  "id": "release-v0-4-10",
+  "title": "发布 Aether Explorer v0.4.10",
+  "status": "blocked",
+  "complexity": "L",
+  "risk": "high",
+  "domain": "release",
+  "currentPhase": "release",
+  "nextAction": "配置 APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD secrets 后重跑 release.yml",
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "branch": "codex/remote-access"
+}
