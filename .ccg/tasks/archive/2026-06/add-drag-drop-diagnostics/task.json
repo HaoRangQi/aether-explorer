@@ -1,0 +1,12 @@
+{
+  "id": "add-drag-drop-diagnostics",
+  "title": "Add persistent drag/drop diagnostics",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archived after verification",
+  "createdAt": "2026-06-09T21:20:00+08:00",
+  "branch": "codex/remote-access"
+}
