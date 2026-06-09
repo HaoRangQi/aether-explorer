@@ -1,0 +1,8 @@
+{"path":"/Users/macos/Downloads/Projects/mole-ui/docs/README.zh-CN.md","reason":"FDA model entry point and no repeated authorization baseline"}
+{"path":"/Users/macos/Downloads/Projects/mole-ui/docs/macos-file-manager-permission-implementation.zh-CN.md","reason":"PermissionCoordinator forced probe and captured retry rules"}
+{"path":"/Users/macos/Downloads/Projects/mole-ui/docs/macos-file-manager-fda-clean-machine-verification.zh-CN.md","reason":"External clean-user acceptance requirement"}
+{"path":"src/components/explorer/useExplorerDirectoryData.ts","reason":"Manual and automatic protected directory recovery implementation"}
+{"path":"src/__tests__/explorer-permission-auto-retry.test.tsx","reason":"Behavior coverage for manual retry forced probe and captured auto retry"}
+{"path":"src/__tests__/permission-ux.test.ts","reason":"Source-level macOS permission UX guardrails"}
+{"path":"docs/SMOKE_TEST.md","reason":"Manual FDA acceptance checklist"}
+{"path":"docs/TEST_PLAN.md","reason":"Automated test coverage documentation"}
