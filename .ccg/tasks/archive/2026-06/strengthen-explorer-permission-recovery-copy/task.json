@@ -1,0 +1,12 @@
+{
+  "id": "strengthen-explorer-permission-recovery-copy",
+  "title": "Strengthen Explorer permission recovery copy for FDA and stable app identity",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "low",
+  "domain": "frontend-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T00:00:00Z",
+  "branch": "codex/remote-access"
+}

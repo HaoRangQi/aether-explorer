@@ -1,0 +1,6 @@
+{"path":"src/i18n/locales/en.ts","reason":"English Explorer FDA recovery copy"}
+{"path":"src/i18n/locales/zh.ts","reason":"Chinese Explorer FDA recovery copy"}
+{"path":"src/components/explorer/ExplorerShell.tsx","reason":"Explorer permission recovery panel fallback copy"}
+{"path":"src/__tests__/permission-ux.test.ts","reason":"Source-level guardrail for actionable FDA recovery copy"}
+{"path":"docs/SMOKE_TEST.md","reason":"Updated Vitest count"}
+{"path":"docs/TEST_PLAN.md","reason":"Updated Vitest count"}
