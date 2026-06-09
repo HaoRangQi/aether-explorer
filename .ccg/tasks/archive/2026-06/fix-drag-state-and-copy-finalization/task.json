@@ -1,0 +1,12 @@
+{
+  "id": "fix-drag-state-and-copy-finalization",
+  "title": "Fix drag state cleanup and copy finalization",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive CCG task",
+  "createdAt": "2026-06-09T20:00:00+08:00",
+  "branch": "codex/remote-access"
+}
