@@ -1,0 +1,12 @@
+{
+  "id": "add-full-drag-transfer-tracing",
+  "title": "Add full-chain drag and transfer tracing",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T21:57:15+08:00",
+  "branch": "codex/remote-access"
+}

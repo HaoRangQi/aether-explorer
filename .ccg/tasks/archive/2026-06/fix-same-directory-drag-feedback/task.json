@@ -1,0 +1,12 @@
+{
+  "id": "fix-same-directory-drag-feedback",
+  "title": "Fix misleading same-directory drag feedback",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T22:35:00+08:00",
+  "branch": "codex/remote-access"
+}
