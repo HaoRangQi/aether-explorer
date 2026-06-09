@@ -1,0 +1,12 @@
+{
+  "id": "remove-drag-same-directory-toast",
+  "title": "Remove misleading drag same-directory toast",
+  "status": "completed",
+  "complexity": "S",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T22:48:00+08:00",
+  "branch": "codex/remote-access"
+}
