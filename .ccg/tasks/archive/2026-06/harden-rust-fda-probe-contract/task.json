@@ -1,0 +1,12 @@
+{
+  "id": "harden-rust-fda-probe-contract",
+  "title": "Harden Rust Full Disk Access probe contract",
+  "status": "completed",
+  "complexity": "S",
+  "risk": "medium",
+  "domain": "backend",
+  "currentPhase": "completed",
+  "nextAction": "Archive CCG task metadata",
+  "createdAt": "2026-06-09T00:00:00+08:00",
+  "branch": "codex/remote-access"
+}
