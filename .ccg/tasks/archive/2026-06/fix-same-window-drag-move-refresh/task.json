@@ -1,0 +1,12 @@
+{
+  "id": "fix-same-window-drag-move-refresh",
+  "title": "Fix same-window drag move semantics and refresh",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive CCG task",
+  "createdAt": "2026-06-09T20:05:00+08:00",
+  "branch": "codex/remote-access"
+}
