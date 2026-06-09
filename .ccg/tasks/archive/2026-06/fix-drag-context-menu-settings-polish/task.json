@@ -1,0 +1,12 @@
+{
+  "id": "fix-drag-context-menu-settings-polish",
+  "title": "Fix drag, context menu actions, paste txt, permission layout, and default font",
+  "status": "completed",
+  "complexity": "L",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-09T07:53:51Z",
+  "branch": "codex/remote-access"
+}
