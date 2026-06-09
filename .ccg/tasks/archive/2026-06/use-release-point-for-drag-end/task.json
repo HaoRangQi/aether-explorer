@@ -1,0 +1,12 @@
+{
+  "id": "use-release-point-for-drag-end",
+  "title": "Use highlighted folder for drag-end fallback",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T23:18:00+08:00",
+  "branch": "codex/remote-access"
+}
