@@ -1,0 +1,12 @@
+{
+  "id": "rebuild-production-bundle",
+  "title": "Rebuild local production bundle",
+  "status": "completed",
+  "complexity": "S",
+  "risk": "medium",
+  "domain": "release",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-09T09:23:13Z",
+  "branch": "codex/remote-access"
+}
