@@ -1,0 +1,12 @@
+{
+  "id": "surface-explorer-system-settings-failures",
+  "title": "Surface Explorer System Settings failures in FDA recovery",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive CCG task metadata",
+  "createdAt": "2026-06-09T11:25:00+08:00",
+  "branch": "codex/remote-access"
+}
