@@ -1,0 +1,12 @@
+{
+  "id": "dev-skip-startup-fda",
+  "title": "Skip startup Full Disk Access setup in development only",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-09T17:00:00Z",
+  "branch": "codex/remote-access"
+}
