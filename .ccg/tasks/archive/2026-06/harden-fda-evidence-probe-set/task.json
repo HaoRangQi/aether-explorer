@@ -1,0 +1,12 @@
+{
+  "id": "harden-fda-evidence-probe-set",
+  "title": "Harden FDA evidence probe set validation",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive CCG task metadata",
+  "createdAt": "2026-06-09T00:00:00+08:00",
+  "branch": "codex/remote-access"
+}
