@@ -1,0 +1,8 @@
+{"path":"src/components/explorer/useExplorerDirectoryData.ts","reason":"Hardcoded protected-directory retry blocked message source"}
+{"path":"src/i18n/locales/en.ts","reason":"English localized FDA recovery detail"}
+{"path":"src/i18n/locales/zh.ts","reason":"Chinese localized FDA recovery detail"}
+{"path":"scripts/check-i18n-coverage.mjs","reason":"i18n regression gate"}
+{"path":"src/__tests__/permission-ux.test.ts","reason":"Source-level macOS permission UX guardrail"}
+{"path":"docs/SMOKE_TEST.md","reason":"Updated verification count"}
+{"path":"docs/TEST_PLAN.md","reason":"Updated Vitest count"}
+{"path":"docs/RELEASE_AUDIT.md","reason":"Updated i18n coverage count"}
