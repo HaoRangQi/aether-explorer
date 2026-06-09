@@ -1,0 +1,12 @@
+{
+  "id": "debug-internal-drag-drop-noop",
+  "title": "Debug internal drag/drop doing nothing in release app",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive CCG task",
+  "createdAt": "2026-06-09T20:58:50+08:00",
+  "branch": "codex/remote-access"
+}
