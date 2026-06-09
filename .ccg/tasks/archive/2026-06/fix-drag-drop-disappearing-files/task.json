@@ -1,0 +1,12 @@
+{
+  "id": "fix-drag-drop-disappearing-files",
+  "title": "Fix drag-and-drop files disappearing",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "frontend-backend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-09T09:05:19Z",
+  "branch": "codex/remote-access"
+}
