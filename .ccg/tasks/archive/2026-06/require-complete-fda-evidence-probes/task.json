@@ -1,0 +1,12 @@
+{
+  "id": "require-complete-fda-evidence-probes",
+  "title": "Require complete default FDA probe set in evidence validators",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive CCG task metadata",
+  "createdAt": "2026-06-09T00:00:00+08:00",
+  "branch": "codex/remote-access"
+}
