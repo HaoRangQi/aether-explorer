@@ -1,0 +1,12 @@
+{
+  "id": "fix-navigation-scroll-and-drag-safety",
+  "title": "Fix directory navigation scroll reset and drag safety",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T09:30:00Z",
+  "branch": "codex/remote-access"
+}
