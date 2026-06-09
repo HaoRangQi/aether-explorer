@@ -1,0 +1,12 @@
+{
+  "id": "package-release-build-effect-check",
+  "title": "Build packaged release app for effect check",
+  "status": "completed",
+  "complexity": "S",
+  "risk": "medium",
+  "domain": "release",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T19:40:00+08:00",
+  "branch": "codex/remote-access"
+}
