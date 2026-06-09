@@ -1,0 +1,12 @@
+{
+  "id": "code-permission-completion-audit",
+  "title": "Audit code completion for macOS permission UX",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T12:15:24+08:00",
+  "branch": "codex/remote-access"
+}
