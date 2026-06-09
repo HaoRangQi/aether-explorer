@@ -1,0 +1,12 @@
+{
+  "id": "test-gemini-call",
+  "title": "Verify CCG Gemini backend invocation",
+  "status": "in_progress",
+  "complexity": "S",
+  "risk": "low",
+  "domain": "tooling",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T01:07:28Z",
+  "branch": "codex/remote-access"
+}
