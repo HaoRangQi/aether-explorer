@@ -1,0 +1,12 @@
+{
+  "id": "localize-shared-fda-recovery-fallbacks",
+  "title": "Localize shared Full Disk Access recovery fallback copy",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "low",
+  "domain": "frontend-permissions",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T00:00:00Z",
+  "branch": "codex/remote-access"
+}

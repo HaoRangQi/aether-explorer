@@ -1,0 +1,9 @@
+{"path":"src/lib/operation-permission-error.ts","reason":"Shared file operation FDA recovery formatter"}
+{"path":"src/components/explorer/useExplorerInspector.ts","reason":"Directory size FDA recovery formatter"}
+{"path":"scripts/check-i18n-coverage.mjs","reason":"i18n coverage gate extended for shared FDA recovery usages"}
+{"path":"src/__tests__/permission-ux.test.ts","reason":"Source-level permission UX guardrails"}
+{"path":"src/i18n/locales/en.ts","reason":"English FDA recovery locale strings"}
+{"path":"src/i18n/locales/zh.ts","reason":"Chinese FDA recovery locale strings"}
+{"path":"docs/SMOKE_TEST.md","reason":"Updated test and i18n count"}
+{"path":"docs/TEST_PLAN.md","reason":"Updated Vitest count"}
+{"path":"docs/RELEASE_AUDIT.md","reason":"Updated i18n coverage count"}
