@@ -1,0 +1,12 @@
+{
+  "id": "review-drag-disappearing-safety",
+  "title": "Review drag disappearing safety after copy-default fix",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T19:30:00+08:00",
+  "branch": "codex/remote-access"
+}
