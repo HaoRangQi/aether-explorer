@@ -1,0 +1,13 @@
+{
+  "id": "build-local-production-bundle",
+  "title": "Build local production macOS bundle for permission UX check",
+  "status": "completed",
+  "complexity": "S",
+  "risk": "low",
+  "domain": "release",
+  "currentPhase": "completed",
+  "nextAction": "Archived after local production bundle validation",
+  "createdAt": "2026-06-09T15:02:48+08:00",
+  "completedAt": "2026-06-09T15:12:00+08:00",
+  "branch": "codex/remote-access"
+}
