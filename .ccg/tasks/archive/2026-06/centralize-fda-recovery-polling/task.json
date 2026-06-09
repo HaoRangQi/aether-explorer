@@ -1,0 +1,12 @@
+{
+  "id": "centralize-fda-recovery-polling",
+  "title": "Centralize Full Disk Access recovery polling",
+  "status": "in_progress",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task metadata",
+  "createdAt": "2026-06-09T01:29:41Z",
+  "branch": "codex/remote-access"
+}
