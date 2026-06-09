@@ -1,0 +1,12 @@
+{
+  "id": "fix-paste-text-clipboard",
+  "title": "Fix paste-as-txt clipboard read and menu enabled state",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend-backend",
+  "currentPhase": "completed",
+  "nextAction": "Archive task",
+  "createdAt": "2026-06-09T17:20:00Z",
+  "branch": "codex/remote-access"
+}
