@@ -1,0 +1,6 @@
+{"path":"/Users/macos/Downloads/Projects/mole-ui/docs/README.zh-CN.md","reason":"MoleUI FDA model entry point and acceptance checklist"}
+{"path":"/Users/macos/Downloads/Projects/mole-ui/docs/macos-file-manager-permission-implementation.zh-CN.md","reason":"PermissionCoordinator polling and single captured retry requirements"}
+{"path":"/Users/macos/Downloads/Projects/mole-ui/docs/macos-file-manager-fda-clean-machine-verification.zh-CN.md","reason":"Clean-user FDA verification requirements"}
+{"path":"src/components/explorer/useExplorerDirectoryData.ts","reason":"Protected local directory load and FDA recovery retry implementation"}
+{"path":"src/__tests__/explorer-permission-auto-retry.test.tsx","reason":"Behavior coverage for captured protected directory retry"}
+{"path":"src/__tests__/permission-ux.test.ts","reason":"Source-level guardrails for macOS permission UX wiring"}
