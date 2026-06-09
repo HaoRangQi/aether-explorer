@@ -1,0 +1,12 @@
+{
+  "id": "make-folder-drop-target-obvious",
+  "title": "让文件夹拖拽目标高亮明显并修正释放点解析",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "归档任务记录",
+  "createdAt": "2026-06-09T15:26:14Z",
+  "branch": "codex/remote-access"
+}

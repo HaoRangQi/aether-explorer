@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { Search, Folder, Palette, Image as ImageIcon, ChevronRight, ChevronLeft, Grid2X2, List, Columns, Info, Edit3, Copy, FolderArchive, Trash2, Edit2, Upload, Tag, MoreHorizontal, Star, Layers3, Check, Eye, EyeOff, PanelRight, PanelRightClose, ChevronsUp, ChevronsDown, Shield, X, RefreshCw, History, AppWindowMac } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { confirm } from '@tauri-apps/plugin-dialog';
-import { getHomeDir, getFileInfo, getAppIcon, estimateDirsSizeFast, previewMoveFileConflicts, startMoveFilesTask, moveFile, moveFiles, getFileClipboard, clearFileClipboard } from '../api/filesystem';
+import { getHomeDir, getFileInfo, getAppIcon, estimateDirsSizeFast, previewMoveFileConflicts, startMoveFilesTask, moveFile, moveFiles, getFileClipboard, clearFileClipboard, hasClipboardText } from '../api/filesystem';
 import type { MoveConflictStrategy, TransferTaskSnapshot } from '../api/filesystem';
 import { ViewMode, ThemeSettings, FileItem, DisplayMode, GroupBy, OperationEffect } from '../types';
 import { QUICK_ACCESS } from '../constants';
@@ -50,9 +50,11 @@ import {
 import { getCachedAssetUrl } from '../lib/asset-url-cache';
 import { formatMediaDuration } from '../lib/media-metadata';
 import { saveOperationSession } from '../lib/operation-history';
+import { formatOperationPermissionError } from '../lib/operation-permission-error';
 import { currentWindowLabel, safeCurrentWindow, safeEmitTo, safeInvoke, safeListen } from '../lib/tauri-runtime';
 import {
   buildMoveEffects,
+  buildMoveRefreshPaths,
   buildMoveTaskDedupeKey,
   buildTemplateValues,
   canUndoTransferMove,
@@ -109,8 +111,22 @@ import type {
 import type { HashDialogState } from './explorer/preview-panel-types';
 import { LIST_MODIFIED_COL_BY_DENSITY } from './explorer/view-constants';
 
+const dragDebugBuffer: string[] = [];
+let dragDebugSequence = 0;
+
+const describeDebugPaths = (paths: string[]) => (paths.length ? paths.join('|') : '(none)');
+
 const logDragDebug = (message: string) => {
-  safeInvoke('debug_log', { message }).catch(() => {});
+  const entry = `seq=${++dragDebugSequence} ${message}`;
+  dragDebugBuffer.push(entry);
+  if (dragDebugBuffer.length > 300) {
+    dragDebugBuffer.splice(0, dragDebugBuffer.length - 300);
+  }
+  if (typeof window !== 'undefined') {
+    (window as Window & { __aetherDragDebug?: string[] }).__aetherDragDebug = dragDebugBuffer;
+    console.info('[AetherDrag]', entry);
+  }
+  safeInvoke('debug_log', { message: entry }).catch(() => {});
 };
 
 export default function ExplorerView({ view, isActive = false, currentTabLabelKey, initialPath, remoteConnections = [], theme, selectedFileIds, onSelectFiles, onSelectionCountChange, onStartTransfer, onOpenTab, onCreateWindow, favorites, onToggleFavorite, fileTags, onFileTagsChange, recentItems, onRecordRecent, onClearRecent, onThemeChange, onViewChange, onTitleChange, onPathChange }: ExplorerViewProps) {
@@ -156,6 +172,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const createEntryWindowLockRef = useRef(false);
   const createEntryWindowLockTimerRef = useRef<number | null>(null);
   const [hasFileClipboard, setHasFileClipboard] = useState(false);
+  const [hasTextClipboard, setHasTextClipboard] = useState(false);
   const [incomingFileDrag, setIncomingFileDrag] = useState<IncomingFileDrag | null>(null);
   const [isReceivingExternalDrag, setIsReceivingExternalDrag] = useState(false);
   const submenuCloseTimerRef = useRef<number | null>(null);
@@ -409,6 +426,17 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
   };
 
+  const refreshTextClipboardState = async () => {
+    try {
+      const hasText = await hasClipboardText();
+      setHasTextClipboard(hasText);
+      return hasText;
+    } catch {
+      setHasTextClipboard(false);
+      return false;
+    }
+  };
+
   const clearFileClipboardState = async () => {
     try {
       await clearFileClipboard();
@@ -466,7 +494,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   showFeedbackRef.current = showFeedback;
 
   const {
-    approveProtectedRoot,
     columnFilesCache,
     columnLoadErrors,
     directoryErrorKind,
@@ -474,8 +501,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     files,
     loadError,
     loading,
-    needsProtectedPathConsent,
-    protectedRoot,
     recentFiles,
     refreshCurrentDir: refreshDirectoryData,
     resetColumnState,
@@ -660,20 +685,32 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   useEffect(() => {
     if (!isActive) return;
     void refreshFileClipboardState();
-    const handleFocus = () => { void refreshFileClipboardState(); };
+    void refreshTextClipboardState();
+    const handleFocus = () => {
+      void refreshFileClipboardState();
+      void refreshTextClipboardState();
+    };
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
   }, [isActive]);
 
+  const resetDirectoryScrollState = useCallback(() => {
+    setFileListOffset(0);
+    setScrollTop(0);
+    containerRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    scrollContainerRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [setFileListOffset, setScrollTop]);
+
   const navigateToPath = useCallback((path: string, options?: { replace?: boolean }) => {
     const result = navigateHistory(currentPath, path, navigationHistory, options);
     if (!result.changed) return;
+    resetDirectoryScrollState();
     setNavigationHistory(result.history);
     setCurrentPath(result.path);
     resetColumnState();
     setSearchQuery('');
     onSelectFiles([]);
-  }, [currentPath, navigationHistory, onSelectFiles, resetColumnState]);
+  }, [currentPath, navigationHistory, onSelectFiles, resetColumnState, resetDirectoryScrollState]);
   navigateToPathRef.current = navigateToPath;
   const {
     handleContainerMouseDown,
@@ -698,11 +735,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   currentPathRef.current = currentPath;
 
   const restoreHistoryPath = useCallback((path: string) => {
+    resetDirectoryScrollState();
     setCurrentPath(path);
     resetColumnState();
     setSearchQuery('');
     onSelectFiles([]);
-  }, [onSelectFiles, resetColumnState]);
+  }, [onSelectFiles, resetColumnState, resetDirectoryScrollState]);
 
   const resetTabTransientState = useCallback(() => {
     setSearchQuery('');
@@ -720,12 +758,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setPulseFileId(null);
     setRenamingFile(null);
     setRenameInput('');
-    setFileListOffset(0);
+    resetDirectoryScrollState();
     onSelectFiles([]);
-    containerRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-    scrollContainerRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-    setScrollTop(0);
-  }, [onSelectFiles, resetColumnState, resetSelectionInteraction, setFileListOffset, setScrollTop]);
+  }, [onSelectFiles, resetColumnState, resetDirectoryScrollState, resetSelectionInteraction]);
 
   const refreshCurrentDir = useCallback(async (fullRefresh = false, targetPath?: string) => {
     if (fullRefresh && (!targetPath || targetPath === currentPath)) {
@@ -947,7 +982,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         transferId: payload.transferId,
         previewName: payload.previewName || `${payload.paths.length} 个项目`,
         count: payload.count ?? payload.paths.length,
-        cut: payload.cut ?? true,
+        cut: payload.cut ?? false,
         shownAt: Date.now(),
       });
       incomingDragTimerRef.current = window.setTimeout(() => {
@@ -1089,7 +1124,9 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     executeMoveFilesRef,
     finishSharedFileDrag: (...args) => finishSharedFileDragRef.current(...args),
     getActionDirectory,
+    getProtectedRootForPath,
     logDragDebug,
+    moveConflictDialog,
     onStartTransfer,
     recordManualOperationHistory,
     refreshCurrentDirRef,
@@ -1151,8 +1188,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         copiedCrossDevice,
       } satisfies FileDropAcceptedPayload);
     } catch (err) {
+      const error = await formatOperationPermissionError({
+        error: err,
+        getProtectedRootForPath,
+        pathHints: [getActionDirectory(), ...drag.paths],
+        t,
+      });
       showFeedback(t('messages.crossWindowReceiveFailed', {
-        error: formatAppError(err),
+        error,
         defaultValue: '接收跨窗口文件失败：{{error}}',
       }));
     }
@@ -1167,17 +1210,36 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     conflictStrategy: MoveConflictStrategy,
     options: FileOperationOptions = {},
   ) => {
+    const paths = filesToMove.map(file => file.path);
+    logDragDebug([
+      'moveTaskDialog enter',
+      `count=${filesToMove.length}`,
+      `targetFolderId=${targetFolder.id}`,
+      `targetPath=${targetFolder.path}`,
+      `conflictStrategy=${conflictStrategy}`,
+      `skipLargeBatchConfirm=${options.skipLargeBatchConfirm ? 'yes' : 'no'}`,
+      `clearClipboardOnSuccess=${options.clearClipboardOnSuccess ? 'yes' : 'no'}`,
+      `clearDragPayloadOnSuccess=${options.clearDragPayloadOnSuccess ? 'yes' : 'no'}`,
+      `paths=${describeDebugPaths(paths)}`,
+    ].join(' '));
     if (filesToMove.some(file => isRemotePath(file.path)) || isRemotePath(targetFolder.path)) {
+      logDragDebug(`moveTaskDialog abort=remote targetPath=${targetFolder.path} paths=${describeDebugPaths(paths)}`);
       showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
       return false;
     }
     if (!options.skipLargeBatchConfirm) {
+      logDragDebug(`moveTaskDialog largeBatchConfirm count=${filesToMove.length}`);
       const shouldContinue = await confirmLargeBatchOperation(filesToMove.length);
-      if (!shouldContinue) return false;
+      logDragDebug(`moveTaskDialog largeBatchConfirm result=${shouldContinue ? 'continue' : 'cancel'} count=${filesToMove.length}`);
+      if (!shouldContinue) {
+        logDragDebug(`moveTaskDialog abort=large-batch-cancel count=${filesToMove.length}`);
+        return false;
+      }
     }
 
-    const paths = filesToMove.map(file => file.path);
+    const moveRefreshPaths = buildMoveRefreshPaths(paths, targetFolder.path);
     const moveTaskKey = buildMoveTaskDedupeKey(paths, targetFolder.path, conflictStrategy);
+    logDragDebug(`moveTaskDialog prepared key=${moveTaskKey} refreshPaths=${describeDebugPaths(moveRefreshPaths)}`);
     const now = Date.now();
     const recentStarts = recentMoveTaskStartsRef.current;
     for (const [key, startedAt] of recentStarts.entries()) {
@@ -1196,10 +1258,14 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     }
 
     pendingMoveTaskStartsRef.current.add(moveTaskKey);
+    logDragDebug(`moveTaskPendingAdded key=${moveTaskKey} pendingCount=${pendingMoveTaskStartsRef.current.size}`);
     try {
       if (conflictStrategy === 'abort') {
+        logDragDebug(`moveTaskConflictPreview start targetPath=${targetFolder.path} paths=${describeDebugPaths(paths)}`);
         const conflicts = await previewMoveFileConflicts(paths, targetFolder.path);
+        logDragDebug(`moveTaskConflictPreview result count=${conflicts.length} targetPath=${targetFolder.path}`);
         if (conflicts.length > 0) {
+          logDragDebug(`moveTaskConflictDialog open count=${conflicts.length} targetPath=${targetFolder.path} paths=${describeDebugPaths(paths)}`);
           setMoveConflictDialog({
             filesToMove,
             targetFolder,
@@ -1213,6 +1279,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         }
       }
 
+      logDragDebug(`moveTaskStartInvoke targetPath=${targetFolder.path} count=${paths.length} conflictStrategy=${conflictStrategy} paths=${describeDebugPaths(paths)}`);
       const taskId = await startMoveFilesTask(paths, targetFolder.path, conflictStrategy);
       recentStarts.set(moveTaskKey, Date.now());
       // 避免 map 长期增长，保留最新一批即可。
@@ -1228,19 +1295,24 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         success: 'messages.moveCompleted',
         failed: 'messages.moveFailed',
         failedDefaultValue: '移动失败：{{error}}',
+        failurePathHints: [targetFolder.path, ...paths],
         onCompleted: async task => {
+          logDragDebug(`moveTaskOnCompleted taskId=${task?.id ?? '(none)'} moved=${task?.moved ?? 0} copiedCrossDevice=${task?.copiedCrossDevice ?? 0} failed=${task?.failed ?? 0} clearClipboard=${options.clearClipboardOnSuccess ? 'yes' : 'no'} clearDrag=${options.clearDragPayloadOnSuccess ? 'yes' : 'no'}`);
           if (task && task.failed === 0) {
             const completed = task.moved + task.copiedCrossDevice;
             if (options.clearClipboardOnSuccess) {
+              logDragDebug(`moveTaskOnCompleted clearClipboard taskId=${task.id}`);
               await clearFileClipboardState();
             }
             if (options.clearDragPayloadOnSuccess && completed > 0) {
+              logDragDebug(`moveTaskOnCompleted clearDragPayload taskId=${task.id} completed=${completed}`);
               finishSharedFileDrag();
             }
           }
           showMoveTaskCompletedFeedback(task, paths.length);
         },
         onFinished: task => {
+          logDragDebug(`moveTaskOnFinished taskId=${task.id} status=${task.status} moved=${task.moved} copiedCrossDevice=${task.copiedCrossDevice} failed=${task.failed} conflicts=${task.conflicts} skipped=${task.skipped}`);
           if (task.status === 'cancelled' && options.clearDragPayloadOnSuccess) {
             finishSharedFileDrag();
           }
@@ -1251,7 +1323,10 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           return false;
         },
         onSettled: async task => {
+          logDragDebug(`moveTaskSettledRefresh start taskId=${task.id} status=${task.status} refreshPaths=${describeDebugPaths(moveRefreshPaths)}`);
+          await Promise.all(moveRefreshPaths.map(path => refreshCurrentDirRef.current(false, path)));
           const undoable = canUndoTransferMove(task, paths.length);
+          logDragDebug(`moveTaskSettledRefresh done taskId=${task.id} status=${task.status} undoable=${undoable ? 'yes' : 'no'} refreshPaths=${describeDebugPaths(moveRefreshPaths)}`);
           await recordManualOperationHistory({
             category: 'move',
             title: '移动',
@@ -1268,8 +1343,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           });
         },
       });
+    } catch (error) {
+      logDragDebug(`moveTaskDialog error key=${moveTaskKey} targetPath=${targetFolder.path} error=${formatAppError(error)}`);
+      throw error;
     } finally {
       pendingMoveTaskStartsRef.current.delete(moveTaskKey);
+      logDragDebug(`moveTaskPendingRemoved key=${moveTaskKey} pendingCount=${pendingMoveTaskStartsRef.current.size}`);
     }
     return true;
   };
@@ -1376,7 +1455,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     setContextMenu(null);
   };
 
-  moveDraggedFilesRef.current = moveDraggedFiles;
+  moveDraggedFilesRef.current = (draggedFileId, targetFolderId) =>
+    moveDraggedFiles(draggedFileId, targetFolderId, selectedFileIdsRef.current, findFileByIdRef.current);
 
   const executeMoveFiles = async (
     filesToMove: FileItem[],
@@ -1441,6 +1521,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
 
       onSelectFiles([]);
       refreshCurrentDir();
+      void Promise.all(buildMoveRefreshPaths(filesToMove.map(file => file.path), targetFolder.path)
+        .map(path => refreshCurrentDir(false, path)));
 
       if (result.failed.length === 0 && skipped === 0 && result.moved.length > 0 && !hasCrossDeviceCopies) {
         showFeedback(t('messages.movedToFolder', { count: result.moved.length, folder: targetFolder.name }));
@@ -1472,7 +1554,13 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       return summary;
     } catch (err) {
       logDragDebug(`moveError error=${formatAppError(err)}`);
-      showFeedback(t('messages.moveFailed', { error: formatAppError(err) }));
+      const error = await formatOperationPermissionError({
+        error: err,
+        getProtectedRootForPath,
+        pathHints: [targetFolder.path, ...filesToMove.map(file => file.path)],
+        t,
+      });
+      showFeedback(t('messages.moveFailed', { error }));
     }
     return { ...emptySummary, started: true, failed: filesToMove.length };
   };
@@ -1739,6 +1827,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     favorites,
     files,
     getActionDirectory,
+    getProtectedRootForPath,
     hashDialog,
     homeDir,
     importExternalPaths,
@@ -1826,16 +1915,26 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     typeaheadQuery,
   });
 
+  const copyPayloadPathsToDirectory = useCallback(async (paths: string[], targetDir: string) => {
+    logDragDebug(`copyPayloadPathsToDirectory targetDir=${targetDir} paths=${paths.join('|') || '(none)'}`);
+    await executeCopyFiles(makeFileItemsFromPaths(paths), makeFolderItemFromPath(targetDir), 'abort');
+  }, [executeCopyFiles]);
+
+  const copyPayloadPathsToFolder = useCallback(async (paths: string[], targetFolder: FileItem) => {
+    logDragDebug(`copyPayloadPathsToFolder targetFolderId=${targetFolder.id} targetPath=${targetFolder.path} paths=${paths.join('|') || '(none)'}`);
+    await executeCopyFiles(makeFileItemsFromPaths(paths), targetFolder, 'abort');
+  }, [executeCopyFiles]);
+
   const movePayloadPathsToDirectory = useCallback(async (paths: string[], targetDir: string) => {
+    logDragDebug(`movePayloadPathsToDirectory targetDir=${targetDir} paths=${paths.join('|') || '(none)'}`);
     await executeMoveFilesRef.current(makeFileItemsFromPaths(paths), makeFolderItemFromPath(targetDir), 'abort', {
-      clearDragPayloadOnSuccess: true,
       useTransferTask: true,
     });
   }, []);
 
   const movePayloadPathsToFolder = useCallback(async (paths: string[], targetFolder: FileItem) => {
+    logDragDebug(`movePayloadPathsToFolder targetFolderId=${targetFolder.id} targetPath=${targetFolder.path} paths=${paths.join('|') || '(none)'}`);
     await executeMoveFilesRef.current(makeFileItemsFromPaths(paths), targetFolder, 'abort', {
-      clearDragPayloadOnSuccess: true,
       useTransferTask: true,
     });
   }, []);
@@ -1868,6 +1967,8 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     moveDraggedFiles: (...args) => moveDraggedFilesRef.current(...args),
     movePayloadPathsToDirectory,
     movePayloadPathsToFolder,
+    copyPayloadPathsToDirectory,
+    copyPayloadPathsToFolder,
     recentExternalDropRef,
     selectedFileIds,
     selectedFiles,
@@ -1883,9 +1984,11 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
   const {
     handleNewFile,
     handleNewFolder,
+    handlePasteAsTextFile,
     handleQuickCreateClick,
     handleSetCurrentAsHome,
     openCurrentInNewTab,
+    openCurrentInNewWindow,
   } = useExplorerCreateEntries({
     contextMenuTargetDir: contextMenu?.targetDir,
     createEntryClickTimerRef,
@@ -1941,6 +2044,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     currentPath,
     favorites,
     getFileTypeLabel,
+    getProtectedRootForPath,
     getTagsForItem,
     isLocalFilesystemPath,
     lastSelectedFile,
@@ -1982,9 +2086,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     handleNewFile,
     handleNewFolder,
     handleOpenFile,
+    handleOpenInNewTab: openCurrentInNewTab,
+    handleOpenInNewWindow: openCurrentInNewWindow,
     handleOpenTerminal,
     handleOpenWith,
     handleOpenWithOther,
+    handlePasteAsTextFile,
     handlePasteFromClipboard,
     handleQuickLook,
     handleRenameStart,
@@ -1997,6 +2104,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
     onSelectFiles,
     refreshCurrentDir,
     refreshFileClipboardState,
+    refreshTextClipboardState,
     selectedFileIds,
     setContextMenu,
     setContextMenuSize,
@@ -2015,7 +2123,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
       <ExplorerShell
         activeDropdown={activeDropdown}
         allColumns={allColumns}
-        approveProtectedRoot={approveProtectedRoot}
         areAllTagged={areAllTagged}
         baseView={baseView}
         breadcrumbSegments={breadcrumbSegments}
@@ -2032,7 +2139,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         displayedFiles={displayedFiles}
         dropdownRef={dropdownRef}
         favorites={favorites}
-        favoritesVirtualPath={FAVORITES_VIRTUAL_PATH}
         fileListRef={fileListRef}
         focusCurrentWindow={focusCurrentWindow}
         getActionDirectory={getActionDirectory}
@@ -2082,7 +2188,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         navigateForward={navigateForward}
         navigateToPath={navigateToPath}
         navigationHistory={navigationHistory}
-        needsProtectedPathConsent={needsProtectedPathConsent}
         onClearRecent={onClearRecent}
         onSelectFiles={onSelectFiles}
         onStartTransfer={onStartTransfer}
@@ -2091,7 +2196,6 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
         openCurrentInNewTab={openCurrentInNewTab}
         pathInput={pathInput}
         pathScrollRef={pathScrollRef}
-        protectedRoot={protectedRoot}
         recentItems={recentItems}
         refreshCurrentDir={refreshCurrentDir}
         remotePathParts={remotePathParts}
@@ -2210,9 +2314,12 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           handleNewFile={handleNewFile}
           handleNewFolder={handleNewFolder}
           handleOpenFile={handleOpenFile}
+          handleOpenInNewTab={openCurrentInNewTab}
+          handleOpenInNewWindow={openCurrentInNewWindow}
           handleOpenTerminal={handleOpenTerminal}
           handleOpenWith={handleOpenWith}
           handleOpenWithOther={handleOpenWithOther}
+          handlePasteAsTextFile={handlePasteAsTextFile}
           handlePasteFromClipboard={handlePasteFromClipboard}
           handleQuickLook={handleQuickLook}
           handleRenameStart={handleRenameStart}
@@ -2222,6 +2329,7 @@ export default function ExplorerView({ view, isActive = false, currentTabLabelKe
           handleSort={handleSort}
           handleToggleFavoriteForItems={handleToggleFavoriteForItems}
           hasFileClipboard={hasFileClipboard}
+          hasTextClipboard={hasTextClipboard}
           isAdminContextMenuEmpty={isAdminContextMenuEmpty}
           liquidGlassEnabled={liquidGlassEnabled}
           onShowAiAssistant={() => {

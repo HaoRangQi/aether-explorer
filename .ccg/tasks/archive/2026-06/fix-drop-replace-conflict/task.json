@@ -1,0 +1,12 @@
+{
+  "id": "fix-drop-replace-conflict",
+  "title": "修复拖入同名文件选择替换未覆盖",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend/backend",
+  "currentPhase": "completed",
+  "nextAction": "代码修复和自动化验证已完成",
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "branch": "codex/remote-access"
+}

@@ -3,6 +3,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,7 +12,8 @@ use crate::commands;
 use crate::error::{AppError, AppErrorKind};
 use crate::models::{
     DirectorySignature, DirectorySizeEstimate, DirectorySizeTaskSnapshot, FileEntry,
-    FileHashResult, OpenWithOption, PermissionPreflightResult,
+    FileHashResult, FullDiskAccessCheckResult, FullDiskAccessProbeResult, FullDiskAccessStatus,
+    OpenWithOption,
 };
 use crate::{next_transfer_task_id, now_unix_seconds};
 
@@ -849,36 +851,124 @@ pub(crate) fn dirs_fun() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/".into())
 }
 
-#[tauri::command]
-pub(crate) fn preflight_file_permissions() -> Vec<PermissionPreflightResult> {
-    let home = dirs_fun();
-    let paths = [
-        format!("{}/Desktop", home),
-        format!("{}/Documents", home),
-        format!("{}/Downloads", home),
-        format!("{}/Library/Mobile Documents", home),
-        format!("{}/.Trash", home),
-        "/Applications".to_string(),
-    ];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FullDiskAccessProbeKind {
+    File,
+    Directory,
+}
 
-    paths
-        .iter()
-        .map(|path| match fs::read_dir(path) {
-            Ok(mut entries) => {
-                let _ = entries.next();
-                PermissionPreflightResult {
-                    path: path.clone(),
-                    ok: true,
-                    error: None,
-                }
-            }
-            Err(error) => PermissionPreflightResult {
-                path: path.clone(),
-                ok: false,
+impl FullDiskAccessProbeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            FullDiskAccessProbeKind::File => "file",
+            FullDiskAccessProbeKind::Directory => "directory",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FullDiskAccessProbeTarget {
+    pub(crate) path: PathBuf,
+    pub(crate) kind: FullDiskAccessProbeKind,
+}
+
+pub(crate) fn default_full_disk_access_probe_targets(home: &str) -> Vec<FullDiskAccessProbeTarget> {
+    let home = PathBuf::from(home);
+    vec![
+        FullDiskAccessProbeTarget {
+            path: PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db"),
+            kind: FullDiskAccessProbeKind::File,
+        },
+        FullDiskAccessProbeTarget {
+            path: home.join("Library/Application Support/com.apple.TCC"),
+            kind: FullDiskAccessProbeKind::Directory,
+        },
+        FullDiskAccessProbeTarget {
+            path: home.join("Library/Application Support/com.apple.TCC/TCC.db"),
+            kind: FullDiskAccessProbeKind::File,
+        },
+    ]
+}
+
+fn probe_full_disk_access_target(target: &FullDiskAccessProbeTarget) -> FullDiskAccessProbeResult {
+    let path = target.path.to_string_lossy().into_owned();
+    match fs::metadata(&target.path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return FullDiskAccessProbeResult {
+                path,
+                target_type: target.kind.as_str().into(),
+                exists: false,
+                readable: false,
+                error: None,
+            };
+        }
+        Err(error) => {
+            return FullDiskAccessProbeResult {
+                path,
+                target_type: target.kind.as_str().into(),
+                exists: true,
+                readable: false,
                 error: Some(error.to_string()),
-            },
-        })
-        .collect()
+            };
+        }
+    }
+
+    let read_result = match target.kind {
+        FullDiskAccessProbeKind::Directory => fs::read_dir(&target.path)
+            .and_then(|mut entries| entries.next().transpose().map(|_| ())),
+        FullDiskAccessProbeKind::File => fs::File::open(&target.path).map(|_| ()),
+    };
+
+    match read_result {
+        Ok(()) => FullDiskAccessProbeResult {
+            path,
+            target_type: target.kind.as_str().into(),
+            exists: true,
+            readable: true,
+            error: None,
+        },
+        Err(error) => FullDiskAccessProbeResult {
+            path,
+            target_type: target.kind.as_str().into(),
+            exists: true,
+            readable: false,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+pub(crate) fn summarize_full_disk_access_status(
+    probes: &[FullDiskAccessProbeResult],
+) -> FullDiskAccessStatus {
+    if probes.iter().any(|probe| probe.readable) {
+        return FullDiskAccessStatus::Granted;
+    }
+    if probes.iter().any(|probe| probe.exists && !probe.readable) {
+        return FullDiskAccessStatus::Denied;
+    }
+    FullDiskAccessStatus::Unknown
+}
+
+pub(crate) fn full_disk_access_status_for_home(home: &str) -> FullDiskAccessCheckResult {
+    let probes = default_full_disk_access_probe_targets(home)
+        .iter()
+        .map(probe_full_disk_access_target)
+        .collect::<Vec<_>>();
+    let status = summarize_full_disk_access_status(&probes);
+    FullDiskAccessCheckResult { status, probes }
+}
+
+#[tauri::command]
+pub(crate) fn full_disk_access_status() -> FullDiskAccessCheckResult {
+    full_disk_access_status_for_home(&dirs_fun())
+}
+
+/// macOS has no public "register for Full Disk Access" API. The registration
+/// attempt is a real TCC-gated probe; System Settings can then show the app.
+#[tauri::command]
+pub(crate) fn register_full_disk_access() -> FullDiskAccessCheckResult {
+    full_disk_access_status()
 }
 
 /// 敏感文件名 / 后缀黑名单 — 默认不允许 read_text_preview 读出来在预览面板展示。
@@ -1180,6 +1270,18 @@ pub(crate) fn delete_to_trash(path: String) -> Result<(), AppError> {
 
 pub(crate) fn trash_delete_error(path: &str, error: impl Into<String>) -> AppError {
     let detail = error.into();
+    let lower_detail = detail.to_ascii_lowercase();
+    if lower_detail.contains("permission")
+        || lower_detail.contains("denied")
+        || lower_detail.contains("not allowed")
+        || lower_detail.contains("not permitted")
+    {
+        return AppError::new(
+            AppErrorKind::PermissionDenied,
+            format!("移至废纸篓失败: {}", detail),
+            Some(path.to_string()),
+        );
+    }
     if path.starts_with("/Volumes/") {
         return AppError::trash_unsupported(
             format!(
@@ -1208,6 +1310,44 @@ pub(crate) fn create_file(parent_dir: String, name: String) -> Result<String, Ap
         )
     })?;
     Ok(file_path.to_string_lossy().into())
+}
+
+#[tauri::command]
+pub(crate) fn create_text_file(
+    parent_dir: String,
+    name: String,
+    content: String,
+) -> Result<String, AppError> {
+    let name = validate_child_name(&name)?;
+    let file_path = unique_destination(&Path::new(&parent_dir).join(&name));
+    fs::write(&file_path, content).map_err(|e| {
+        AppError::from_io(
+            &e,
+            Some(&file_path.to_string_lossy()),
+            format!("创建文本文件失败: {}", e),
+        )
+    })?;
+    Ok(file_path.to_string_lossy().into())
+}
+
+#[tauri::command]
+pub(crate) fn read_clipboard_text() -> Result<String, AppError> {
+    let output = Command::new("/usr/bin/pbpaste")
+        .arg("-Prefer")
+        .arg("txt")
+        .output()
+        .map_err(|e| AppError::internal(format!("读取剪贴板失败: {}", e)))?;
+
+    if !output.status.success() {
+        return Ok(String::new());
+    }
+
+    String::from_utf8(output.stdout).map_err(|e| AppError::internal(format!("剪贴板文本不是有效 UTF-8: {}", e)))
+}
+
+#[tauri::command]
+pub(crate) fn has_clipboard_text() -> Result<bool, AppError> {
+    read_clipboard_text().map(|text| !text.is_empty())
 }
 
 #[tauri::command]
@@ -1505,6 +1645,13 @@ pub(crate) fn dir_size_recursive_with_progress(
 
         let entries = match fs::read_dir(&current) {
             Ok(entries) => entries,
+            Err(e) if current.as_path() == dir => {
+                return Err(AppError::from_io(
+                    &e,
+                    Some(&dir_path),
+                    format!("无法读取目录: {}", e),
+                ));
+            }
             Err(_) => {
                 summary.skipped_count = summary.skipped_count.saturating_add(1);
                 continue;
@@ -1676,12 +1823,25 @@ pub(crate) fn estimate_dirs_size_fast(
     Ok(results)
 }
 
+fn ensure_directory_size_root_access(path: &str) -> Result<(), AppError> {
+    let dir = Path::new(path);
+    let metadata = fs::metadata(dir)
+        .map_err(|e| AppError::from_io(&e, Some(path), format!("读取目录元数据失败: {}", e)))?;
+    if !metadata.is_dir() {
+        return Err(AppError::invalid_path(
+            "不是一个目录",
+            Some(path.to_string()),
+        ));
+    }
+    fs::read_dir(dir)
+        .map(|_| ())
+        .map_err(|e| AppError::from_io(&e, Some(path), format!("无法读取目录: {}", e)))
+}
+
 #[tauri::command]
 pub(crate) fn get_dir_size(path: String) -> Result<serde_json::Value, AppError> {
+    ensure_directory_size_root_access(&path)?;
     let dir = Path::new(&path);
-    if !dir.is_dir() {
-        return Err(AppError::invalid_path("不是一个目录", Some(path)));
-    }
     let summary = dir_size_recursive(dir);
     Ok(serde_json::json!({
         "path": path,
@@ -1698,10 +1858,7 @@ pub(crate) fn start_dir_size_task_impl(
     state: &DirectorySizeTaskState,
     path: String,
 ) -> Result<String, AppError> {
-    let dir = Path::new(&path);
-    if !dir.is_dir() {
-        return Err(AppError::invalid_path("不是一个目录", Some(path)));
-    }
+    ensure_directory_size_root_access(&path)?;
 
     state.cleanup_finished();
     let task_id = next_directory_size_task_id();

@@ -5,11 +5,12 @@ import { Code2, ExternalLink, Fingerprint, Puzzle, Sparkles, Terminal } from 'lu
 import { calculateFileHash, compressFiles, decompressFile, deleteToTrash, duplicateAsAlias, pickApplication, renameFile, setFileClipboard } from '../../api/filesystem';
 import type { FileTransferPayload } from '../../api/filesystem';
 import { normalizeAppError } from '../../lib/app-error';
+import { formatOperationPermissionError } from '../../lib/operation-permission-error';
 import { isRemotePath } from '../../lib/path-helpers';
 import { safeInvoke } from '../../lib/tauri-runtime';
 import { interpolateFileActionTemplate, safeShellOpen } from '../../lib/url-guard';
 import type { ContextMenuAction, FileItem, ThemeSettings } from '../../types';
-import type { FileOperationOptions, ManualHistoryRecordInput } from './explorer-types';
+import type { FileOperationOptions, ManualHistoryRecordInput, ProtectedRootInfo } from './explorer-types';
 import type { HashDialogState } from './preview-panel-types';
 import { buildTemplateValues, formatAppError, makeFileItemsFromPaths, makeFolderItemFromPath } from './explorer-utils';
 
@@ -40,6 +41,7 @@ type UseExplorerFileOperationsInput = {
   ) => Promise<unknown>;
   files: FileItem[];
   getActionDirectory: (preferredPath?: string) => string;
+  getProtectedRootForPath: (path: string) => ProtectedRootInfo | null;
   navigateToPath: (path: string, options?: { replace?: boolean }) => void;
   importExternalPaths: (paths: string[], targetPath?: string) => Promise<boolean>;
   isRemoteRoot: boolean;
@@ -90,6 +92,7 @@ export default function useExplorerFileOperations({
   executeMoveFiles,
   files,
   getActionDirectory,
+  getProtectedRootForPath,
   navigateToPath,
   importExternalPaths,
   isRemoteRoot,
@@ -118,6 +121,14 @@ export default function useExplorerFileOperations({
     setContextSubmenu(null);
   }, [setContextMenu, setContextSubmenu]);
 
+  const formatPermissionError = useCallback((error: unknown, pathHints: string[] = []) =>
+    formatOperationPermissionError({
+      error,
+      getProtectedRootForPath,
+      pathHints,
+      t,
+    }), [getProtectedRootForPath, t]);
+
   const handleOpenFile = useCallback((file: FileItem) => {
     onRecordRecent(file.path);
     if (file.type === 'folder' || (file.type === 'remote-unknown' && isRemotePath(file.path))) {
@@ -125,16 +136,16 @@ export default function useExplorerFileOperations({
     } else if (isRemotePath(file.path)) {
       showFeedback(remoteReadOnlyMessage(t));
     } else {
-      safeInvoke('open_path', { path: file.path }).catch(err => {
+      safeInvoke('open_path', { path: file.path }).catch(async err => {
         showFeedback(t('messages.openFailed', {
-          error: normalizeAppError(err).userMessage,
+          error: await formatPermissionError(err, [file.path]),
           defaultValue: '打开失败：{{error}}',
         }));
       });
     }
     clearContextSubmenuCloseTimer();
     closeContextMenus();
-  }, [clearContextSubmenuCloseTimer, closeContextMenus, navigateToPath, onRecordRecent, showFeedback, t]);
+  }, [clearContextSubmenuCloseTimer, closeContextMenus, formatPermissionError, navigateToPath, onRecordRecent, showFeedback, t]);
 
   const handleOpenWith = useCallback(async (file: FileItem, appName: string) => {
     if (isRemotePath(file.path)) {
@@ -145,11 +156,11 @@ export default function useExplorerFileOperations({
       await safeInvoke('open_with', { path: file.path, appName });
       onRecordRecent(file.path);
     } catch (err) {
-      showFeedback(t('messages.openWithFailed', { error: normalizeAppError(err).userMessage }));
+      showFeedback(t('messages.openWithFailed', { error: await formatPermissionError(err, [file.path]) }));
     }
     clearContextSubmenuCloseTimer();
     closeContextMenus();
-  }, [clearContextSubmenuCloseTimer, closeContextMenus, onRecordRecent, showFeedback, t]);
+  }, [clearContextSubmenuCloseTimer, closeContextMenus, formatPermissionError, onRecordRecent, showFeedback, t]);
 
   const handleOpenWithOther = useCallback(async (file: FileItem) => {
     if (isRemotePath(file.path)) {
@@ -162,12 +173,12 @@ export default function useExplorerFileOperations({
       await safeInvoke('open_with', { path: file.path, appName: selected });
       onRecordRecent(file.path);
     } catch (err) {
-      showFeedback(t('messages.openWithFailed', { error: normalizeAppError(err).userMessage }));
+      showFeedback(t('messages.openWithFailed', { error: await formatPermissionError(err, [file.path]) }));
     } finally {
       clearContextSubmenuCloseTimer();
       closeContextMenus();
     }
-  }, [clearContextSubmenuCloseTimer, closeContextMenus, onRecordRecent, showFeedback, t]);
+  }, [clearContextSubmenuCloseTimer, closeContextMenus, formatPermissionError, onRecordRecent, showFeedback, t]);
 
   const getActionFiles = useCallback((file?: FileItem) => {
     if (file && selectedFileIds.includes(file.id) && selectedFiles.length > 0) return selectedFiles;
@@ -247,9 +258,9 @@ export default function useExplorerFileOperations({
         });
       }
     } catch (error) {
-      showFeedback(t('messages.operationFailed', { error: formatAppError(error) }));
+      showFeedback(t('messages.operationFailed', { error: await formatPermissionError(error, [targetDir, ...paths]) }));
     }
-  }, [executeCopyFiles, executeMoveFiles, refreshFileClipboardState, resolvePasteTargetDirectory, setContextMenu, showFeedback, t]);
+  }, [executeCopyFiles, executeMoveFiles, formatPermissionError, refreshFileClipboardState, resolvePasteTargetDirectory, setContextMenu, showFeedback, t]);
 
   const areAllFavorites = useCallback((items: FileItem[]) => (
     items.length > 0 && items.every(item => favorites.includes(item.path))
@@ -279,9 +290,9 @@ export default function useExplorerFileOperations({
     try {
       await safeInvoke('quick_look', { path: file.path });
     } catch (err) {
-      showFeedback(t('messages.quickLookFailed', { error: normalizeAppError(err).userMessage }));
+      showFeedback(t('messages.quickLookFailed', { error: await formatPermissionError(err, [file.path]) }));
     }
-  }, [lastSelectedFile, showFeedback, t]);
+  }, [formatPermissionError, lastSelectedFile, showFeedback, t]);
 
   const handleRevealInFinder = useCallback(async (file = lastSelectedFile) => {
     if (!file) return;
@@ -293,10 +304,10 @@ export default function useExplorerFileOperations({
     try {
       await safeInvoke('reveal_in_finder', { path: file.path });
     } catch (err) {
-      showFeedback(t('messages.finderFailed', { error: normalizeAppError(err).userMessage }));
+      showFeedback(t('messages.finderFailed', { error: await formatPermissionError(err, [file.path]) }));
     }
     setContextMenu(null);
-  }, [lastSelectedFile, setContextMenu, showFeedback, t]);
+  }, [formatPermissionError, lastSelectedFile, setContextMenu, showFeedback, t]);
 
   const handleOpenTerminal = useCallback(async (file?: FileItem | null) => {
     const target = file || lastSelectedFile;
@@ -371,14 +382,14 @@ export default function useExplorerFileOperations({
           : current
       ));
     } catch (err) {
-      const error = formatAppError(err);
+      const error = await formatPermissionError(err, [target.path]);
       setHashDialog(current => (
         current && current.file.path === target.path
           ? { ...current, loading: false, error }
           : current
       ));
     }
-  }, [closeContextMenus, getActionFiles, setContextMenu, setHashDialog, showFeedback, t]);
+  }, [closeContextMenus, formatPermissionError, getActionFiles, setContextMenu, setHashDialog, showFeedback, t]);
 
   const handleCopyHashValue = useCallback(async () => {
     if (!hashDialog?.result) return;
@@ -528,6 +539,7 @@ export default function useExplorerFileOperations({
         defaultValue: '已重命名为：{{name}}',
       }));
     } catch (error) {
+      const errorMessage = await formatPermissionError(error, [file.path]);
       await recordManualOperationHistory({
         category: 'rename',
         title: '重命名',
@@ -535,20 +547,20 @@ export default function useExplorerFileOperations({
         effects: [{
           op: { type: 'rename', path: file.path, newName: nextName },
           status: 'fail',
-          note: formatAppError(error),
+          note: errorMessage,
         }],
         status: 'failed',
         canUndo: false,
-        reasonNotUndoable: `重命名失败：${formatAppError(error)}`,
+        reasonNotUndoable: `重命名失败：${errorMessage}`,
         primaryPath: file.path,
       });
       showFeedback(t('messages.renameFailed', {
-        error: formatAppError(error),
+        error: errorMessage,
         defaultValue: '重命名失败：{{error}}',
       }));
     }
     setRenamingFile(null);
-  }, [recordManualOperationHistory, refreshCurrentDir, renameInput, renamingFile, setRenamingFile, showFeedback, t]);
+  }, [formatPermissionError, recordManualOperationHistory, refreshCurrentDir, renameInput, renamingFile, setRenamingFile, showFeedback, t]);
 
   const handleRenameCancel = useCallback(() => {
     setRenamingFile(null);
@@ -599,15 +611,25 @@ export default function useExplorerFileOperations({
       if (failed.length === 0) {
         showFeedback(t('messages.movedToTrash', { count: targets.length }));
       } else {
-        const appError = normalizeAppError(failed[0].reason);
+        const failedWithPaths = results
+          .map((result, index) => ({ result, path: targets[index]?.path }))
+          .filter((item): item is { result: PromiseRejectedResult; path?: string } => item.result.status === 'rejected');
+        const primaryFailure = failedWithPaths.find(item => (
+          normalizeAppError(item.result.reason).kind === 'PermissionDenied'
+        )) ?? failedWithPaths[0];
+        const appError = normalizeAppError(primaryFailure.result.reason);
+        const error = await formatPermissionError(
+          primaryFailure.result.reason,
+          [primaryFailure.path].filter(Boolean) as string[],
+        );
         const key = appError.kind === 'TrashUnsupported'
           ? 'messages.externalTrashUnsupported'
           : 'messages.moveToTrashFailed';
-        showFeedback(t(key, { error: appError.userMessage, moved: movedCount, failed: failed.length }));
+        showFeedback(t(key, { error, moved: movedCount, failed: failed.length }));
       }
     }
     setContextMenu(null);
-  }, [getActionFiles, onSelectFiles, recordManualOperationHistory, refreshCurrentDir, setContextMenu, showFeedback, t]);
+  }, [formatPermissionError, getActionFiles, onSelectFiles, recordManualOperationHistory, refreshCurrentDir, setContextMenu, showFeedback, t]);
 
   const handleCopyFile = useCallback(async (file: FileItem) => {
     setContextMenu(null);
@@ -635,10 +657,13 @@ export default function useExplorerFileOperations({
       try {
         await executeCopyFiles(targets, makeFolderItemFromPath(targetDir), 'abort');
       } catch (error) {
-        showFeedback(`复制失败：${formatAppError(error)}`);
+        showFeedback(t('messages.operationFailed', {
+          error: await formatPermissionError(error, [targetDir, ...targets.map(target => target.path)]),
+          defaultValue: '复制失败：{{error}}',
+        }));
       }
     }
-  }, [currentPath, executeCopyFiles, getActionFiles, setActiveDropdown, setContextMenu, showFeedback, t]);
+  }, [currentPath, executeCopyFiles, formatPermissionError, getActionFiles, setActiveDropdown, setContextMenu, showFeedback, t]);
 
   const handleMoveFile = useCallback(async (file: FileItem) => {
     const targets = getActionFiles(file);
@@ -663,11 +688,13 @@ export default function useExplorerFileOperations({
       try {
         await startMoveTaskFromDialog(targets, makeFolderItemFromPath(targetDir), 'abort');
       } catch (error) {
-        showFeedback(`移动失败：${formatAppError(error)}`);
+        showFeedback(t('messages.moveFailed', {
+          error: await formatPermissionError(error, [targetDir, ...targets.map(target => target.path)]),
+        }));
       }
     }
     setContextMenu(null);
-  }, [currentPath, getActionFiles, setContextMenu, showFeedback, startMoveTaskFromDialog, t]);
+  }, [currentPath, formatPermissionError, getActionFiles, setContextMenu, showFeedback, startMoveTaskFromDialog, t]);
 
   const handleCompress = useCallback(async (file: FileItem) => {
     const targets = getActionFiles(file);
@@ -717,6 +744,7 @@ export default function useExplorerFileOperations({
         defaultValue: `已压缩 ${targets.length} 个项目`,
       }));
     } catch (error) {
+      const errorMessage = await formatPermissionError(error, [output, ...targets.map(target => target.path)]);
       await recordManualOperationHistory({
         category: 'compress',
         title: '压缩',
@@ -724,21 +752,21 @@ export default function useExplorerFileOperations({
         effects: [{
           op: { type: 'compress', paths: targets.map(item => item.path), outputName: output.split('/').pop() || output },
           status: 'fail',
-          note: formatAppError(error),
+          note: errorMessage,
         }],
         status: 'failed',
         canUndo: false,
-        reasonNotUndoable: `压缩失败：${formatAppError(error)}`,
+        reasonNotUndoable: `压缩失败：${errorMessage}`,
         primaryPath: targets[0]?.path,
         targetPath: output,
       });
       showFeedback(t('messages.compressFailed', {
-        error: formatAppError(error),
-        defaultValue: `压缩失败：${formatAppError(error)}`,
+        error: errorMessage,
+        defaultValue: `压缩失败：${errorMessage}`,
       }));
     }
     setContextMenu(null);
-  }, [currentPath, files, getActionFiles, isRemoteRoot, recordManualOperationHistory, refreshCurrentDir, requestExistingOutputChoice, setContextMenu, showFeedback, t]);
+  }, [currentPath, files, formatPermissionError, getActionFiles, isRemoteRoot, recordManualOperationHistory, refreshCurrentDir, requestExistingOutputChoice, setContextMenu, showFeedback, t]);
 
   const handleDecompress = useCallback(async (file: FileItem) => {
     if (isRemoteRoot || isRemotePath(file.path)) {
@@ -770,13 +798,14 @@ export default function useExplorerFileOperations({
       void refreshCurrentDir();
       showFeedback(t('messages.decompressCompleted', { name: file.name, defaultValue: `已解压：${file.name}` }));
     } catch (error) {
+      const errorMessage = await formatPermissionError(error, [file.path, outputDir]);
       showFeedback(t('messages.decompressFailed', {
-        error: formatAppError(error),
-        defaultValue: `解压失败：${formatAppError(error)}`,
+        error: errorMessage,
+        defaultValue: `解压失败：${errorMessage}`,
       }));
     }
     setContextMenu(null);
-  }, [currentPath, files, isRemoteRoot, refreshCurrentDir, requestExistingOutputChoice, setContextMenu, showFeedback, t]);
+  }, [currentPath, files, formatPermissionError, isRemoteRoot, refreshCurrentDir, requestExistingOutputChoice, setContextMenu, showFeedback, t]);
 
   const handleAlias = useCallback(async (file: FileItem) => {
     if (isRemotePath(file.path)) {
@@ -805,6 +834,7 @@ export default function useExplorerFileOperations({
       void refreshCurrentDir();
       showFeedback(t('messages.aliasCreated', { name: file.name, defaultValue: `已创建副本：${file.name}` }));
     } catch (error) {
+      const errorMessage = await formatPermissionError(error, [file.path]);
       await recordManualOperationHistory({
         category: 'copy',
         title: '创建副本',
@@ -816,20 +846,20 @@ export default function useExplorerFileOperations({
             targetDir: file.path.split('/').slice(0, -1).join('/') || currentPath,
           },
           status: 'fail',
-          note: formatAppError(error),
+          note: errorMessage,
         }],
         status: 'failed',
         canUndo: false,
-        reasonNotUndoable: `创建副本失败：${formatAppError(error)}`,
+        reasonNotUndoable: `创建副本失败：${errorMessage}`,
         primaryPath: file.path,
       });
       showFeedback(t('messages.aliasCreateFailed', {
-        error: formatAppError(error),
-        defaultValue: `创建副本失败：${formatAppError(error)}`,
+        error: errorMessage,
+        defaultValue: `创建副本失败：${errorMessage}`,
       }));
     }
     setContextMenu(null);
-  }, [currentPath, recordManualOperationHistory, refreshCurrentDir, setContextMenu, showFeedback, t]);
+  }, [currentPath, formatPermissionError, recordManualOperationHistory, refreshCurrentDir, setContextMenu, showFeedback, t]);
 
   const handleImportFiles = useCallback(async () => {
     if (isRemoteRoot) {
@@ -843,10 +873,13 @@ export default function useExplorerFileOperations({
       if (paths.length === 0) return;
       await importExternalPaths(paths, getActionDirectory());
     } catch (error) {
-      showFeedback(`导入失败：${formatAppError(error)}`);
+      showFeedback(t('messages.finderImportFailed', {
+        error: await formatPermissionError(error, [getActionDirectory()]),
+        defaultValue: '导入失败：{{error}}',
+      }));
     }
     setActiveDropdown(null);
-  }, [getActionDirectory, importExternalPaths, isRemoteRoot, setActiveDropdown, showFeedback, t]);
+  }, [formatPermissionError, getActionDirectory, importExternalPaths, isRemoteRoot, setActiveDropdown, showFeedback, t]);
 
   return {
     handleAlias,

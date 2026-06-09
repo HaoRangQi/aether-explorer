@@ -1,11 +1,11 @@
 import React, { useCallback } from 'react';
 import type { TFunction } from 'i18next';
-import { createFile, createFolder } from '../../api/filesystem';
+import { createFile, createFolder, createTextFile, readClipboardText } from '../../api/filesystem';
 import { isRemotePath } from '../../lib/path-helpers';
 import type { FileItem, ThemeSettings } from '../../types';
 import { FAVORITES_VIRTUAL_PATH } from './explorer-constants';
 import type { ManualHistoryRecordInput } from './explorer-types';
-import { formatAppError, getItemDirectory } from './explorer-utils';
+import { buildTimestampTextFileName, formatAppError, getItemDirectory } from './explorer-utils';
 
 type UseExplorerCreateEntriesInput = {
   contextMenuTargetDir?: string;
@@ -194,6 +194,87 @@ export default function useExplorerCreateEntries({
     setContextMenu(null);
   }, [currentPath, isRemoteRoot, onThemeChange, setContextMenu, showFeedback, t, theme]);
 
+  const handlePasteAsTextFile = useCallback(async (targetPath?: string) => {
+    setActiveDropdown(null);
+    const targetDir = resolveWritableTarget(targetPath);
+    if (!targetDir) return;
+
+    let content = '';
+    try {
+      content = await readClipboardText();
+    } catch (error) {
+      showFeedback(t('messages.clipboardReadFailed', {
+        error: formatAppError(error),
+        defaultValue: `读取剪贴板失败：${formatAppError(error)}`,
+      }));
+      setContextMenu(null);
+      return;
+    }
+    if (!content) {
+      showFeedback(t('messages.clipboardEmpty'));
+      setContextMenu(null);
+      return;
+    }
+
+    const name = buildTimestampTextFileName();
+    try {
+      const createdPath = await createTextFile(targetDir, name, content);
+      await recordManualOperationHistory({
+        category: 'create-file',
+        title: '粘贴为 txt',
+        summary: `${name}`,
+        effects: [{
+          op: { type: 'create_file', parentDir: targetDir, name },
+          status: 'ok',
+          reverseOp: { type: 'trash', path: createdPath },
+        }],
+        primaryPath: createdPath,
+        targetPath: targetDir,
+      });
+      const entries = await refreshCurrentDir(false, targetDir);
+      const created = entries.find(file => file.path === createdPath);
+      if (created) {
+        onSelectFiles([created.id]);
+        scrollToCreatedEntry(created, createdPath, entries, listItemHeight, scrollContainerRef);
+      }
+      showFeedback(t('messages.pastedAsTextFile', {
+        name: createdPath.split('/').pop() || name,
+        defaultValue: `已生成文本文件：${createdPath.split('/').pop() || name}`,
+      }));
+    } catch (error) {
+      await recordManualOperationHistory({
+        category: 'create-file',
+        title: '粘贴为 txt',
+        summary: `${name}`,
+        effects: [{
+          op: { type: 'create_file', parentDir: targetDir, name },
+          status: 'fail',
+          note: formatAppError(error),
+        }],
+        status: 'failed',
+        canUndo: false,
+        reasonNotUndoable: `创建失败：${formatAppError(error)}`,
+        targetPath: targetDir,
+      });
+      showFeedback(t('messages.pasteAsTextFileFailed', {
+        error: formatAppError(error),
+        defaultValue: `生成文本文件失败：${formatAppError(error)}`,
+      }));
+    }
+    setContextMenu(null);
+  }, [
+    listItemHeight,
+    onSelectFiles,
+    recordManualOperationHistory,
+    refreshCurrentDir,
+    resolveWritableTarget,
+    scrollContainerRef,
+    setActiveDropdown,
+    setContextMenu,
+    showFeedback,
+    t,
+  ]);
+
   const handleNewFolder = useCallback(async (targetPath?: string) => {
     setActiveDropdown(null);
     const targetDir = resolveWritableTarget(targetPath);
@@ -271,16 +352,33 @@ export default function useExplorerCreateEntries({
     t,
   ]);
 
-  const openCurrentInNewTab = useCallback((file?: FileItem | null) => {
-    if (!onOpenTab) return;
+  const resolveOpenTarget = useCallback((file?: FileItem | null) => {
     const targetPath = file
       ? (file.type === 'folder' ? file.path : getItemDirectory(file))
       : (currentPath || theme.defaultHomePath || FAVORITES_VIRTUAL_PATH);
-    if (!targetPath) return;
+    if (!targetPath) return null;
     const label = targetPath.split('/').filter(Boolean).pop() || t('explorer.localStorage', '本地存储');
+    return { targetPath, label };
+  }, [currentPath, t, theme.defaultHomePath]);
+
+  const openCurrentInNewTab = useCallback((file?: FileItem | null) => {
+    if (!onOpenTab) return;
+    const target = resolveOpenTarget(file);
+    if (!target) return;
+    const { targetPath, label } = target;
     onOpenTab(`tab-${Date.now()}`, 'tabs.volume', { label, initialPath: targetPath });
     setActiveDropdown(null);
-  }, [currentPath, onOpenTab, setActiveDropdown, t, theme.defaultHomePath]);
+    setContextMenu(null);
+  }, [onOpenTab, resolveOpenTarget, setActiveDropdown, setContextMenu]);
+
+  const openCurrentInNewWindow = useCallback((file?: FileItem | null) => {
+    if (!onCreateWindow) return;
+    const target = resolveOpenTarget(file);
+    if (!target) return;
+    onCreateWindow(target.targetPath, target.label);
+    setActiveDropdown(null);
+    setContextMenu(null);
+  }, [onCreateWindow, resolveOpenTarget, setActiveDropdown, setContextMenu]);
 
   const handleQuickCreateClick = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     if (event.detail >= 2) {
@@ -326,8 +424,10 @@ export default function useExplorerCreateEntries({
   return {
     handleNewFile,
     handleNewFolder,
+    handlePasteAsTextFile,
     handleQuickCreateClick,
     handleSetCurrentAsHome,
     openCurrentInNewTab,
+    openCurrentInNewWindow,
   };
 }

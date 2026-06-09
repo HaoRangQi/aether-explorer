@@ -25,7 +25,12 @@ const requiredScripts = [
   'lint:readme',
   'lint:i18n',
   'lint:ci-gates',
+  'lint:macos-permissions',
   'lint:rust',
+  'validate:fda-evidence',
+  'validate:macos-app',
+  'validate:macos-app:release',
+  'validate:macos-permission-release',
   'test',
   'test:rust',
   'build',
@@ -41,7 +46,12 @@ const requiredScriptImplementations = new Map([
   ['lint:readme', 'node scripts/check-readme-sync.mjs'],
   ['lint:i18n', 'node scripts/check-i18n-coverage.mjs'],
   ['lint:ci-gates', 'node scripts/check-ci-gates.mjs'],
+  ['lint:macos-permissions', 'node scripts/validate-macos-permission-model.mjs'],
   ['lint:rust', 'cd src-tauri && cargo clippy --lib -- -D warnings'],
+  ['validate:fda-evidence', 'node scripts/validate-fda-evidence.mjs'],
+  ['validate:macos-app', 'node scripts/validate-macos-app-bundle.mjs'],
+  ['validate:macos-app:release', 'node scripts/validate-macos-app-bundle.mjs --require-signature'],
+  ['validate:macos-permission-release', 'node scripts/validate-macos-permission-release-evidence.mjs'],
   ['test:rust', 'cd src-tauri && cargo test --lib'],
 ]);
 
@@ -92,7 +102,12 @@ const requiredReleaseWorkflowSecurityChecks = [
   'contents: write',
   'TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}',
   'TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}',
+  'APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}',
+  'APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}',
   'missing TAURI_SIGNING_PRIVATE_KEY secret',
+  'missing APPLE_CERTIFICATE secret; updater signing is not macOS app code signing',
+  'APPLE_CERTIFICATE secret must be base64-encoded .p12 content',
+  'openssl pkcs12 -in "$CERT_FILE" -nokeys -passin "pass:${APPLE_CERTIFICATE_PASSWORD:-}"',
   'GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
 ];
 
@@ -141,6 +156,8 @@ const requiredReleaseWorkflowCommands = [
   'find "$BUNDLE_DIR/dmg" -type f -name \'*.dmg\' 2>/dev/null | head -n 1 || true',
   'find "$BUNDLE_DIR/macos" -type f -name \'*.app.tar.gz\' 2>/dev/null | head -n 1 || true',
   'find "$BUNDLE_DIR/macos" -type f -name \'*.app.tar.gz.sig\' 2>/dev/null | head -n 1 || true',
+  'APP_BUNDLE="$(find "$BUNDLE_DIR/macos" -maxdepth 1 -type d -name \'*.app\' 2>/dev/null | head -n 1 || true)"',
+  'npm run validate:macos-app:release -- "$APP_BUNDLE"',
   'SHA256SUMS',
   'shasum -a 256',
   'shasum -a 256 -c SHA256SUMS',
@@ -159,6 +176,8 @@ const requiredReleaseScriptCommands = [
   'find "$BUNDLE_DIR/dmg" -type f -name "*.dmg" 2>/dev/null | head -n 1 || true',
   'find "$BUNDLE_DIR/macos" -type f -name "*.app.tar.gz" 2>/dev/null | head -n 1 || true',
   'find "$BUNDLE_DIR/macos" -type f -name "*.app.tar.gz.sig" 2>/dev/null | head -n 1 || true',
+  'APP_BUNDLE="$(find "$BUNDLE_DIR/macos" -maxdepth 1 -type d -name "*.app" 2>/dev/null | head -n 1 || true)"',
+  'npm run validate:macos-app:release -- "$APP_BUNDLE"',
   'CHANGELOG.md',
   'NOTES="$(awk -v ver="$VERSION"',
   '[ -n "$NOTES" ] || NOTES="Aether Explorer $TAG"',
@@ -178,9 +197,19 @@ const requiredReleaseScriptSecurityChecks = [
   '[ -f "$PRIVATE_KEY_PATH" ]',
   'command -v jq >/dev/null',
   'command -v gh >/dev/null',
+  'command -v security >/dev/null',
+  'command -v openssl >/dev/null',
   'gh auth status >/dev/null 2>&1',
+  'APPLE_CERTIFICATE 必须是 base64 编码的 .p12 内容',
+  'openssl pkcs12 -in "$CERT_FILE" -nokeys -passin "pass:${APPLE_CERTIFICATE_PASSWORD:-}"',
+  'security find-identity -v -p codesigning',
+  '"Developer ID Application:',
+  '缺少 Apple .app 代码签名身份',
+  'TAURI_SIGNING_PRIVATE_KEY 只签 updater artifact',
   'export TAURI_SIGNING_PRIVATE_KEY="$(cat "$PRIVATE_KEY_PATH")"',
   'export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"',
+  'export APPLE_CERTIFICATE="${APPLE_CERTIFICATE:-}"',
+  'export APPLE_CERTIFICATE_PASSWORD="${APPLE_CERTIFICATE_PASSWORD:-}"',
 ];
 
 const requiredReleaseWorkflowVersionChecks = [
@@ -232,8 +261,12 @@ for (const [scriptName, requiredCommand] of requiredScriptImplementations) {
   }
 }
 
-if (!packageJson.scripts?.lint?.includes('lint:ts') || !packageJson.scripts?.lint?.includes('lint:eslint')) {
-  failures.push('package.json script "lint" must run both lint:ts and lint:eslint.');
+if (
+  !packageJson.scripts?.lint?.includes('lint:ts')
+  || !packageJson.scripts?.lint?.includes('lint:eslint')
+  || !packageJson.scripts?.lint?.includes('lint:macos-permissions')
+) {
+  failures.push('package.json script "lint" must run lint:ts, lint:eslint, and lint:macos-permissions.');
 }
 
 if (packageJson.dependencies?.vite) {

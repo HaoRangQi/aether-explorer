@@ -39,7 +39,7 @@ This is a volunteer project, so these are targets rather than contractual SLAs.
 - File operation failures should return structured, user-readable errors.
 - Shell, terminal, URL, updater, and extension-template paths are treated as high-risk surfaces.
 - AI provider requests may include user instructions and selected file metadata, but should not include file contents by default.
-- Developer ID signing, notarization, App Store distribution, subscriptions, and enterprise features are not current roadmap blockers. The project must still describe unsigned-build risk honestly and must not present unsigned artifacts as commercial-grade trusted distribution.
+- App Store distribution, notarization, subscriptions, and enterprise features are not current roadmap blockers. Stable code-signing identity is required for macOS Full Disk Access release evidence. Unsigned or ad-hoc artifacts must be described honestly and must not be presented as commercial-grade trusted distribution or stable FDA evidence.
 
 ## User Mitigations
 

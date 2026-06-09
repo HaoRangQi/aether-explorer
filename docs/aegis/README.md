@@ -6,6 +6,7 @@
 
 - `specs/`：功能规格与设计文档
 - `baseline/`：当前代码基线快照
+- `work/`：中高复杂度任务的过程记录、证据和漂移检查
 - `INDEX.md`：文档索引
 - `BASELINE-GOVERNANCE.md`：基线治理规则
 

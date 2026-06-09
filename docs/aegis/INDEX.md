@@ -9,6 +9,10 @@
 
 - 2026-05-27 — [操作历史与撤销实现计划](./plans/2026-05-27-operation-history-undo-plan.md)
 
+## Work
+
+- 2026-06-10 — [Aether Explorer v0.4.10 发布治理](./work/2026-06-10-release-v0-4-10/10-intent.md)
+
 ## Baseline
 
 - 2026-05-27 — [初始基线快照](./baseline/2026-05-27-initial-baseline.md)

@@ -59,6 +59,7 @@ export default function ColumnView({
           return (
             <div
               key={`col-${colIndex}-${parentId || 'root'}`}
+              data-drop-target-dir={columnTargetDir}
               className="h-full min-w-0 shrink-0 flex flex-col border-r border-on-surface/10 bg-primary/5"
               style={{ width: `${theme.columnWidth || 280}px` }}
               onContextMenu={(event) => {
@@ -69,7 +70,7 @@ export default function ColumnView({
               <h4 className="text-[12px] font-black text-on-surface uppercase tracking-[0.15em] px-4 py-3 shrink-0 truncate">
                 {parentId ? parentId.split('/').pop() : t('explorer.localStorage')}
               </h4>
-              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden custom-scrollbar px-2 space-y-1">
+              <div data-drop-target-dir={columnTargetDir} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden custom-scrollbar px-2 space-y-1">
                 {columnError ? (
                   <div className="px-3 py-4 text-[12px] font-bold leading-relaxed text-red-400/80">
                     {t('messages.loadFailed', { error: columnError, defaultValue: `读取失败：${columnError}` })}

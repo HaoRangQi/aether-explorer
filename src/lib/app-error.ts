@@ -1,3 +1,5 @@
+import type { FullDiskAccessStatus } from './full-disk-access';
+
 export type AppErrorKind =
   | 'PermissionDenied'
   | 'NotFound'
@@ -56,7 +58,7 @@ function fromKindString(kind: unknown): AppErrorKind | null {
 }
 
 function classifyMessage(message: string): AppErrorKind {
-  if (/PermissionDenied|permission denied|权限|not allowed|denied/i.test(message)) return 'PermissionDenied';
+  if (/PermissionDenied|permission denied|权限|not allowed|denied|not permitted/i.test(message)) return 'PermissionDenied';
   if (/NotFound|not found|不存在|no such file/i.test(message)) return 'NotFound';
   if (/DiskFull|No space left|磁盘.*满|空间不足/i.test(message)) return 'DiskFull';
   if (/Busy|resource busy|文件被占用|占用/i.test(message)) return 'Busy';
@@ -129,4 +131,16 @@ export function directoryErrorKind(error: AetherAppError): 'permission' | 'notFo
   if (error.kind === 'PermissionDenied') return 'permission';
   if (error.kind === 'NotFound') return 'notFound';
   return 'generic';
+}
+
+export function directoryErrorKindForFullDiskAccess(
+  error: AetherAppError,
+  status: FullDiskAccessStatus | null | undefined,
+  isProtectedOperation = true,
+): 'permission' | 'notFound' | 'generic' {
+  const kind = directoryErrorKind(error);
+  if (kind !== 'permission') return kind;
+  if (!isProtectedOperation) return 'generic';
+  // FDA-granted PermissionDenied means a normal filesystem refusal, not macOS privacy recovery.
+  return status === 'granted' ? 'generic' : 'permission';
 }

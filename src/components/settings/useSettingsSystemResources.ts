@@ -2,9 +2,20 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 
-const DEFAULT_FONTS = ['Inter', 'System Default', 'Arial', 'Segoe UI', 'Roboto', 'Times New Roman'];
-const FALLBACK_FONTS = ['Inter', 'System Default', 'Arial', 'Helvetica', 'Times New Roman', 'Courier'];
+const SYSTEM_DEFAULT_FONT_LABEL = 'System Default';
+const DEFAULT_FONTS = [SYSTEM_DEFAULT_FONT_LABEL, 'Inter', 'Arial', 'Segoe UI', 'Roboto', 'Times New Roman'];
+const FALLBACK_FONTS = [SYSTEM_DEFAULT_FONT_LABEL, 'Inter', 'Arial', 'Helvetica', 'Times New Roman', 'Courier'];
 const DEFAULT_TERMINAL_APPS = ['Terminal', 'iTerm'];
+
+function uniqueFonts(fonts: string[]): string[] {
+  const seen = new Set<string>();
+  return fonts.filter(font => {
+    const key = font.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 export function useSettingsSystemResources() {
   const [appVersion, setAppVersion] = useState(import.meta.env.VITE_APP_VERSION || '');
@@ -27,7 +38,7 @@ export function useSettingsSystemResources() {
     let cancelled = false;
     invoke<string[]>('list_fonts')
       .then(fonts => {
-        if (!cancelled) setAvailableFonts(['Inter', 'System Default', ...fonts]);
+        if (!cancelled) setAvailableFonts(uniqueFonts([SYSTEM_DEFAULT_FONT_LABEL, 'Inter', ...fonts]));
       })
       .catch(() => {
         if (!cancelled) setAvailableFonts(FALLBACK_FONTS);

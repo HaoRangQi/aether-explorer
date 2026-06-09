@@ -7,14 +7,23 @@ import {
   listDirectory,
   listRemoteDirectory,
 } from '../../api/filesystem';
-import { directoryErrorKind as classifyDirectoryError, normalizeAppError } from '../../lib/app-error';
+import {
+  directoryErrorKind as classifyDirectoryError,
+  directoryErrorKindForFullDiskAccess,
+  normalizeAppError,
+  type AetherAppError,
+} from '../../lib/app-error';
 import { resolveDirectorySignatureChange, shouldPollDirectorySignature } from '../../lib/directory-signature';
+import {
+  FULL_DISK_ACCESS_POLL_INTERVAL_MS,
+  checkFullDiskAccessPermission,
+  startFullDiskAccessPolling,
+} from '../../lib/full-disk-access';
 import { isRemotePath, parseRemotePath } from '../../lib/path-helpers';
 import type { FileItem } from '../../types';
 import { formatAppError } from './explorer-utils';
 import type { DirectoryErrorKind, ProtectedRootInfo } from './explorer-types';
 import {
-  PROTECTED_ROOT_APPROVALS_KEY,
   REMOTE_DIRECTORY_TIMEOUT_MESSAGE,
   REMOTE_DIRECTORY_UI_TIMEOUT_MS,
 } from './explorer-constants';
@@ -74,15 +83,10 @@ export default function useExplorerDirectoryData({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [directoryErrorKind, setDirectoryErrorKind] = useState<DirectoryErrorKind | null>(null);
-  const [approvedProtectedRoots, setApprovedProtectedRoots] = useState<string[]>(() => {
-    try {
-      const parsed = JSON.parse(sessionStorage.getItem(PROTECTED_ROOT_APPROVALS_KEY) || '[]');
-      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
-    } catch {
-      return [];
-    }
-  });
   const [blockedProtectedRoots, setBlockedProtectedRoots] = useState<string[]>([]);
+  const pendingFullDiskAccessRetryPathRef = useRef<string | null>(null);
+  const fullDiskAccessRetryInFlightRef = useRef(false);
+  const autoRetryingProtectedPathRef = useRef<string | null>(null);
 
   const remotePathParts = parseRemotePath(currentPath);
   const currentPathRef = useRef(currentPath);
@@ -94,26 +98,22 @@ export default function useExplorerDirectoryData({
   const pendingColumnLoadsRef = useRef<Map<string, number>>(new Map());
 
   const protectedRoot = getProtectedRootForPath(currentPath);
+  const protectedRootPath = protectedRoot?.path ?? '';
   const isProtectedPathBlocked = protectedRoot
     ? blockedProtectedRoots.includes(protectedRoot.path)
     : false;
-  const needsProtectedPathConsent = false;
 
-  const approveProtectedRoot = useCallback(() => {
-    if (!protectedRoot) return;
-    setApprovedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
-    setBlockedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
-    setDirectoryErrorKind(null);
-    setLoadError('');
-  }, [protectedRoot]);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(PROTECTED_ROOT_APPROVALS_KEY, JSON.stringify(approvedProtectedRoots));
-    } catch {
-      // sessionStorage can be unavailable in unusual WebView states; in-memory approval still works.
-    }
-  }, [approvedProtectedRoots]);
+  const classifyLocalDirectoryError = useCallback(async (
+    appError: AetherAppError,
+    targetPath: string,
+  ): Promise<DirectoryErrorKind> => {
+    const kind = classifyDirectoryError(appError);
+    if (kind !== 'permission') return kind;
+    const protectedFailure = Boolean(getProtectedRootForPath(appError.path || targetPath));
+    if (!protectedFailure) return directoryErrorKindForFullDiskAccess(appError, null, false);
+    const result = await checkFullDiskAccessPermission({ force: true });
+    return directoryErrorKindForFullDiskAccess(appError, result.status, true);
+  }, [getProtectedRootForPath]);
 
   const resetColumnState = useCallback(() => {
     columnLoadGenerationRef.current += 1;
@@ -232,7 +232,6 @@ export default function useExplorerDirectoryData({
     };
     if (protectedRoot) {
       setBlockedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
-      setApprovedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
     }
     if (fullRefresh && !refreshColumnPath) {
       setLoading(true);
@@ -315,6 +314,14 @@ export default function useExplorerDirectoryData({
       });
       if (requestId !== loadRequestSeqRef.current) return [] as FileItem[];
       setFiles(entries);
+      setLoadError('');
+      setDirectoryErrorKind(null);
+      if (pendingFullDiskAccessRetryPathRef.current === currentPathRef.current) {
+        pendingFullDiskAccessRetryPathRef.current = null;
+      }
+      if (autoRetryingProtectedPathRef.current === currentPathRef.current) {
+        autoRetryingProtectedPathRef.current = null;
+      }
       if (fullRefresh) {
         setLoading(false);
         showFeedback(t('messages.refreshed'));
@@ -326,9 +333,30 @@ export default function useExplorerDirectoryData({
       if (fullRefresh && !refreshColumnPath) setLoading(false);
       const appError = normalizeAppError(err);
       if (appError.kind === 'Cancelled') return [] as FileItem[];
+      const isRemoteRefresh = Boolean(refreshColumnPath ? parseRemotePath(refreshPath) : remotePathPartsRef.current);
+      const kind = isRemoteRefresh
+        ? classifyDirectoryError(appError)
+        : await classifyLocalDirectoryError(appError, refreshColumnPath ? refreshPath : currentPathRef.current);
       if (refreshColumnPath || requestId === loadRequestSeqRef.current) {
         setLoadError(appError.userMessage);
-        setDirectoryErrorKind(classifyDirectoryError(appError));
+        setDirectoryErrorKind(kind);
+        if (!isRemoteRefresh && !refreshColumnPath && kind === 'permission') {
+          const failedPath = currentPathRef.current;
+          const failedProtectedRoot = getProtectedRootForPath(appError.path || failedPath);
+          if (failedProtectedRoot) {
+            setBlockedProtectedRoots(prev => (
+              prev.includes(failedProtectedRoot.path) ? prev : [...prev, failedProtectedRoot.path]
+            ));
+            pendingFullDiskAccessRetryPathRef.current = autoRetryingProtectedPathRef.current === failedPath
+              ? null
+              : failedPath;
+            if (autoRetryingProtectedPathRef.current === failedPath) {
+              autoRetryingProtectedPathRef.current = null;
+            }
+          }
+        } else if (pendingFullDiskAccessRetryPathRef.current === currentPathRef.current) {
+          pendingFullDiskAccessRetryPathRef.current = null;
+        }
         if (fullRefresh) {
           showFeedback(t('messages.refreshFailed', {
             error: appError.userMessage,
@@ -348,6 +376,8 @@ export default function useExplorerDirectoryData({
     fileTags,
     isLocalFilesystemPath,
     isTagRoot,
+    classifyLocalDirectoryError,
+    getProtectedRootForPath,
     protectedRoot,
     recentItems,
     resolveFavoriteItems,
@@ -358,8 +388,26 @@ export default function useExplorerDirectoryData({
   ]);
 
   const retryProtectedPath = useCallback(() => {
-    void refreshCurrentDir();
-  }, [refreshCurrentDir]);
+    const retryPath = currentPathRef.current;
+    autoRetryingProtectedPathRef.current = null;
+    pendingFullDiskAccessRetryPathRef.current = retryPath;
+    const retryProtectedRoot = getProtectedRootForPath(retryPath);
+    const retryPathBlocked = retryProtectedRoot
+      ? blockedProtectedRoots.includes(retryProtectedRoot.path)
+      : false;
+
+    if (!retryPathBlocked) {
+      void refreshCurrentDir();
+      return;
+    }
+
+    void checkFullDiskAccessPermission({ force: true }).then(result => {
+      if (result.status !== 'granted' || currentPathRef.current !== retryPath) return;
+      pendingFullDiskAccessRetryPathRef.current = null;
+      autoRetryingProtectedPathRef.current = retryPath;
+      setBlockedProtectedRoots(prev => prev.filter(path => path !== retryProtectedRoot.path));
+    });
+  }, [blockedProtectedRoots, getProtectedRootForPath, refreshCurrentDir]);
 
   useEffect(() => {
     let cancelled = false;
@@ -413,7 +461,9 @@ export default function useExplorerDirectoryData({
       setFiles([]);
       setLoading(false);
       setDirectoryErrorKind('permission');
-      setLoadError('PermissionDenied: 当前会话中已拦截重复权限请求，请先在系统设置确认授权后重试。');
+      setLoadError(t('dialogs.permissionRetryBlockedDetail', {
+        defaultValue: 'Aether is waiting for Full Disk Access to change. Confirm the switch in System Settings, then retry.',
+      }));
       return () => {
         cancelled = true;
       };
@@ -430,22 +480,36 @@ export default function useExplorerDirectoryData({
         if (cancelled || requestId !== loadRequestSeqRef.current) return;
         setFiles(entries);
         setLoadError('');
+        setDirectoryErrorKind(null);
+        if (pendingFullDiskAccessRetryPathRef.current === currentPath) {
+          pendingFullDiskAccessRetryPathRef.current = null;
+        }
+        if (autoRetryingProtectedPathRef.current === currentPath) {
+          autoRetryingProtectedPathRef.current = null;
+        }
         if (protectedRoot) {
-          setApprovedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
           setBlockedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
         }
       })
-      .catch(err => {
+      .catch(async err => {
         if (cancelled || requestId !== loadRequestSeqRef.current) return;
         const appError = normalizeAppError(err);
         if (appError.kind === 'Cancelled') return;
+        const kind = await classifyLocalDirectoryError(appError, currentPath);
+        if (cancelled || requestId !== loadRequestSeqRef.current) return;
         setFiles([]);
         setLoadError(appError.userMessage);
-        const kind = classifyDirectoryError(appError);
         setDirectoryErrorKind(kind);
         if (kind === 'permission' && protectedRoot) {
           setBlockedProtectedRoots(prev => (prev.includes(protectedRoot.path) ? prev : [...prev, protectedRoot.path]));
-          setApprovedProtectedRoots(prev => prev.filter(path => path !== protectedRoot.path));
+          pendingFullDiskAccessRetryPathRef.current = autoRetryingProtectedPathRef.current === currentPath
+            ? null
+            : currentPath;
+          if (autoRetryingProtectedPathRef.current === currentPath) {
+            autoRetryingProtectedPathRef.current = null;
+          }
+        } else if (pendingFullDiskAccessRetryPathRef.current === currentPath) {
+          pendingFullDiskAccessRetryPathRef.current = null;
         }
       })
       .finally(() => {
@@ -459,9 +523,61 @@ export default function useExplorerDirectoryData({
     directoryLoadScopes.main,
     isProtectedPathBlocked,
     isVirtualRoot,
+    classifyLocalDirectoryError,
     protectedRoot,
     remotePathParts,
+    t,
     themeShowHiddenFiles,
+  ]);
+
+  useEffect(() => {
+    if (
+      !currentPath
+      || isRemoteRoot
+      || isVirtualRoot
+      || !protectedRootPath
+      || !isProtectedPathBlocked
+      || directoryErrorKind !== 'permission'
+    ) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const retryCapturedDirectoryIfGranted = (resultStatus: string) => {
+      const pendingPath = pendingFullDiskAccessRetryPathRef.current;
+      if (!pendingPath || pendingPath !== currentPathRef.current) return;
+      if (fullDiskAccessRetryInFlightRef.current) return;
+      if (cancelled || resultStatus !== 'granted') return;
+      fullDiskAccessRetryInFlightRef.current = true;
+      const retryPath = currentPathRef.current;
+      const retryProtectedRoot = getProtectedRootForPath(retryPath);
+      if (!retryProtectedRoot) {
+        fullDiskAccessRetryInFlightRef.current = false;
+        return;
+      }
+      pendingFullDiskAccessRetryPathRef.current = null;
+      autoRetryingProtectedPathRef.current = retryPath;
+      setBlockedProtectedRoots(prev => prev.filter(path => path !== retryProtectedRoot.path));
+      fullDiskAccessRetryInFlightRef.current = false;
+    };
+
+    const stopPolling = startFullDiskAccessPolling({
+      intervalMs: FULL_DISK_ACCESS_POLL_INTERVAL_MS,
+      checkOptions: { force: true },
+      onResult: result => retryCapturedDirectoryIfGranted(result.status),
+    });
+    return () => {
+      cancelled = true;
+      stopPolling();
+    };
+  }, [
+    currentPath,
+    directoryErrorKind,
+    isProtectedPathBlocked,
+    isRemoteRoot,
+    isVirtualRoot,
+    getProtectedRootForPath,
+    protectedRootPath,
   ]);
 
   useEffect(() => {
@@ -573,7 +689,6 @@ export default function useExplorerDirectoryData({
   }, [currentPath, isActive, isRemoteRoot, isVirtualRoot, refreshCurrentDir, themeShowHiddenFiles]);
 
   return {
-    approveProtectedRoot,
     columnFilesCache,
     columnLoadErrors,
     directoryErrorKind,
@@ -585,8 +700,6 @@ export default function useExplorerDirectoryData({
     loadColumnFiles,
     loadError,
     loading,
-    needsProtectedPathConsent,
-    protectedRoot,
     recentFiles,
     refreshCurrentDir,
     resetColumnState,

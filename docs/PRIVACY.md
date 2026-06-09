@@ -26,9 +26,9 @@ Aether Explorer 是本地优先的 macOS 文件工作台。文件浏览、标签
 - 不上传文件内容做索引。
 - 不收集使用分析、崩溃遥测或广告标识。
 - 不接入商业化订阅、企业账户或云同步。
-- 不把 Developer ID 签名 / notarization 作为当前公益分发的路线阻塞项。
+- 不把商业化、App Store 或 notarization 作为当前公益分发的路线阻塞项；但发版候选的 Full Disk Access 验收必须使用稳定签名身份，不能用未签名 / ad-hoc 构建作为 release evidence。
 
 ## 当前限制
 
 - 严格隐私模式尚未实现；当前通过逐项禁用远程壁纸、AI provider 和 URL 扩展来减少外发面。
-- 更新回滚、staged rollout 和 kill switch 仍在后续路线中，不属于当前签名 / notarization 范围。
+- 更新回滚、staged rollout、kill switch 和 notarization 仍在后续路线中；稳定签名身份和 TCC-only FDA 证据属于当前发版候选权限验收范围。

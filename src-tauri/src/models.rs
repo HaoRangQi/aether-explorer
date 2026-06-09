@@ -106,10 +106,27 @@ pub(crate) struct LiquidGlassStatus {
     pub(crate) reason: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PermissionPreflightResult {
+pub(crate) enum FullDiskAccessStatus {
+    Granted,
+    Denied,
+    Unknown,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FullDiskAccessProbeResult {
     pub(crate) path: String,
-    pub(crate) ok: bool,
+    pub(crate) target_type: String,
+    pub(crate) exists: bool,
+    pub(crate) readable: bool,
     pub(crate) error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FullDiskAccessCheckResult {
+    pub(crate) status: FullDiskAccessStatus,
+    pub(crate) probes: Vec<FullDiskAccessProbeResult>,
 }

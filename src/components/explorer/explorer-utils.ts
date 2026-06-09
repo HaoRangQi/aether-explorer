@@ -1,8 +1,8 @@
 import type { DirectorySizeTaskSnapshot, MoveConflictStrategy, TransferTaskSnapshot } from '../../api/filesystem';
 import { getCachedAssetUrl } from '../../lib/asset-url-cache';
 import { normalizeAppError } from '../../lib/app-error';
+import { getParentPath } from '../../lib/path-helpers';
 import type { FileItem, OperationEffect, OperationStatus } from '../../types';
-import { PROTECTED_ROOT_APPROVALS_KEY } from './explorer-constants';
 import type { DirectorySizeInfo } from './preview-panel-types';
 
 export function formatAppError(error: unknown): string {
@@ -45,6 +45,18 @@ export function getRelativeTimeLabel(modified: string): string {
   return '';
 }
 
+export function buildTimestampTextFileName(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join('') + '.txt';
+}
+
 export function getPdfPreviewSrc(path: string) {
   return `${getCachedAssetUrl(path)}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`;
 }
@@ -57,6 +69,16 @@ export function buildMoveTaskDedupeKey(paths: string[], targetPath: string, stra
     .map(path => (path && path !== '/' ? path.replace(/\/+$/, '') : path || '/'))
     .sort();
   return `${strategy}::${normalizedTarget}::${normalizedPaths.join('\u001f')}`;
+}
+
+export function buildMoveRefreshPaths(paths: string[], targetPath: string): string[] {
+  const refreshPaths = new Set<string>();
+  if (targetPath) refreshPaths.add(targetPath);
+  paths
+    .filter(Boolean)
+    .map(path => getParentPath(path))
+    .forEach(path => refreshPaths.add(path));
+  return Array.from(refreshPaths);
 }
 
 export function getNameFromPath(path: string): string {
@@ -156,16 +178,6 @@ export function buildTemplateValues(file: FileItem, currentPath: string) {
     name: file.name,
     currentPath,
   };
-}
-
-export function loadProtectedRootApprovals(): string[] {
-  try {
-    const raw = sessionStorage.getItem(PROTECTED_ROOT_APPROVALS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string') : [];
-  } catch {
-    return [];
-  }
 }
 
 export function directorySizeInfoFromTaskSnapshot(snapshot: DirectorySizeTaskSnapshot): DirectorySizeInfo {

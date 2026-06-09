@@ -1,10 +1,13 @@
 use crate::error::AppError;
 use crate::models::LiquidGlassStatus;
-use std::fs;
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_liquid_glass::{GlassMaterialVariant, LiquidGlassConfig, LiquidGlassExt};
+
+const MAX_DRAG_DEBUG_LOG_BYTES: u64 = 2 * 1024 * 1024;
 
 #[tauri::command]
 pub(crate) fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), AppError> {
@@ -61,7 +64,83 @@ pub(crate) fn raise_window_at(
 
 #[tauri::command]
 pub(crate) fn debug_log(message: String) {
-    println!("[DEBUG-dnd] {}", message);
+    write_drag_debug_log(&message);
+}
+
+pub(crate) fn write_drag_debug_log(message: &str) {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let line = format!("[{}] {}\n", timestamp_ms, message);
+    print!("[DEBUG-dnd] {}", line);
+
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return;
+    };
+    let path = drag_debug_log_path_for_home(&home);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    rotate_drag_debug_log_if_needed(&path);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+pub(crate) fn drag_debug_log_path_for_home(home: &Path) -> PathBuf {
+    home.join("Library")
+        .join("Logs")
+        .join("Aether Explorer")
+        .join("drag-debug.log")
+}
+
+fn rotate_drag_debug_log_if_needed(path: &Path) {
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    if metadata.len() <= MAX_DRAG_DEBUG_LOG_BYTES {
+        return;
+    }
+    let rotated = path.with_file_name("drag-debug.log.1");
+    let _ = fs::remove_file(&rotated);
+    let _ = fs::rename(path, rotated);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        drag_debug_log_path_for_home, rotate_drag_debug_log_if_needed, MAX_DRAG_DEBUG_LOG_BYTES,
+    };
+    use std::fs;
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn drag_debug_log_path_uses_macos_user_logs_directory() {
+        assert_eq!(
+            drag_debug_log_path_for_home(Path::new("/Users/tester")),
+            Path::new("/Users/tester/Library/Logs/Aether Explorer/drag-debug.log")
+        );
+    }
+
+    #[test]
+    fn drag_debug_log_rotates_when_it_exceeds_size_limit() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("aether-drag-log-test-{}", suffix));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drag-debug.log");
+        fs::write(&path, vec![b'x'; MAX_DRAG_DEBUG_LOG_BYTES as usize + 1]).unwrap();
+
+        rotate_drag_debug_log_if_needed(&path);
+
+        assert!(!path.exists());
+        assert!(dir.join("drag-debug.log.1").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
 }
 
 #[tauri::command]

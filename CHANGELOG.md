@@ -6,6 +6,46 @@
 
 - 暂无
 
+## [0.4.10] - 2026-06-10
+
+本版本相比上一个公开版本 `v0.4.4`，重点交付远程访问浏览、macOS Full Disk Access 权限治理、拖拽/剪贴板文件操作稳定性、发布门禁和文档治理。
+
+### 新增
+- 新增远程访问浏览入口：侧边栏可创建、测试、编辑和删除远程连接，支持 SFTP、FTP、WebDAV HTTP/HTTPS，并把远程目录作为独立标签页浏览。
+- SFTP 支持密码和私钥认证，私钥路径会按 `~/.ssh` 使用习惯补全，连接信息与敏感凭据分开保存。
+- 远程访问后端加入短超时、地址轮询、SFTP session 缓存、现代 SSH 算法偏好和更明确的算法协商失败提示，避免远程目录长期卡在加载态。
+- 右键文件菜单新增“在新标签页中打开”和“在新窗口中打开”；右键空白处新增“粘贴为 txt”，可把系统剪贴板文本直接生成时间戳命名的 `.txt` 文件。
+- 设置页新增权限与隐私诊断入口，支持复制 Full Disk Access 验收证据、在 Finder 中定位当前 app，并展示稳定安装路径和 app identity 提示。
+- 启动阶段新增 Full Disk Access 引导界面，帮助用户把 Aether Explorer 安装到 `/Applications` 后再授予稳定权限。
+
+### 改进
+- 大幅拆分 `ExplorerView`、`SettingsView` 和 Rust `lib.rs`，把文件浏览、上下文菜单、预览、传输、设置面板、系统资源、诊断和文件操作拆到独立模块，降低后续维护成本。
+- 拖拽链路改为同窗口默认移动、跨窗口默认复制，并保留 modifier override；同窗口拖入文件夹时目标文件夹会有明确高亮。
+- 文件拖拽增加 drag-end fallback、屏幕坐标偏移修正、空白区域 drop target、同目录忽略和本地 payload 二次拖拽恢复，减少 Tauri/WebView 丢失 `drop` 事件时的失败。
+- 文件传输任务在完成后会刷新目标目录和源父目录，移动/复制/跨设备复制的反馈更贴近真实结果。
+- 基础字体默认改为 system default；图片预览和设置页布局继续收口，避免图片模式下信息拥挤。
+- 受保护目录的读取、目录大小统计、复制/移动/重命名/删除等操作会按 Full Disk Access 状态给出更准确的恢复文案，不再用泛化的 permission denied 把用户留在错误路径。
+
+### 修复
+- 修复外部拖入同名文件选择“替换”后没有真正覆盖的问题；现在冲突弹窗会把 `replace` 策略正确传到 copy task，后端测试覆盖目标内容被替换。
+- 修复父目录滚动后进入子目录仍沿用旧滚动位置的问题；路径导航和历史恢复会重置目录滚动状态。
+- 修复拖拽文件后文件看似消失、目标目录未刷新、同目录误判“已在该目录中”、第一次拖拽后无法继续拖拽等拖拽状态残留问题。
+- 修复浏览器剪贴板 API 在 Tauri 上下文读取失败导致“粘贴为 txt”不可用的问题；现在改走 Tauri 命令读取，并在剪贴板无文本时禁用菜单项。
+- 修复复制/移动任务失败时错误路径丢失的问题；传输快照现在保留 `errorPath`，前端可以按受保护路径给出 FDA 恢复提示。
+- 修复开发环境授权阻塞调试的问题；仅开发环境跳过启动授权强制弹窗，正式构建不受影响。
+
+### 权限与发布治理
+- 明确项目采用非沙盒、用户手动授权 Full Disk Access 的 macOS 权限模型，并增加源码级 `lint:macos-permissions` 防回退。
+- 新增 release 候选 `.app` 验证器、FDA evidence 验证器、`.app + evidence` 联合验证器，发版证据要求稳定签名身份、bundle id、版本和安装路径一致。
+- release workflow 和本地 `scripts/release.sh` 统一四个版本源校验：`package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 必须与 tag 一致。
+- release workflow 和本地脚本在打包前清理旧产物，构建 signed universal macOS bundle，上传 `.dmg`、`.app.tar.gz`、`.sig`、`latest.json` 和 `SHA256SUMS`，并同步 `stable/latest.json`。
+- README、SECURITY、PRIVACY、SMOKE_TEST、TEST_PLAN、RELEASE_AUDIT 和 QUICK_DELIVERY_PLAN 已对齐当前社区预览分发、未签名/ad-hoc 风险、稳定签名身份和 FDA release evidence 口径。
+
+### 测试
+- 新增远程连接、远程访问 UI、路径 helper、asset URL cache、列导航、权限 UX、Full Disk Access、FDA evidence、macOS app bundle、release evidence、操作权限错误和 smoke 等测试覆盖。
+- 拖拽测试扩展到 Finder 外部 drop、同窗口移动、跨窗口复制、native payload、drag-end fallback、文件夹高亮、冲突替换、剪贴板 txt 粘贴和传输刷新链路。
+- CI / release gate 现在覆盖 TypeScript、ESLint、macOS 权限模型、README 同步、i18n 覆盖、CI gate、Vitest、Rust test、Rust clippy 和 production build。
+
 ## [0.4.3] - 2026-05-27
 
 ### 修复

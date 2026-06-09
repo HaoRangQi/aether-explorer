@@ -9,7 +9,12 @@
  * - 不修改未识别的字段（向前兼容）
  */
 
-import type { ContextMenuAction, ThemeSettings } from '../types';
+import type {
+  ContextMenuAction,
+  CustomColorPalettePreset,
+  ThemeColorToken,
+  ThemeSettings,
+} from '../types';
 import { ACCENT_COLORS } from '../constants';
 import { isSafeShellOpenUrl } from './url-guard';
 import {
@@ -23,6 +28,107 @@ export const CURRENT_SETTINGS_BACKUP_SCHEMA_VERSION = 1;
 
 export const DEFAULT_LIGHT_ACCENT = '#789262'; // 竹青
 export const DEFAULT_DARK_ACCENT = '#425066';  // 黛蓝
+export const DEFAULT_FONT_FAMILY = 'system-ui, sans-serif';
+
+export const THEME_COLOR_TOKENS: ThemeColorToken[] = [
+  'colorIcon',
+  'colorSelectedFg',
+  'colorSelectedBg',
+  'colorHoverFg',
+  'colorHoverBg',
+  'colorPanelBg',
+  'colorTextPrimary',
+  'colorTextSecondary',
+  'colorBorder',
+  'colorDivider',
+  'colorShadow',
+  'colorActiveIconBg',
+  'colorTagSelected',
+  'colorSearchBg',
+  'colorAppBg',
+];
+
+const THEME_COLOR_TOKEN_SET = new Set<string>(THEME_COLOR_TOKENS);
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value.trim());
+}
+
+function normalizeHexColor(value: unknown): string | undefined {
+  return isHexColor(value) ? value.trim() : undefined;
+}
+
+export function normalizeCustomColorPalettePresets(value: unknown): CustomColorPalettePreset[] {
+  if (!Array.isArray(value)) return [];
+  const presets: CustomColorPalettePreset[] = [];
+  const seen = new Set<string>();
+
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id.trim() : '';
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    const accentColor = normalizeHexColor(record.accentColor);
+    if (!id || !name || !accentColor || seen.has(id)) continue;
+
+    const colors: Partial<Record<ThemeColorToken, string>> = {};
+    if (record.colors && typeof record.colors === 'object' && !Array.isArray(record.colors)) {
+      for (const [key, color] of Object.entries(record.colors as Record<string, unknown>)) {
+        if (!THEME_COLOR_TOKEN_SET.has(key)) continue;
+        const normalizedColor = normalizeHexColor(color);
+        if (normalizedColor) colors[key as ThemeColorToken] = normalizedColor;
+      }
+    }
+
+    seen.add(id);
+    presets.push({ id, name, accentColor, colors });
+    if (presets.length >= 24) break;
+  }
+
+  return presets;
+}
+
+export function buildCustomColorPalettePreset({
+  name,
+  theme,
+  now = Date.now(),
+}: {
+  name: string;
+  theme: ThemeSettings;
+  now?: number;
+}): CustomColorPalettePreset {
+  const colors: Partial<Record<ThemeColorToken, string>> = {};
+  for (const key of THEME_COLOR_TOKENS) {
+    const color = normalizeHexColor(theme[key]);
+    if (color) colors[key] = color;
+  }
+
+  return {
+    id: `custom-${now}`,
+    name: name.trim() || 'Custom Palette',
+    accentColor: normalizeHexColor(theme.accentColor) || DEFAULT_LIGHT_ACCENT,
+    colors,
+  };
+}
+
+export function applyCustomColorPalettePreset(
+  theme: ThemeSettings,
+  preset: CustomColorPalettePreset,
+): ThemeSettings {
+  const [normalizedPreset] = normalizeCustomColorPalettePresets([preset]);
+  if (!normalizedPreset) return theme;
+
+  const nextTheme: ThemeSettings = {
+    ...theme,
+    accentColor: normalizedPreset.accentColor,
+  };
+
+  for (const key of THEME_COLOR_TOKENS) {
+    nextTheme[key] = normalizedPreset.colors[key];
+  }
+
+  return nextTheme;
+}
 
 export const DEPRECATED_CONTEXT_EXTENSION_IDS = new Set([
   'open', 'rename', 'copy', 'move', 'share', 'compress',
@@ -58,7 +164,7 @@ export const DEFAULT_THEME: ThemeSettings = {
   transparency: 100,
   enableMica: true,
   enableLiquidGlass: false,
-  fontFamily: 'Inter',
+  fontFamily: DEFAULT_FONT_FAMILY,
   gridSize: 180,
   gridWidth: 180,
   gridHeight: 180,
@@ -76,6 +182,7 @@ export const DEFAULT_THEME: ThemeSettings = {
   crossWindowDropDefault: 'copy',
   aiOpsHistoryRetentionDays: AI_OP_HISTORY_DEFAULT_RETENTION_DAYS,
   showFolderSizeInList: true,
+  customColorPalettes: [],
   wallpaperBlur: 0,
   enableGradient: false,
   contextMenuExtensions: [
@@ -181,6 +288,7 @@ export function migrateThemeSettings(settings: PersistedThemeSettings): ThemeSet
     ...settings,
     terminalScripts,
     contextMenuExtensions: normalizeContextMenuExtensions(settings.contextMenuExtensions),
+    customColorPalettes: normalizeCustomColorPalettePresets(settings.customColorPalettes),
     defaultHomePath: normalizeDefaultHomePath(settings.defaultHomePath),
     aiOpsHistoryRetentionDays: normalizeOpHistoryRetentionDays(settings.aiOpsHistoryRetentionDays),
   };
@@ -256,6 +364,7 @@ const THEME_IMPORT_KEYS = new Set<keyof ThemeSettings>([
   'language',
   'followSystemLanguage',
   'languageOptions',
+  'customColorPalettes',
   'colorIcon',
   'colorSelectedFg',
   'colorSelectedBg',

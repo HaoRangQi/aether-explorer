@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AetherAppError,
   directoryErrorKind,
+  directoryErrorKindForFullDiskAccess,
   normalizeAppError,
 } from '../lib/app-error';
 
@@ -90,5 +91,16 @@ describe('directoryErrorKind', () => {
     expect(directoryErrorKind(new AetherAppError({ kind: 'PermissionDenied', message: '权限不足' }))).toBe('permission');
     expect(directoryErrorKind(new AetherAppError({ kind: 'NotFound', message: '不存在' }))).toBe('notFound');
     expect(directoryErrorKind(new AetherAppError({ kind: 'Internal', message: '失败' }))).toBe('generic');
+  });
+
+  it('only treats permission errors as FDA recovery when FDA is not granted', () => {
+    const permissionError = new AetherAppError({ kind: 'PermissionDenied', message: '权限不足' });
+
+    expect(directoryErrorKindForFullDiskAccess(permissionError, 'denied')).toBe('permission');
+    expect(directoryErrorKindForFullDiskAccess(permissionError, 'unknown')).toBe('permission');
+    expect(directoryErrorKindForFullDiskAccess(permissionError, null)).toBe('permission');
+    expect(directoryErrorKindForFullDiskAccess(permissionError, 'granted')).toBe('generic');
+    expect(directoryErrorKindForFullDiskAccess(permissionError, 'denied', false)).toBe('generic');
+    expect(directoryErrorKindForFullDiskAccess(new AetherAppError({ kind: 'NotFound', message: '不存在' }), 'granted')).toBe('notFound');
   });
 });

@@ -1,0 +1,12 @@
+{
+  "id": "fix-drag-screen-offset",
+  "title": "修正重复拖拽时 dragend 坐标偏移导致无法移动",
+  "status": "completed",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "frontend",
+  "currentPhase": "completed",
+  "nextAction": "归档任务记录",
+  "createdAt": "2026-06-10T00:00:00Z",
+  "branch": "codex/remote-access"
+}

@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 import {
   Check,
   ChevronRight,
+  ClipboardPaste,
   Copy,
   Edit2,
   Edit3,
@@ -13,6 +14,7 @@ import {
   History,
   Info,
   List,
+  AppWindowMac,
   RefreshCw,
   Sparkles,
   Star,
@@ -57,9 +59,12 @@ type ContextMenuProps = {
   handleNewFile: (targetPath?: string) => void | Promise<void>;
   handleNewFolder: (targetPath?: string) => void | Promise<void>;
   handleOpenFile: (file: FileItem) => void | Promise<void>;
+  handleOpenInNewTab: (file?: FileItem | null) => void | Promise<void>;
+  handleOpenInNewWindow: (file?: FileItem | null) => void | Promise<void>;
   handleOpenTerminal: (file?: FileItem | null) => void | Promise<void>;
   handleOpenWith: (file: FileItem, appName: string) => void | Promise<void>;
   handleOpenWithOther: (file: FileItem) => void | Promise<void>;
+  handlePasteAsTextFile: (targetPath?: string) => void | Promise<void>;
   handlePasteFromClipboard: (targetPath?: string) => void | Promise<void>;
   handleQuickLook: (file?: FileItem) => void | Promise<void>;
   handleRenameStart: (file: FileItem) => void;
@@ -69,6 +74,7 @@ type ContextMenuProps = {
   handleSort: (key: string) => void;
   handleToggleFavoriteForItems: (items?: FileItem[]) => void;
   hasFileClipboard: boolean;
+  hasTextClipboard: boolean;
   isAdminContextMenuEmpty: boolean;
   liquidGlassEnabled: boolean;
   onShowAiAssistant: () => void;
@@ -110,9 +116,12 @@ export default function ContextMenu({
   handleNewFile,
   handleNewFolder,
   handleOpenFile,
+  handleOpenInNewTab,
+  handleOpenInNewWindow,
   handleOpenTerminal,
   handleOpenWith,
   handleOpenWithOther,
+  handlePasteAsTextFile,
   handlePasteFromClipboard,
   handleQuickLook,
   handleRenameStart,
@@ -122,6 +131,7 @@ export default function ContextMenu({
   handleSort,
   handleToggleFavoriteForItems,
   hasFileClipboard,
+  hasTextClipboard,
   isAdminContextMenuEmpty,
   liquidGlassEnabled,
   onShowAiAssistant,
@@ -156,6 +166,17 @@ export default function ContextMenu({
             </button>
             <button onClick={() => handleNewFile(contextMenu.targetDir)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
               <Upload className="w-4 h-4" /> {t('explorer.newFile', '新建文件')}
+            </button>
+            <button
+              onClick={() => handlePasteAsTextFile(contextMenu.targetDir)}
+              disabled={!hasTextClipboard}
+              className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all ${
+                !hasTextClipboard
+                  ? 'text-on-surface/25 cursor-not-allowed'
+                  : 'hover:bg-primary/10 text-on-surface hover:text-primary'
+              }`}
+            >
+              <ClipboardPaste className="w-4 h-4" /> {t('explorer.pasteAsTextFile', '粘贴为 txt')}
             </button>
             <div className="my-1 h-px bg-primary/10" />
             <button onClick={() => { void refreshCurrentDir(true, contextMenu.targetDir); }} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
@@ -251,6 +272,12 @@ export default function ContextMenu({
             </div>
             <button onClick={() => handleRenameStart(contextFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
               <Edit3 className="w-4 h-4" /> {t('explorer.rename', '重命名')}
+            </button>
+            <button onClick={() => handleOpenInNewTab(contextFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+              <ExternalLink className="w-4 h-4" /> {t('explorer.openInNewTab', '在新标签页中打开')}
+            </button>
+            <button onClick={() => handleOpenInNewWindow(contextFile)} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">
+              <AppWindowMac className="w-4 h-4" /> {t('explorer.openInNewWindow', '在新窗口中打开')}
             </button>
             <div className="my-1 h-px bg-primary/10" />
             <button onClick={() => handleCopyToClipboard(getActionFiles(contextFile))} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-[12px] font-bold transition-all text-on-surface hover:text-primary">

@@ -139,10 +139,12 @@ See [FEATURES.md](./FEATURES.md) for the full status table.
 
 ## Documentation Governance
 
+- Changelog: [`CHANGELOG.md`](./CHANGELOG.md)
 - Codex index: [`codex/README.md`](./codex/README.md)
 - Release workflow and acceptance: [`codex/06-release-runbook.md`](./codex/06-release-runbook.md)
 - Liquid Glass and file workbench governance: [`codex/14-liquid-glass-file-workbench.md`](./codex/14-liquid-glass-file-workbench.md)
 - Full-stack test report: [`docs/FULL_TEST_REPORT.md`](./docs/FULL_TEST_REPORT.md)
+- Release audit: [`docs/RELEASE_AUDIT.md`](./docs/RELEASE_AUDIT.md)
 
 ## Notes
 
@@ -155,11 +157,18 @@ See [FEATURES.md](./FEATURES.md) for the full status table.
 
 ### Opening unsigned builds
 
-This project is maintained as a community, non-commercial distribution. Developer ID signing and notarization are intentionally not current roadmap blockers. When opening Aether Explorer for the first time, macOS may show "Aether Explorer.app is damaged and can't be opened" or block the unsigned app.
+This project is maintained as a community, non-commercial distribution, but macOS permission acceptance for a release candidate requires a stable signing identity: non-ad-hoc signing, a `TeamIdentifier`, and code-signing `Identifier` set to `com.aether.explorer`. Unsigned or ad-hoc builds are suitable only for local development or advanced-user testing at your own risk; they are not valid release evidence for stable Full Disk Access behavior.
 
-**Cause:** Current builds do not use Apple Developer code signing, so Gatekeeper treats them as unsigned apps.
+**Cause:** Full Disk Access is a TCC permission that the user must manually grant in System Settings. macOS does not allow apps to enable it automatically; stable bundle ID, signing identity, and install path keep a release candidate tied to the same TCC client across updates. Unsigned or ad-hoc builds may be blocked by Gatekeeper and may be treated as a new app after restart or replacement.
 
-**Recommended path:**
+**End-user flow:**
+
+1. Prefer installing Aether Explorer at `/Applications/Aether Explorer.app`
+2. On first launch, follow the in-app prompt to open System Settings
+3. Enable Aether Explorer under **Privacy & Security → Full Disk Access**
+4. Return to the app and click "Check Authorization", or wait for the automatic check to pass
+
+**Advanced fallback for unsigned / ad-hoc builds:**
 
 1. Open **System Settings → Privacy & Security**
 2. Scroll down to the **Security** section
@@ -173,7 +182,18 @@ This project is maintained as a community, non-commercial distribution. Develope
 xattr -rd com.apple.quarantine /Applications/Aether\ Explorer.app
 ```
 
-> Unsigned builds should not be presented as fully trusted signed distribution. Only download from the project release page, and test on a disposable folder before operating on important files.
+**Release verification for maintainers / testers:**
+
+Before accepting a release candidate for clean-user Full Disk Access testing, run:
+
+```bash
+npm run validate:macos-app:release -- "/Applications/Aether Explorer.app"
+npm run validate:macos-permission-release -- --app "/Applications/Aether Explorer.app" --evidence /path/to/fda-evidence.json
+```
+
+See `0.1 Full Disk Access 干净用户验收` in [docs/SMOKE_TEST.md](./docs/SMOKE_TEST.md) for the full acceptance procedure.
+
+> Unsigned / ad-hoc builds should not be presented as fully trusted signed distribution, and they are not valid Full Disk Access release evidence. Only download from the project release page, and test on a disposable folder before operating on important files.
 
 ## License
 

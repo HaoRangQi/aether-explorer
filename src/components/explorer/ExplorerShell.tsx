@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import type { TFunction } from 'i18next';
 import {
@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { QUICK_ACCESS } from '../../constants';
+import { normalizeAppError } from '../../lib/app-error';
 import type { NavigationHistory } from '../../lib/navigation-history';
 import { isRemotePath } from '../../lib/path-helpers';
 import { safeInvoke } from '../../lib/tauri-runtime';
@@ -50,11 +51,6 @@ type BreadcrumbSegment = {
 };
 
 type DirectoryErrorKind = 'permission' | 'notFound' | 'generic';
-
-type ProtectedRootInfo = {
-  path: string;
-  label: string;
-};
 
 type SelectionBox = {
   x1: number;
@@ -78,7 +74,6 @@ type VisibleRange = {
 type ExplorerShellProps = {
   activeDropdown: string | null;
   allColumns: Array<string | undefined>;
-  approveProtectedRoot: () => void;
   areAllTagged: (items: FileItem[], tagId: string) => boolean;
   baseView: string;
   breadcrumbSegments: BreadcrumbSegment[];
@@ -95,7 +90,6 @@ type ExplorerShellProps = {
   displayedFiles: FileItem[];
   dropdownRef: React.RefObject<HTMLDivElement | null>;
   favorites: string[];
-  favoritesVirtualPath: string;
   fileListRef: React.RefObject<HTMLDivElement | null>;
   focusCurrentWindow: () => void | Promise<void>;
   getActionDirectory: (preferredPath?: string) => string;
@@ -145,7 +139,6 @@ type ExplorerShellProps = {
   navigateForward: () => void;
   navigateToPath: (path: string, options?: { replace?: boolean }) => void;
   navigationHistory: NavigationHistory;
-  needsProtectedPathConsent: boolean;
   onClearRecent: () => void;
   onSelectFiles: (ids: string[]) => void;
   onStartTransfer: () => void;
@@ -154,7 +147,6 @@ type ExplorerShellProps = {
   openCurrentInNewTab: (file?: FileItem | null) => void;
   pathInput: string;
   pathScrollRef: React.RefObject<HTMLDivElement | null>;
-  protectedRoot: ProtectedRootInfo | null;
   recentItems: string[];
   refreshCurrentDir: (fullRefresh?: boolean, targetPath?: string) => Promise<FileItem[]>;
   remotePathParts: { remotePath?: string } | null;
@@ -195,7 +187,6 @@ type ExplorerShellProps = {
 export default function ExplorerShell({
   activeDropdown,
   allColumns,
-  approveProtectedRoot,
   areAllTagged,
   baseView,
   breadcrumbSegments,
@@ -212,7 +203,6 @@ export default function ExplorerShell({
   displayedFiles,
   dropdownRef,
   favorites,
-  favoritesVirtualPath,
   fileListRef,
   focusCurrentWindow,
   getActionDirectory,
@@ -262,7 +252,6 @@ export default function ExplorerShell({
   navigateForward,
   navigateToPath,
   navigationHistory,
-  needsProtectedPathConsent,
   onClearRecent,
   onSelectFiles,
   onStartTransfer,
@@ -271,7 +260,6 @@ export default function ExplorerShell({
   openCurrentInNewTab,
   pathInput,
   pathScrollRef,
-  protectedRoot,
   recentItems,
   refreshCurrentDir,
   remotePathParts,
@@ -308,6 +296,17 @@ export default function ExplorerShell({
   virtualRootLabel,
   visibleRange,
 }: ExplorerShellProps) {
+  const [openSettingsError, setOpenSettingsError] = useState<string | null>(null);
+
+  const handleOpenSystemSettings = async () => {
+    setOpenSettingsError(null);
+    try {
+      await safeInvoke('open_system_settings');
+    } catch (err) {
+      setOpenSettingsError(normalizeAppError(err).userMessage);
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden" onClick={() => {
       if (!isMarqueeDragging) {
@@ -704,6 +703,7 @@ export default function ExplorerShell({
             <div
               ref={containerRef}
               data-explorer-surface="true"
+              data-drop-target-dir={currentPath}
               onClick={() => {
                 if (inspectorOverride) closeInspector();
               }}
@@ -775,36 +775,6 @@ export default function ExplorerShell({
                   )}
                 </div>
               )}
-              {!showBlockingLoading && !loadError && needsProtectedPathConsent && protectedRoot && (
-                <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6">
-                  <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
-                    <Shield className="w-8 h-8 text-primary" />
-                  </div>
-                  <p className="text-on-surface/60 text-sm font-bold">
-                    {t('dialogs.protectedPathTitle', '这个位置可能触发 macOS 权限弹框')}
-                  </p>
-                  <p className="text-on-surface/35 text-xs max-w-md text-center px-4 leading-relaxed">
-                    {t('dialogs.protectedPathDescription', {
-                      root: protectedRoot.label,
-                      defaultValue: `当前目录位于“${protectedRoot.label}”下。为了避免应用一启动就连续弹系统权限框，Aether 会先等你明确继续，再去请求系统访问。`,
-                    })}
-                  </p>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={approveProtectedRoot}
-                      className="px-6 py-3 bg-primary text-on-primary font-black rounded-2xl text-[13px] shadow-lg shadow-primary/20 hover:scale-[1.02] transition-all"
-                    >
-                      {t('dialogs.continueAccess', '继续访问')}
-                    </button>
-                    <button
-                      onClick={() => navigateToPath(favoritesVirtualPath, { replace: true })}
-                      className="px-6 py-3 bg-primary/10 text-on-surface font-bold rounded-2xl text-[13px] hover:bg-primary/20 transition-all"
-                    >
-                      {t('dialogs.backHome', '先回首页')}
-                    </button>
-                  </div>
-                </div>
-              )}
               {!showBlockingLoading && loadError && (
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6">
                   <div className="w-16 h-16 rounded-full bg-red-400/10 flex items-center justify-center">
@@ -814,7 +784,7 @@ export default function ExplorerShell({
                     {isRemoteRoot
                       ? t('explorer.remoteLoadFailedTitle', '远程目录加载失败')
                       : directoryErrorKind === 'permission'
-                        ? t('dialogs.permissionDeniedTitle', '无权访问此目录')
+                        ? t('dialogs.permissionDeniedTitle', 'Permission Denied')
                         : directoryErrorKind === 'notFound'
                           ? t('dialogs.notFoundTitle', '目录不存在或暂不可用')
                           : t('dialogs.readFailedTitle', '目录读取失败')}
@@ -823,30 +793,35 @@ export default function ExplorerShell({
                     {isRemoteRoot
                       ? t('explorer.remoteLoadFailedDescription', '请检查服务器地址、端口、账号凭据和起始路径，然后重试。')
                       : directoryErrorKind === 'permission'
-                        ? t('dialogs.permissionDeniedDescription', '此目录被 macOS 隐私策略保护，或当前运行实例没有继承到已授权的稳定应用身份。若你明明在系统设置里开过权限，但每次启动还是反复弹框，通常不是你不会配，而是当前构建没有用稳定签名身份启动，系统把它当成了新的 app。')
+                        ? t('dialogs.permissionDeniedDescription', 'This location is protected by macOS privacy, or this running build is not the same stable app identity that was authorized. If you already enabled access but keep seeing this, move Aether Explorer to /Applications, use Settings > Permissions > Reveal Aether in Finder to confirm the exact app target, enable Full Disk Access for that item, then retry.')
                         : directoryErrorKind === 'notFound'
                           ? t('dialogs.notFoundDescription', '这个路径当前不存在，或者对应位置还没挂载完成。先确认目录、磁盘或 iCloud 位置还在。')
                           : t('dialogs.readFailedDescription', '这次读取没成功，但不一定是权限问题。可以先重试；如果只有受保护目录失败，再去系统设置里检查授权。')}
                   </p>
                   <div className="flex gap-3">
-                    {directoryErrorKind === 'permission' && (
+                    {!isRemoteRoot && directoryErrorKind === 'permission' && (
                       <button
-                        onClick={() => safeInvoke('open_system_settings').catch(() => {})}
+                        onClick={handleOpenSystemSettings}
                         className="px-6 py-3 bg-primary text-on-primary font-black rounded-2xl text-[13px] shadow-lg shadow-primary/20 hover:scale-[1.02] transition-all"
                       >
-                        {t('dialogs.openSystemSettings', '打开系统设置')}
+                        {t('dialogs.openSystemSettings', 'Open System Settings')}
                       </button>
                     )}
                     <button
                       onClick={retryProtectedPath}
                       className="px-6 py-3 bg-primary/10 text-on-surface font-bold rounded-2xl text-[13px] hover:bg-primary/20 transition-all"
                     >
-                      {t('dialogs.retry', '重试')}
+                      {t('dialogs.retry', 'Retry')}
                     </button>
                   </div>
-                  {directoryErrorKind === 'permission' && (
+                  {!isRemoteRoot && directoryErrorKind === 'permission' && (
                     <p className="text-on-surface/20 text-[11px] max-w-sm text-center leading-relaxed">
-                      {t('dialogs.permissionSteps', '操作步骤：点击“打开系统设置” → 隐私与安全性 → 完全磁盘访问权限 → 打开 Aether Explorer 开关 → 回到此页面点击“重试”。')}
+                      {t('dialogs.permissionSteps', 'Open System Settings > Privacy & Security > Full Disk Access, enable Aether Explorer, then return here and retry.')}
+                    </p>
+                  )}
+                  {openSettingsError && !isRemoteRoot && directoryErrorKind === 'permission' && (
+                    <p className="text-red-400/80 text-[11px] max-w-sm text-center leading-relaxed">
+                      {t('dialogs.openSystemSettingsFailed', { error: openSettingsError })}
                     </p>
                   )}
                   <p className="text-on-surface/15 text-[11px] max-w-lg text-center break-all px-4">

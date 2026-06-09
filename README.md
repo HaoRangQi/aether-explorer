@@ -141,10 +141,12 @@ aether-explorer/
 
 ## 文档治理
 
+- 变更日志：[`CHANGELOG.md`](./CHANGELOG.md)
 - 法典总索引：[`codex/README.md`](./codex/README.md)
 - 发版流程与验收：[`codex/06-release-runbook.md`](./codex/06-release-runbook.md)
 - 液态玻璃与文件工作台治理：[`codex/14-liquid-glass-file-workbench.md`](./codex/14-liquid-glass-file-workbench.md)
 - 全栈测试报告：[`docs/FULL_TEST_REPORT.md`](./docs/FULL_TEST_REPORT.md)
+- 发布审计：[`docs/RELEASE_AUDIT.md`](./docs/RELEASE_AUDIT.md)
 
 ## 注意事项
 
@@ -157,11 +159,18 @@ aether-explorer/
 
 ### 未签名构建如何打开
 
-当前项目按公益分发维护，暂不把 Developer ID 签名 / notarization 作为路线阻塞项。首次打开 DMG 安装的 Aether Explorer，macOS 可能会提示「已损坏，无法打开」或拦截未签名应用。
+当前项目按公益分发维护，但发版候选的 macOS 权限验收必须使用稳定签名身份：非 ad-hoc、存在 `TeamIdentifier`，且 code-signing `Identifier` 为 `com.aether.explorer`。未签名或 ad-hoc 构建只适合本地开发 / 高级用户自担风险测试，不能作为“完全磁盘访问权限已稳定可用”的 release evidence。
 
-**原因：** 当前构建没有 Apple Developer 签名认证，Gatekeeper 会按未签名应用处理。
+**原因：** Full Disk Access 是用户在系统设置中手动授予的 TCC 权限。macOS 不允许应用自动开启该权限；稳定 bundle id、签名身份和安装路径只是让同一候选在更新后继续对应同一个 TCC client，减少重复授权。未签名或 ad-hoc 构建可能被 Gatekeeper 拦截，也可能在重启或替换后被 TCC 当成新应用。
 
-**建议方式：**
+**普通用户流程：**
+
+1. 优先把 Aether Explorer 安装到 `/Applications/Aether Explorer.app`
+2. 首次启动时按应用内提示打开系统设置
+3. 在 **隐私与安全性 → 完全磁盘访问权限** 中开启 Aether Explorer
+4. 回到应用后点击“检查授权”或等待自动检查通过
+
+**未签名 / ad-hoc 构建的高级用户打开方式：**
 
 1. 打开 **系统设置 → 隐私与安全性**
 2. 向下滚动到「安全性」部分
@@ -175,7 +184,18 @@ aether-explorer/
 xattr -rd com.apple.quarantine /Applications/Aether\ Explorer.app
 ```
 
-> 未签名应用不应被包装成正式可信分发。请只从项目发布页获取安装包，并在真实重要文件上操作前先用测试目录验证。
+**维护者 / 测试者 release 验收：**
+
+发版候选进入干净用户 Full Disk Access 验收前，应先跑：
+
+```bash
+npm run validate:macos-app:release -- "/Applications/Aether Explorer.app"
+npm run validate:macos-permission-release -- --app "/Applications/Aether Explorer.app" --evidence /path/to/fda-evidence.json
+```
+
+完整验收步骤见 [docs/SMOKE_TEST.md](./docs/SMOKE_TEST.md) 的 `0.1 Full Disk Access 干净用户验收`。
+
+> 未签名 / ad-hoc 应用不应被包装成正式可信分发，也不能作为 Full Disk Access release evidence。请只从项目发布页获取安装包，并在真实重要文件上操作前先用测试目录验证。
 
 ## License
 

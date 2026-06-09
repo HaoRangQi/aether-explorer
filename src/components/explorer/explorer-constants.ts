@@ -38,6 +38,5 @@ export const TAGS_VIRTUAL_PREFIX = 'aether://tags/';
 export const OPEN_WITH_SELECT_PLACEHOLDER = '__aether-open-with-placeholder__';
 export const OPEN_WITH_SELECT_OTHER = '__aether-open-with-other__';
 export const OPEN_WITH_APPS = ['Finder', 'Preview', 'TextEdit', 'Safari', 'Google Chrome', 'Visual Studio Code'];
-export const PROTECTED_ROOT_APPROVALS_KEY = 'aether-protected-root-approvals';
 export const REMOTE_DIRECTORY_UI_TIMEOUT_MS = 5000;
 export const REMOTE_DIRECTORY_TIMEOUT_MESSAGE = '远程目录加载超时（5 秒）。请检查服务器地址、端口、账号凭据和网络。';

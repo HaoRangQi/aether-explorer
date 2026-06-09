@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::commands::window::write_drag_debug_log;
 use crate::error::AppError;
 use crate::{next_transfer_task_id, now_unix_seconds, safe_canonicalize, unique_destination};
 
@@ -51,6 +52,7 @@ pub(crate) struct TransferTaskSnapshot {
     pub(crate) completed_bytes: u64,
     pub(crate) current_name: Option<String>,
     pub(crate) error: Option<String>,
+    pub(crate) error_path: Option<String>,
     pub(crate) started_at: u64,
     pub(crate) finished_at: Option<u64>,
     pub(crate) copied: u64,
@@ -152,6 +154,14 @@ impl TransferTaskState {
         }
 
         if let Some((_, task_id)) = newest_existing {
+            write_drag_debug_log(&format!(
+                "backendMoveTask deduped taskId={} key={} srcCount={} dstDir={} paths={}",
+                task_id,
+                dedupe_key,
+                srcs.len(),
+                dst_dir,
+                describe_debug_paths(srcs)
+            ));
             return Ok((task_id, None));
         }
 
@@ -171,6 +181,7 @@ impl TransferTaskState {
                     completed_bytes: 0,
                     current_name: None,
                     error: None,
+                    error_path: None,
                     started_at: now,
                     finished_at: None,
                     copied: 0,
@@ -183,10 +194,20 @@ impl TransferTaskState {
                     skipped_conflicts: 0,
                 },
                 cancel_requested: cancel_requested.clone(),
-                move_dedupe_key: Some(dedupe_key),
+                move_dedupe_key: Some(dedupe_key.clone()),
             },
         );
 
+        write_drag_debug_log(&format!(
+            "backendMoveTask created taskId={} key={} srcCount={} dstDir={} totalItems={} totalBytes={} paths={}",
+            task_id,
+            dedupe_key,
+            srcs.len(),
+            dst_dir,
+            estimate.items,
+            estimate.bytes,
+            describe_debug_paths(srcs)
+        ));
         Ok((task_id, Some(cancel_requested)))
     }
 
@@ -266,6 +287,14 @@ fn is_terminal_transfer_status(status: &str) -> bool {
 pub(crate) const FINISHED_TRANSFER_TASK_RETENTION_SECONDS: u64 = 30;
 const MOVE_TASK_DEDUPE_WINDOW_SECONDS: u64 = 2;
 
+fn describe_debug_paths(paths: &[String]) -> String {
+    if paths.is_empty() {
+        "(none)".into()
+    } else {
+        paths.join("|")
+    }
+}
+
 fn normalize_transfer_path_for_dedupe(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -343,12 +372,38 @@ fn estimate_transfer_paths(paths: &[String]) -> TransferEstimate {
         })
 }
 
-fn summarize_transfer_error(failed: &[MoveFailure], conflicts: &[MoveConflict]) -> Option<String> {
+struct TransferErrorSummary {
+    message: String,
+    path: Option<String>,
+}
+
+fn looks_like_permission_denied(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("permission")
+        || lower.contains("denied")
+        || lower.contains("not allowed")
+        || lower.contains("not permitted")
+}
+
+fn summarize_transfer_error(
+    failed: &[MoveFailure],
+    conflicts: &[MoveConflict],
+) -> Option<TransferErrorSummary> {
     if !conflicts.is_empty() {
-        return Some(format!("存在 {} 个文件冲突", conflicts.len()));
+        return Some(TransferErrorSummary {
+            message: format!("存在 {} 个文件冲突", conflicts.len()),
+            path: conflicts.first().map(|conflict| conflict.src.clone()),
+        });
     }
     if !failed.is_empty() {
-        return Some(format!("{} 个项目失败：{}", failed.len(), failed[0].error));
+        let primary_failure = failed
+            .iter()
+            .find(|failure| looks_like_permission_denied(&failure.error))
+            .unwrap_or(&failed[0]);
+        return Some(TransferErrorSummary {
+            message: format!("{} 个项目失败：{}", failed.len(), primary_failure.error),
+            path: Some(primary_failure.src.clone()),
+        });
     }
     None
 }
@@ -1199,6 +1254,7 @@ fn create_transfer_task(
             completed_bytes: 0,
             current_name: None,
             error: None,
+            error_path: None,
             started_at: now_unix_seconds(),
             finished_at: None,
             copied: 0,
@@ -1236,6 +1292,17 @@ fn finish_copy_transfer_task(
             } else {
                 "completed"
             };
+            write_drag_debug_log(&format!(
+                "backendCopyTask finishOk taskId={} status={} copied={} failed={} conflicts={} skippedConflicts={} error={} errorPath={}",
+                task_id,
+                status,
+                result.copied.len(),
+                result.failed.len(),
+                result.conflicts.len(),
+                result.skipped_conflicts,
+                error.as_ref().map(|summary| summary.message.as_str()).unwrap_or("(none)"),
+                error.as_ref().and_then(|summary| summary.path.as_deref()).unwrap_or("(none)")
+            ));
             state.update(task_id, |snapshot| {
                 snapshot.copied = result.copied.len() as u64;
                 snapshot.failed = result.failed.len() as u64;
@@ -1250,7 +1317,8 @@ fn finish_copy_transfer_task(
                     return;
                 }
                 snapshot.status = status.into();
-                snapshot.error = error;
+                snapshot.error = error.as_ref().map(|summary| summary.message.clone());
+                snapshot.error_path = error.and_then(|summary| summary.path);
                 snapshot.finished_at = Some(now_unix_seconds());
                 if snapshot.status == "completed" {
                     snapshot.completed_items = snapshot.total_items;
@@ -1259,6 +1327,12 @@ fn finish_copy_transfer_task(
             });
         }
         Err(error) => {
+            write_drag_debug_log(&format!(
+                "backendCopyTask finishErr taskId={} error={} errorPath={}",
+                task_id,
+                error.message,
+                error.path.as_deref().unwrap_or("(none)")
+            ));
             state.update(task_id, |snapshot| {
                 if snapshot.status == "cancelling" {
                     snapshot.status = "cancelled".into();
@@ -1267,6 +1341,7 @@ fn finish_copy_transfer_task(
                     return;
                 }
                 snapshot.status = "failed".into();
+                snapshot.error_path = error.path.clone();
                 snapshot.error = Some(error.message);
                 snapshot.finished_at = Some(now_unix_seconds());
             });
@@ -1295,6 +1370,19 @@ pub(crate) fn finish_move_transfer_task(
             } else {
                 "completed"
             };
+            write_drag_debug_log(&format!(
+                "backendMoveTask finishOk taskId={} status={} moved={} copiedCrossDevice={} failed={} conflicts={} skippedSameDir={} skippedConflicts={} error={} errorPath={}",
+                task_id,
+                status,
+                result.moved.len(),
+                result.copied_cross_device.len(),
+                result.failed.len(),
+                result.conflicts.len(),
+                result.skipped_same_dir,
+                result.skipped_conflicts,
+                error.as_ref().map(|summary| summary.message.as_str()).unwrap_or("(none)"),
+                error.as_ref().and_then(|summary| summary.path.as_deref()).unwrap_or("(none)")
+            ));
             state.update(task_id, |snapshot| {
                 snapshot.moved = result.moved.len() as u64;
                 snapshot.copied_cross_device = result.copied_cross_device.len() as u64;
@@ -1313,7 +1401,8 @@ pub(crate) fn finish_move_transfer_task(
                     return;
                 }
                 snapshot.status = status.into();
-                snapshot.error = error;
+                snapshot.error = error.as_ref().map(|summary| summary.message.clone());
+                snapshot.error_path = error.and_then(|summary| summary.path);
                 snapshot.finished_at = Some(now_unix_seconds());
                 if snapshot.status == "completed" {
                     snapshot.completed_items = snapshot.total_items;
@@ -1322,6 +1411,12 @@ pub(crate) fn finish_move_transfer_task(
             });
         }
         Err(error) => {
+            write_drag_debug_log(&format!(
+                "backendMoveTask finishErr taskId={} error={} errorPath={}",
+                task_id,
+                error.message,
+                error.path.as_deref().unwrap_or("(none)")
+            ));
             state.update(task_id, |snapshot| {
                 if snapshot.status == "cancelling" {
                     snapshot.status = "cancelled".into();
@@ -1330,6 +1425,7 @@ pub(crate) fn finish_move_transfer_task(
                     return;
                 }
                 snapshot.status = "failed".into();
+                snapshot.error_path = error.path.clone();
                 snapshot.error = Some(error.message);
                 snapshot.finished_at = Some(now_unix_seconds());
             });
@@ -1344,7 +1440,17 @@ pub(crate) fn start_copy_files_task(
     dst_dir: String,
     conflict_strategy: Option<MoveConflictStrategy>,
 ) -> Result<String, AppError> {
+    write_drag_debug_log(&format!(
+        "backendCopyTask startRequest srcCount={} dstDir={} strategy={} paths={}",
+        srcs.len(),
+        dst_dir,
+        conflict_strategy
+            .map(move_conflict_strategy_key)
+            .unwrap_or("abort"),
+        describe_debug_paths(&srcs)
+    ));
     let state = state.inner().clone();
+    let strategy = conflict_strategy.unwrap_or(MoveConflictStrategy::Abort);
     let (task_id, cancel_requested) = create_transfer_task(&state, "copy", &srcs)?;
     let progress = TransferProgress {
         task_id: task_id.clone(),
@@ -1352,14 +1458,34 @@ pub(crate) fn start_copy_files_task(
         cancel_requested,
     };
     let task_id_for_worker = task_id.clone();
+    let worker_dst_dir = dst_dir.clone();
+    let worker_src_count = srcs.len();
+    let worker_paths = describe_debug_paths(&srcs);
+
+    write_drag_debug_log(&format!(
+        "backendCopyTask workerSpawn taskId={} dstDir={} strategy={} srcCount={} paths={}",
+        task_id,
+        dst_dir,
+        move_conflict_strategy_key(strategy),
+        worker_src_count,
+        worker_paths
+    ));
 
     tauri::async_runtime::spawn_blocking(move || {
+        write_drag_debug_log(&format!(
+            "backendCopyTask workerRunning taskId={} dstDir={} strategy={} srcCount={} paths={}",
+            task_id_for_worker,
+            worker_dst_dir,
+            move_conflict_strategy_key(strategy),
+            worker_src_count,
+            worker_paths
+        ));
         state.update(&task_id_for_worker, |snapshot| {
             if snapshot.status == "queued" {
                 snapshot.status = "running".into();
             }
         });
-        let result = copy_files_impl(srcs, dst_dir, conflict_strategy, Some(&progress));
+        let result = copy_files_impl(srcs, dst_dir, Some(strategy), Some(&progress));
         finish_copy_transfer_task(&state, &task_id_for_worker, result);
     });
 
@@ -1373,11 +1499,27 @@ pub(crate) fn start_move_files_task(
     dst_dir: String,
     conflict_strategy: Option<MoveConflictStrategy>,
 ) -> Result<String, AppError> {
+    write_drag_debug_log(&format!(
+        "backendMoveTask startRequest srcCount={} dstDir={} strategy={} paths={}",
+        srcs.len(),
+        dst_dir,
+        conflict_strategy
+            .map(move_conflict_strategy_key)
+            .unwrap_or("abort"),
+        describe_debug_paths(&srcs)
+    ));
     let state = state.inner().clone();
     let strategy = conflict_strategy.unwrap_or(MoveConflictStrategy::Abort);
     let (task_id, maybe_cancel_requested) =
         state.get_or_create_move_task(&srcs, &dst_dir, strategy)?;
     let Some(cancel_requested) = maybe_cancel_requested else {
+        write_drag_debug_log(&format!(
+            "backendMoveTask startDedupedReturn taskId={} dstDir={} strategy={} srcCount={}",
+            task_id,
+            dst_dir,
+            move_conflict_strategy_key(strategy),
+            srcs.len()
+        ));
         return Ok(task_id);
     };
     let progress = TransferProgress {
@@ -1386,8 +1528,28 @@ pub(crate) fn start_move_files_task(
         cancel_requested,
     };
     let task_id_for_worker = task_id.clone();
+    let worker_dst_dir = dst_dir.clone();
+    let worker_src_count = srcs.len();
+    let worker_paths = describe_debug_paths(&srcs);
+
+    write_drag_debug_log(&format!(
+        "backendMoveTask workerSpawn taskId={} dstDir={} strategy={} srcCount={} paths={}",
+        task_id,
+        dst_dir,
+        move_conflict_strategy_key(strategy),
+        worker_src_count,
+        worker_paths
+    ));
 
     tauri::async_runtime::spawn_blocking(move || {
+        write_drag_debug_log(&format!(
+            "backendMoveTask workerRunning taskId={} dstDir={} strategy={} srcCount={} paths={}",
+            task_id_for_worker,
+            worker_dst_dir,
+            move_conflict_strategy_key(strategy),
+            worker_src_count,
+            worker_paths
+        ));
         state.update(&task_id_for_worker, |snapshot| {
             if snapshot.status == "queued" {
                 snapshot.status = "running".into();
@@ -1501,6 +1663,43 @@ mod tests {
     }
 
     #[test]
+    fn copy_files_replace_conflicts_overwrites_existing_target() {
+        let temp =
+            std::env::temp_dir().join(format!("aether-copy-replace-{}", std::process::id()));
+        let src_dir = temp.join("src");
+        let dst_dir = temp.join("dst");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dst_dir).unwrap();
+
+        let src = src_dir.join("same.txt");
+        let dst = dst_dir.join("same.txt");
+        std::fs::write(&src, b"new-content").unwrap();
+        std::fs::write(&dst, b"old-content").unwrap();
+        let expected_dst = dst.canonicalize().unwrap().to_string_lossy().to_string();
+
+        let result = copy_files(
+            vec![src.to_string_lossy().into()],
+            dst_dir.to_string_lossy().into(),
+            Some(MoveConflictStrategy::Replace),
+        )
+        .unwrap();
+
+        assert!(result.conflicts.is_empty());
+        assert!(result.failed.is_empty());
+        assert_eq!(result.copied, vec![expected_dst]);
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "new-content");
+        assert_eq!(std::fs::read_to_string(&src).unwrap(), "new-content");
+        assert!(std::fs::read_dir(&dst_dir).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("aether-replace-backup")));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
     fn move_files_skip_conflicts_preserves_existing_and_moves_non_conflicts() {
         let temp = std::env::temp_dir().join(format!("aether-move-skip-{}", std::process::id()));
         let src_dir = temp.join("src");
@@ -1554,6 +1753,7 @@ mod tests {
             completed_bytes: 1,
             current_name: None,
             error: None,
+            error_path: None,
             started_at: now,
             finished_at: Some(now),
             copied: 1,
@@ -1592,6 +1792,7 @@ mod tests {
                     completed_bytes: 0,
                     current_name: None,
                     error: None,
+                    error_path: None,
                     started_at: now_unix_seconds(),
                     finished_at: None,
                     copied: 0,
@@ -1624,6 +1825,68 @@ mod tests {
         assert_eq!(snapshot.skipped, 3);
         assert_eq!(snapshot.skipped_same_dir, 1);
         assert_eq!(snapshot.skipped_conflicts, 2);
+    }
+
+    #[test]
+    fn finish_move_transfer_task_preserves_failed_source_path() {
+        let state = TransferTaskState::default();
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        state
+            .insert(
+                TransferTaskSnapshot {
+                    id: "move-failed-source".into(),
+                    kind: "move".into(),
+                    status: "running".into(),
+                    total_items: 1,
+                    completed_items: 0,
+                    total_bytes: 0,
+                    completed_bytes: 0,
+                    current_name: None,
+                    error: None,
+                    error_path: None,
+                    started_at: now_unix_seconds(),
+                    finished_at: None,
+                    copied: 0,
+                    moved: 0,
+                    copied_cross_device: 0,
+                    failed: 0,
+                    conflicts: 0,
+                    skipped: 0,
+                    skipped_same_dir: 0,
+                    skipped_conflicts: 0,
+                },
+                cancel_requested,
+            )
+            .unwrap();
+
+        finish_move_transfer_task(
+            &state,
+            "move-failed-source",
+            Ok(MoveResult {
+                moved: vec![],
+                copied_cross_device: vec![],
+                failed: vec![
+                    MoveFailure {
+                        src: "/tmp/other.txt".into(),
+                        error: "No such file or directory".into(),
+                    },
+                    MoveFailure {
+                        src: "/Users/jane/Documents/report.txt".into(),
+                        error: "Operation not permitted".into(),
+                    },
+                ],
+                conflicts: vec![],
+                skipped_same_dir: 0,
+                skipped_conflicts: 0,
+            }),
+        );
+
+        let snapshot = state.list().unwrap().into_iter().next().unwrap();
+        assert_eq!(snapshot.status, "failed");
+        assert_eq!(
+            snapshot.error_path.as_deref(),
+            Some("/Users/jane/Documents/report.txt")
+        );
     }
 
     #[test]
@@ -1714,6 +1977,7 @@ mod tests {
                     completed_bytes: 0,
                     current_name: None,
                     error: None,
+                    error_path: None,
                     started_at: now_unix_seconds(),
                     finished_at: None,
                     copied: 0,

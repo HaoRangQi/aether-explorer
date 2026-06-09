@@ -1,8 +1,15 @@
+import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, Monitor, Palette, Layout, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Folder, File as FileIcon, Search, RotateCw } from 'lucide-react';
-import type { ThemeSettings } from '../../types';
+import { Sun, Moon, Zap, Sliders, Check, Image as ImageIcon, Languages, Upload, Type, Eye, Monitor, Palette, Layout, Sparkles, Wand2, ChevronRight, ChevronDown, Grid2X2, Columns, List, Folder, File as FileIcon, Search, RotateCw, Save, Trash2 } from 'lucide-react';
+import type { ThemeColorToken, ThemeSettings } from '../../types';
 import { ACCENT_COLORS } from '../../constants';
-import { DEFAULT_LIGHT_ACCENT, DEFAULT_DARK_ACCENT } from '../../lib/settings';
+import {
+  applyCustomColorPalettePreset,
+  buildCustomColorPalettePreset,
+  DEFAULT_DARK_ACCENT,
+  DEFAULT_FONT_FAMILY,
+  DEFAULT_LIGHT_ACCENT,
+} from '../../lib/settings';
 
 const CURATED_PALETTES = [
   { name: 'Default', colors: ['#007aff', '#EBE0FF', '#FFD8E4', '#C2E7FF'] },
@@ -26,8 +33,57 @@ const CHINESE_COLOR_PALETTES = [
   { name: '秋香', colors: ['#D9B611', '#F1D86A', '#FFF4B8', '#7A5C00'] },
 ];
 
+const COLOR_DETAIL_CONTROLS: { key: ThemeColorToken; label: string }[] = [
+  { key: 'colorIcon', label: '图标' },
+  { key: 'colorSelectedFg', label: '选中前景' },
+  { key: 'colorSelectedBg', label: '选中背景' },
+  { key: 'colorHoverFg', label: '悬浮前景' },
+  { key: 'colorHoverBg', label: '悬浮背景' },
+  { key: 'colorPanelBg', label: '面板底色' },
+  { key: 'colorTextPrimary', label: '主文字' },
+  { key: 'colorTextSecondary', label: '次文字' },
+  { key: 'colorBorder', label: '边框' },
+  { key: 'colorDivider', label: '分隔线' },
+  { key: 'colorShadow', label: '阴影' },
+  { key: 'colorActiveIconBg', label: '激活图标' },
+  { key: 'colorTagSelected', label: '标签选中' },
+  { key: 'colorSearchBg', label: '搜索框' },
+  { key: 'colorAppBg', label: '主背景色' },
+];
+
 export default function AppearanceSettings(props: any) {
   const { t, theme, onThemeChange, handleLiquidGlassToggle, isTogglingLiquidGlass, liquidGlassMessage, liquidGlassStatus, resolveCurrentAppearance, handleFileUpload, wallpaperUrlDraft, setWallpaperUrlDraft, handleWallpaperUrlChange, wallpaperUrlError, setWallpaperUrlError, showMediaGridControls, setShowMediaGridControls, availableFonts, setShowLanguageManager, applyLanguage, selectedLanguage, toggleFollowSystemLanguage, systemLanguage, showLanguageManager, visibleLanguages } = props;
+  const [customPaletteName, setCustomPaletteName] = useState('');
+  const customColorPalettes = theme.customColorPalettes || [];
+  const customPalettePreviewColors = useMemo(() => (
+    Array.from(new Set([
+      theme.accentColor,
+      ...COLOR_DETAIL_CONTROLS
+        .map(({ key }) => theme[key])
+        .filter((color): color is string => typeof color === 'string' && color.trim().startsWith('#')),
+    ])).slice(0, 6)
+  ), [theme]);
+  const canSaveCustomPalette = customPaletteName.trim().length > 0;
+  const handleSaveCustomPalette = () => {
+    if (!canSaveCustomPalette) return;
+    const preset = buildCustomColorPalettePreset({
+      name: customPaletteName,
+      theme,
+    });
+    const nextPalettes = [
+      preset,
+      ...customColorPalettes.filter(existing => existing.name !== preset.name),
+    ].slice(0, 24);
+    onThemeChange({ ...theme, customColorPalettes: nextPalettes });
+    setCustomPaletteName('');
+  };
+  const handleResetDetailedColors = () => {
+    const nextTheme = { ...theme };
+    for (const { key } of COLOR_DETAIL_CONTROLS) {
+      nextTheme[key] = undefined;
+    }
+    onThemeChange(nextTheme);
+  };
 
   return (
     <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
@@ -234,6 +290,102 @@ export default function AppearanceSettings(props: any) {
             ))}
           </div>
         </div>
+
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <label className="text-[11px] font-black text-on-surface/35 uppercase tracking-[0.18em]">
+                {t('settings.customPalettes', '用户自定义')}
+              </label>
+              <p className="mt-2 text-[12px] font-medium text-on-surface/40">
+                {t('settings.customPalettesDesc', '把当前强调色和颜色细化控制保存成可复用配置。')}
+              </p>
+            </div>
+            <div className="flex min-w-[min(100%,28rem)] flex-1 items-center gap-2 rounded-2xl border border-primary/10 bg-primary/5 p-2">
+              <input
+                type="text"
+                value={customPaletteName}
+                onChange={(e) => setCustomPaletteName(e.target.value)}
+                placeholder={t('settings.customPaletteNamePlaceholder', '自定义配置名称')}
+                aria-label={t('settings.customPaletteNamePlaceholder', '自定义配置名称')}
+                maxLength={48}
+                className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[12px] font-bold text-on-surface outline-none placeholder:text-on-surface/30"
+              />
+              <div className="hidden shrink-0 sm:flex">
+                {customPalettePreviewColors.map((color, index) => (
+                  <span
+                    key={`${color}-${index}`}
+                    className="-ml-1.5 first:ml-0 h-6 w-6 rounded-full border-2 border-primary/5 shadow-sm"
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveCustomPalette}
+                disabled={!canSaveCustomPalette}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-[11px] font-black text-on-primary transition-all hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+              >
+                <Save className="h-3.5 w-3.5" />
+                {t('common.save', '保存')}
+              </button>
+            </div>
+          </div>
+
+          {customColorPalettes.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {customColorPalettes.map(preset => {
+                const colors = Array.from(new Set([
+                  preset.accentColor,
+                  ...Object.values(preset.colors || {}),
+                ])).slice(0, 5);
+                return (
+                  <div
+                    key={preset.id}
+                    className="group/custom flex min-w-0 items-center justify-between gap-3 rounded-2xl border border-transparent bg-primary/5 p-2 transition-all hover:border-primary/20 hover:bg-primary/10"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onThemeChange(applyCustomColorPalettePreset(theme, preset))}
+                      className="min-w-0 flex-1 rounded-xl p-1 text-left"
+                    >
+                      <div className="min-w-0 space-y-2">
+                        <div className="flex">
+                          {colors.map((color, index) => (
+                            <span
+                              key={`${preset.id}-${color}-${index}`}
+                              className="-ml-1.5 first:ml-0 h-7 w-7 rounded-full border-2 border-on-surface/10 shadow-sm"
+                              style={{ backgroundColor: color }}
+                            />
+                          ))}
+                        </div>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-[13px] font-black text-on-surface/70 group-hover/custom:text-primary">
+                            {preset.name}
+                          </span>
+                          <span className="shrink-0 text-[10px] font-mono uppercase text-on-surface/30">
+                            {preset.accentColor}
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onThemeChange({
+                        ...theme,
+                        customColorPalettes: customColorPalettes.filter(item => item.id !== preset.id),
+                      })}
+                      className="rounded-xl p-2 text-on-surface/30 transition-colors hover:bg-red-500/10 hover:text-red-500"
+                      aria-label={t('settings.deleteCustomPalette', '删除自定义配色')}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </section>
 
       {/* 颜色细化控制 */}
@@ -249,23 +401,7 @@ export default function AppearanceSettings(props: any) {
         </header>
 
         <div className="grid grid-cols-4 sm:grid-cols-7 gap-6">
-          {([
-            { key: 'colorIcon', label: '图标' },
-            { key: 'colorSelectedFg', label: '选中前景' },
-            { key: 'colorSelectedBg', label: '选中背景' },
-            { key: 'colorHoverFg', label: '悬浮前景' },
-            { key: 'colorHoverBg', label: '悬浮背景' },
-            { key: 'colorPanelBg', label: '面板底色' },
-            { key: 'colorTextPrimary', label: '主文字' },
-            { key: 'colorTextSecondary', label: '次文字' },
-            { key: 'colorBorder', label: '边框' },
-            { key: 'colorDivider', label: '分隔线' },
-            { key: 'colorShadow', label: '阴影' },
-            { key: 'colorActiveIconBg', label: '激活图标' },
-            { key: 'colorTagSelected', label: '标签选中' },
-            { key: 'colorSearchBg', label: '搜索框' },
-            { key: 'colorAppBg', label: '主背景色' },
-          ] as { key: keyof ThemeSettings; label: string }[]).map(({ key, label }) => (
+          {COLOR_DETAIL_CONTROLS.map(({ key, label }) => (
             <div key={key} className="flex flex-col items-center gap-2">
               <label className="relative group">
                 <input
@@ -300,24 +436,7 @@ export default function AppearanceSettings(props: any) {
         {/* 全部重置按钮 */}
         <div className="pt-6 border-t border-primary/10">
           <button
-            onClick={() => onThemeChange({
-              ...theme,
-              colorIcon: undefined,
-              colorSelectedFg: undefined,
-              colorSelectedBg: undefined,
-              colorHoverFg: undefined,
-              colorHoverBg: undefined,
-              colorPanelBg: undefined,
-              colorTextPrimary: undefined,
-              colorTextSecondary: undefined,
-              colorBorder: undefined,
-              colorDivider: undefined,
-              colorShadow: undefined,
-              colorActiveIconBg: undefined,
-              colorTagSelected: undefined,
-              colorSearchBg: undefined,
-              colorAppBg: undefined,
-            })}
+            onClick={handleResetDetailedColors}
             className="px-6 py-3 rounded-2xl bg-primary/10 text-primary text-[13px] font-bold hover:bg-primary/20 transition-colors flex items-center gap-2"
           >
             <RotateCw className="w-4 h-4" />
@@ -689,12 +808,16 @@ export default function AppearanceSettings(props: any) {
           </h3>
           <div className="relative">
             <select
-              value={theme.fontFamily || 'Inter'}
+              value={theme.fontFamily || DEFAULT_FONT_FAMILY}
               onChange={(e) => onThemeChange({ ...theme, fontFamily: e.target.value })}
               className="w-full bg-primary/5 border-2 border-primary/10 rounded-2xl px-5 py-4 text-[14px] text-on-surface font-bold appearance-none outline-none focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all"
             >
               {availableFonts.map(font => (
-                <option key={font} value={font === 'System Default' ? 'system-ui, sans-serif' : font} style={{ fontFamily: font }}>
+                <option
+                  key={font}
+                  value={font === 'System Default' ? DEFAULT_FONT_FAMILY : font}
+                  style={{ fontFamily: font === 'System Default' ? DEFAULT_FONT_FAMILY : font }}
+                >
                   {font}
                 </option>
               ))}

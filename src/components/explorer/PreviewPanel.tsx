@@ -232,7 +232,7 @@ export default function PreviewPanel({
                         )}
                         {inspectorSizeStatusText && (
                           <span
-                            className={`block text-[11px] ${inspectorSizeInfo.status === 'failed' ? 'text-amber-400/80' : 'text-on-surface/35'}`}
+                            className={`block break-words text-[11px] ${inspectorSizeInfo.status === 'failed' ? 'text-amber-400/80' : 'text-on-surface/35'}`}
                             title={dirSizeError || undefined}
                           >
                             {inspectorSizeStatusText}
@@ -252,7 +252,7 @@ export default function PreviewPanel({
                     ) : dirSizeLoading ? (
                       <span className="inline-block h-4 w-24 rounded bg-gradient-to-r from-primary/20 via-primary/40 to-primary/20 bg-[length:200%_100%] animate-shimmer" />
                     ) : dirSizeError ? (
-                      <span className="text-on-surface/40 text-[11px]" title={dirSizeError}>--</span>
+                      <span className="block break-words text-amber-400/80 text-[11px]" title={dirSizeError}>{dirSizeError}</span>
                     ) : inspectorFile.type === 'folder' ? (
                       '--'
                     ) : (

@@ -4,7 +4,7 @@
 > 目标：在不写"全套企业级测试"的前提下，建立**最小可用的回归网**，让你改完代码后能在 5 分钟内确认核心路径没坏。
 > 原则：投入产出比优先 — 先盖"安全 + 路径 + 格式化"等纯逻辑、留拖拽 / 视觉给人工 smoke。
 
-> 当前状态：自动化回归网已经落地。`npm test` 当前为 14 个测试文件、129 个用例通过；`npm run test:rust` 当前为 81 个 Rust 单元测试通过；`npm run lint`、`npm run lint:ci-gates`、`npm run lint:rust` 和 `npm run build` 已纳入合并 / 发版前门禁。
+> 当前状态：自动化回归网已经落地。`npm test` 当前为 31 个测试文件、334 个用例通过；`npm run test:rust` 当前为 129 个 Rust 单元测试通过；`npm run lint`、`npm run lint:ci-gates`、`npm run lint:rust` 和 `npm run build` 已纳入合并 / 发版前门禁。
 
 ---
 
@@ -56,14 +56,30 @@ src/
 └── __tests__/
     ├── app-error.test.ts
     ├── asset-url-cache.test.ts
+    ├── column-navigation.test.ts
     ├── directory-signature.test.ts
+    ├── explorer-permission-auto-retry.test.tsx
+    ├── explorer-view-utils.test.ts
+    ├── fda-evidence-validator.test.ts
+    ├── file-icon.test.ts
     ├── file-selection.test.ts
+    ├── full-disk-access.test.ts
     ├── keyboard-shortcuts.test.ts
+    ├── macos-app-bundle-validator.test.ts
+    ├── macos-permission-model-validator.test.ts
+    ├── macos-permission-release-evidence-validator.test.ts
     ├── media-metadata.test.ts
     ├── native-menu.test.ts
     ├── navigation-history.test.ts
+    ├── operation-history.test.ts
+    ├── operation-history-undo.test.ts
+    ├── operation-permission-error.test.ts
     ├── path-helpers.test.ts
+    ├── permission-ux.test.ts
+    ├── remote-access-ui.test.ts
+    ├── remote-connections.test.ts
     ├── settings.test.ts
+    ├── smoke.test.ts
     ├── startup-diagnostics.test.ts
     ├── url-guard.test.ts
     ├── use-debounced-value.test.ts
@@ -175,7 +191,7 @@ cargo test --lib       # 仅测 lib.rs（不重编 bin）
 cargo test -- --nocapture format_size
 ```
 
-预期：所有测试通过，当前基线为 81 个 Rust 单元测试。
+预期：所有测试通过，当前基线为 129 个 Rust 单元测试。
 
 ---
 
@@ -210,19 +226,32 @@ test: {
 
 | 文件 / 函数 | 测试要点 | 后续 |
 |-----------|---------|-------|
-| `settings.test.ts` | theme settings 默认值、迁移、context menu extension 规范化、localStorage 容错 | 持续保留 |
+| `settings.test.ts` | theme settings 默认值、迁移、自定义配色预设、context menu extension 规范化、localStorage 容错 | 持续保留 |
 | `ai-ops-log.test.ts` | 历史 index 迁移、分页、关键词/日期过滤、retention 清理、删除一致性 | 持续保留 |
 | `url-guard.test.ts` | `safeShellOpen` / wallpaper URL / action template interpolation / shell escaping | 持续保留 |
-| `app-error.test.ts` | app error normalize / directory error kind | 持续保留 |
+| `app-error.test.ts` | app error normalize / directory error kind / FDA-aware permission classification | 持续保留 |
 | `asset-url-cache.test.ts` | asset URL cache 复用与释放 | 持续保留 |
+| `column-navigation.test.ts` | 分栏路径解析与选择后列状态 | 持续保留 |
 | `directory-signature.test.ts` | 目录签名首次记录、无变化、变化刷新判断 | 持续保留 |
+| `explorer-view-utils.test.ts` | Explorer 纯逻辑工具 | 持续保留 |
+| `fda-evidence-validator.test.ts` | 离线 FDA 验收 JSON 门禁：必须 granted、身份字段完整、probe 只能是 TCC 路径 | 改 clean-user FDA 证据格式前先补 case |
+| `file-icon.test.ts` | 文件图标分类 | 持续保留 |
 | `file-selection.test.ts` | lookup、last selected、selected files、键盘相邻选择解析 | 持续保留 |
+| `full-disk-access.test.ts` | FDA coordinator single-flight、短缓存、registration/force 绕过缓存、force/default 并发单飞、失败快照、订阅通知、hook consumer 更新 | 改权限 coordinator 前先补 case |
 | `keyboard-shortcuts.test.ts` | Explorer 快捷键解析 | 改键盘 effect 前先补 case |
+| `macos-app-bundle-validator.test.ts` | macOS 打包产物权限模型预检：`.app` 路径、bundle identity、版本字段、允许的隐私 usage key、发版候选稳定签名身份、禁止 sandbox 目录授权 / Apple Events / sandbox true entitlements | 改发版候选权限模型前先补 case |
+| `macos-permission-model-validator.test.ts` | macOS 权限模型源码预检：非沙盒、禁止目录级 sandbox entitlement、禁止额外隐私域、Tauri config 指向正确权限文件 | 改 macOS 权限配置前先补 case |
+| `macos-permission-release-evidence-validator.test.ts` | 发版候选 `.app` 与 clean-user FDA evidence 联合门禁：先复用签名 `.app` / FDA JSON 预检，再比对 appName、bundle id、version 和真实 appPath | 改 release evidence 证据链前先补 case |
 | `media-metadata.test.ts` | duration formatting | 持续保留 |
 | `native-menu.test.ts` | 原生菜单 display-mode 命令解析 | 持续保留 |
 | `navigation-history.test.ts` | back / forward / navigate history | 持续保留 |
+| `operation-history.test.ts` / `operation-history-undo.test.ts` | 操作历史记录、撤销行为 | 持续保留 |
+| `operation-permission-error.test.ts` | 核心文件操作的 FDA-aware permission 文案分类：只在 PermissionDenied + 受保护本地路径 + FDA 未授权时显示恢复文案 | 改文件操作权限 UX 前先补 case |
 | `path-helpers.test.ts` | path leaf、虚拟路径、初始 tabs、共同父目录 | 持续保留 |
+| `permission-ux.test.ts` | FDA coordinator、启动/设置权限 UI、远程/本地权限边界 source wiring | 改权限 UX 前先补 case |
+| `remote-access-ui.test.ts` / `remote-connections.test.ts` | 远程访问 UI 文案和连接模型 | 持续保留 |
 | `startup-diagnostics.test.ts` | panic log fingerprint、启动异常提示去重 | 持续保留 |
+| `smoke.test.ts` | Dev smoke 的 FDA result / acceptance evidence 校验，只接受 TCC probe 路径 | 持续保留 |
 | `use-debounced-value.test.ts` | debounce 行为 | 持续保留 |
 | `use-prefers-reduced-motion.test.ts` | reduced motion 订阅与 fallback | 持续保留 |
 
@@ -261,7 +290,7 @@ npm test
 npm run test:watch    # 改代码时实时回归
 ```
 
-预期：当前 14 个测试文件、129 个用例通过。
+预期：当前 31 个测试文件、334 个用例通过。
 
 ---
 
@@ -275,7 +304,7 @@ npm run test:watch    # 改代码时实时回归
 > 每次合 PR 前过一遍。预计耗时：5 分钟。
 
 ## 启动 / 窗口
-- [ ] `npx tauri dev` 能正常启动
+- [ ] `npm run dev` 能正常启动
 - [ ] 窗口圆角、毛玻璃显示正常
 - [ ] Cmd+N 能新建窗口；Cmd+W 关闭标签页
 
@@ -311,14 +340,15 @@ window.__aether?.smoke()
 
 ### Console 自检脚本（已落地）
 
-`src/lib/smoke.ts` 已提供 dev-only 工具，并在 `src/main.tsx` 中导入：
+`src/lib/smoke.ts` 已在 `src/main.tsx` 中导入：
 ```ts
-if (import.meta.env.DEV) {
-  window.__aether = { smoke };
-}
+window.__aether.permissionEvidence(); // dev / 发版候选均可用，只读采集 FDA 验收证据；设置页“复制权限证据”复用同一 collector
+npm run validate:fda-evidence -- /path/to/fda-evidence.json // 对保存后的验收 JSON 做离线门禁：必须 granted、身份字段完整、probe 只能是 TCC 路径
+npm run validate:macos-permission-release -- --app "/Applications/Aether Explorer.app" --evidence /path/to/fda-evidence.json // 发版证据联合门禁：签名 .app、FDA JSON、appIdentity 三者必须指向同一候选
+window.__aether.smoke();              // 仅 dev 构建注入
 ```
 
-当前 smoke 覆盖主题 CSS var、根节点、settings store、`get_home_dir`、`list_directory`、`get_child_count`、`list_volumes`、localStorage theme、URL guard、shell escape、`raise_window_at` 和当前窗口 label。收益：连"控制台敲一行命令"都能验证 N 个隐式假设是否仍成立。
+当前 smoke 覆盖主题 CSS var、根节点、settings store、`get_home_dir`、`full_disk_access_status`、`list_directory`、`get_child_count`、`list_volumes`、localStorage theme、URL guard、shell escape、`raise_window_at` 和当前窗口 label；`full_disk_access_status` smoke 会拒绝非 TCC probe 路径。设置页“重新检查”、启动权限引导和 PermissionDenied 分类会强制走 fresh FDA probe，不吃 2.5 秒短缓存；受保护本地目录恢复会在 FDA granted 后只自动重试捕获目录一次，手动重试也会先做 forced FDA probe，仍 denied 时不重复读取同一个受保护目录，重试仍失败时降级为普通读取失败，不再重开 FDA 恢复入口。设置页“复制权限证据”和 `window.__aether.permissionEvidence()` 复用同一个只读 collector，输出 app identity、FDA status/probes 和运行环境信息，供 `docs/SMOKE_TEST.md` 的 Full Disk Access 干净用户验收存档，并且不依赖 dev-only smoke runner；保存后的 JSON 还要通过 `npm run validate:fda-evidence -- /path/to/fda-evidence.json`，确保 release evidence 不是 denied/unknown、身份字段不缺失、probe 没有读 Desktop/Documents/Downloads 等用户内容路径。最终 release evidence 还要通过 `npm run validate:macos-permission-release -- --app "/Applications/Aether Explorer.app" --evidence /path/to/fda-evidence.json`，确保签名 `.app` 和 FDA JSON 的 identity / version / path 指向同一个候选。没有该实机证据，只能说权限方案设计与自动化验证完成，不能说权限体验闭环。收益：连"控制台敲一行命令"都能验证 N 个隐式假设是否仍成立，同时把 FDA 实机闭环留给明确的 release gate。
 
 ---
 
@@ -326,6 +356,7 @@ if (import.meta.env.DEV) {
 
 ```yaml
 npm run lint
+npm run lint:macos-permissions
 npm run lint:readme
 npm run lint:i18n
 npm run lint:ci-gates
@@ -351,8 +382,8 @@ npm run build
 - [x] 跑通 `npm test` 与 `cargo test --lib`
 
 ### Phase 2：补全（半天）
-- [x] Layer 1 扩展到 81 个 Rust 单元测试
-- [x] Layer 2 扩展到 14 个测试文件、129 个 Vitest 用例
+- [x] Layer 1 扩展到 129 个 Rust 单元测试
+- [x] Layer 2 扩展到 31 个测试文件、334 个 Vitest 用例
 - [x] CI test workflow 接入 lint / docs / i18n / gate / Vitest / Rust test / clippy / build，并覆盖声明的 push 分支与 PR 到 `main`
 - [x] release workflow 接入 `test-gate`，并由 `lint:ci-gates` 防止关键 npm scripts 退化为空命令、release job 绕过该依赖或删除版本一致性校验
 - [x] `scripts/release.sh` 加 release gate：lint / README sync / i18n / CI gate / Vitest / Rust test / clippy / build
@@ -360,7 +391,7 @@ npm run build
 ### Phase 3：Smoke layer（半天）
 - [x] 写 `docs/SMOKE_TEST.md` checklist
 - [x] 写 `src/lib/smoke.ts` console 自检脚本
-- [x] 在 `src/main.tsx` 导入 dev-only smoke，注入 `window.__aether`
+- [x] 在 `src/main.tsx` 导入 console 工具：`permissionEvidence()` 发版候选可用，`smoke()` 仅 dev 构建注入
 - [ ] 每个发版候选手动跑一轮 `docs/SMOKE_TEST.md`
 
 后续投入应集中在：给 `ExplorerView` 拖拽 / 外部导入 / 键盘 effect 的纯解析层补测试，避免直接重构大型 effect；给路径、压缩、终端执行等高风险链路补缺口。

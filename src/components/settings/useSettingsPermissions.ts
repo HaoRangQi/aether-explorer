@@ -1,40 +1,22 @@
-import { useCallback, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import type { TFunction } from 'i18next';
+import { useFullDiskAccessPermission } from '../../lib/full-disk-access';
+import { useAppIdentity } from '../../lib/app-identity';
 
-export function useSettingsPermissions(t: TFunction) {
-  const [permChecks, setPermChecks] = useState<{path: string; label: string; ok: boolean | null}[]>([]);
-  const [permChecksLoaded, setPermChecksLoaded] = useState(false);
+export type {
+  FullDiskAccessCheckOptions,
+  FullDiskAccessCheckResult,
+  FullDiskAccessProbeResult,
+  FullDiskAccessStatus,
+} from '../../lib/full-disk-access';
 
-  const checkPermissions = useCallback(async () => {
-    try {
-      const home = await invoke<string>('get_home_dir');
-      const dirs = [
-        { path: `${home}/Documents`, label: t('settings.permissions.documents') },
-        { path: `${home}/Desktop`, label: t('settings.permissions.desktop') },
-        { path: `${home}/Downloads`, label: t('settings.permissions.downloads') },
-        { path: `${home}/.Trash`, label: t('settings.permissions.trash') },
-        { path: '/Applications', label: t('settings.permissions.applications') },
-      ];
-      const results = await Promise.all(dirs.map(async d => {
-        try {
-          await invoke('list_directory', { dirPath: d.path, showHidden: false });
-          return { ...d, ok: true };
-        } catch {
-          return { ...d, ok: false };
-        }
-      }));
-      setPermChecks(results);
-      setPermChecksLoaded(true);
-    } catch {
-      setPermChecks([]);
-      setPermChecksLoaded(true);
-    }
-  }, [t]);
+export type { AppIdentity } from '../../lib/app-identity';
+
+export function useSettingsPermissions(_t: TFunction) {
+  const permission = useFullDiskAccessPermission();
+  const identity = useAppIdentity();
 
   return {
-    permChecks,
-    permChecksLoaded,
-    checkPermissions,
+    ...permission,
+    ...identity,
   };
 }

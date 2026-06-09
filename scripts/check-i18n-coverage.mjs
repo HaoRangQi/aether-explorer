@@ -1,7 +1,18 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
+
+function readSourceTree(relativePath) {
+  const absolutePath = resolve(root, relativePath);
+  const stat = statSync(absolutePath);
+  if (stat.isFile()) return readFileSync(absolutePath, 'utf8');
+
+  return readdirSync(absolutePath)
+    .filter((entry) => !entry.startsWith('.'))
+    .map((entry) => readSourceTree(`${relativePath}/${entry}`))
+    .join('\n');
+}
 
 const localeFiles = {
   zh: resolve(root, 'src/i18n/locales/zh.ts'),
@@ -52,11 +63,9 @@ const requiredLocaleKeys = [
   'textPreviewUnavailable',
   'imagePreviewFailed',
   'filesCount',
-  'protectedPathTitle',
-  'protectedPathDescription',
-  'continueAccess',
-  'backHome',
   'openSystemSettings',
+  'openSystemSettingsFailed',
+  'openSettingsFailed',
   'retry',
   'permissionDeniedTitle',
   'notFoundTitle',
@@ -64,6 +73,9 @@ const requiredLocaleKeys = [
   'permissionDeniedDescription',
   'notFoundDescription',
   'readFailedDescription',
+  'permissionRetryBlockedDetail',
+  'sizePermissionRequired',
+  'fullDiskAccessOperationRequired',
   'permissionSteps',
   'newFileIndexed',
   'newFolderIndexed',
@@ -105,16 +117,26 @@ const requiredExplorerUsages = [
   "t('explorer.imagePreviewFailed'",
   "t('explorer.contentPreview'",
   "t('explorer.reading'",
-  "t('dialogs.protectedPathTitle'",
-  "t('dialogs.protectedPathDescription'",
   "t('dialogs.permissionDeniedTitle'",
   "t('dialogs.notFoundTitle'",
   "t('dialogs.readFailedTitle'",
+  "t('dialogs.openSystemSettingsFailed'",
+  "t('dialogs.permissionRetryBlockedDetail'",
   "t('messages.fileCreated'",
   "t('messages.fileCreateFailed'",
   "t('messages.folderCreated'",
   "t('messages.folderCreateFailed'",
   "t('messages.extensionFailed'",
+];
+
+const requiredDialogKeys = [
+  'openSystemSettingsFailed',
+];
+
+const requiredPermissionRecoveryUsages = [
+  "t('dialogs.permissionRetryBlockedDetail'",
+  "t('explorer.sizePermissionRequired'",
+  "t('messages.fullDiskAccessOperationRequired'",
 ];
 
 const requiredAIRenameKeys = [
@@ -253,9 +275,24 @@ const requiredSettingsViewUsages = [
   "t('settings.cleanup.failed'",
   "t('settings.permissions.fullDiskTitle'",
   "t('settings.permissions.openSystemSettings'",
-  "t('settings.permissions.accessStatus'",
-  "t('settings.permissions.accessible'",
-  "t('settings.permissions.denied'",
+  "t('settings.permissions.openSystemSettingsFailed'",
+  "t('settings.permissions.revealAppInFinder'",
+  "t('settings.permissions.revealAppFailed'",
+  "t('settings.permissions.copyEvidence'",
+  "t('settings.permissions.copyEvidenceCopying'",
+  "t('settings.permissions.copyEvidenceCopied'",
+  "t('settings.permissions.copyEvidenceFailed'",
+  "t('settings.permissions.copyEvidenceRequiresGranted'",
+  "t(`settings.permissions.status.${resolvedStatus}`",
+  "t('settings.permissions.recoveryTitle'",
+  "t('settings.permissions.recoveryDescription'",
+  "t('settings.permissions.recoverySteps'",
+  "t('settings.permissions.probeEvidence'",
+  "t('settings.permissions.probeHint'",
+  "t('settings.permissions.noProbeEvidence'",
+  "t('settings.permissions.probeReadable'",
+  "t('settings.permissions.probeBlocked'",
+  "t('settings.permissions.probeMissing'",
   "t('settings.extensions.description'",
   "t('settings.extensions.enabledCount'",
   "t('settings.extensions.importJson'",
@@ -324,6 +361,13 @@ for (const [locale, filePath] of Object.entries(localeFiles)) {
       missingLocaleKeys.push(`${locale}: appDiagnostics.${key}`);
     }
   }
+  const dialogsBlock = source.match(/dialogs:\s*\{[\s\S]*?\n {2}\},/);
+  for (const key of requiredDialogKeys) {
+    const pattern = new RegExp(`\\b${key}\\s*:`);
+    if (!dialogsBlock || !pattern.test(dialogsBlock[0])) {
+      missingLocaleKeys.push(`${locale}: dialogs.${key}`);
+    }
+  }
   const settingsDiagnosticsBlock = source.match(/diagnostics:\s*\{[\s\S]*?\n {4}\},/);
   for (const key of requiredSettingsDiagnosticsKeys) {
     const pattern = new RegExp(`\\b${key}\\s*:`);
@@ -357,11 +401,25 @@ if (missingLocaleKeys.length > 0) {
   fail('required locale keys are missing', missingLocaleKeys);
 }
 
-const explorerSource = readFileSync(resolve(root, 'src/components/ExplorerView.tsx'), 'utf8');
+const explorerSource = [
+  readSourceTree('src/components/ExplorerView.tsx'),
+  readSourceTree('src/components/explorer'),
+].join('\n');
 const missingUsages = requiredExplorerUsages.filter((usage) => !explorerSource.includes(usage));
 
 if (missingUsages.length > 0) {
   fail('ExplorerView high-risk strings are not routed through i18n', missingUsages);
+}
+
+const permissionRecoverySource = [
+  readFileSync(resolve(root, 'src/lib/operation-permission-error.ts'), 'utf8'),
+  readFileSync(resolve(root, 'src/components/explorer/useExplorerDirectoryData.ts'), 'utf8'),
+  readFileSync(resolve(root, 'src/components/explorer/useExplorerInspector.ts'), 'utf8'),
+].join('\n');
+const missingPermissionRecoveryUsages = requiredPermissionRecoveryUsages.filter((usage) => !permissionRecoverySource.includes(usage));
+
+if (missingPermissionRecoveryUsages.length > 0) {
+  fail('Full Disk Access recovery strings are not routed through i18n', missingPermissionRecoveryUsages);
 }
 
 const aiRenameSource = readFileSync(resolve(root, 'src/components/AIRenamePanel.tsx'), 'utf8');
@@ -378,7 +436,10 @@ if (missingAppDiagnosticsUsages.length > 0) {
   fail('App diagnostics strings are not routed through i18n', missingAppDiagnosticsUsages);
 }
 
-const settingsSource = readFileSync(resolve(root, 'src/components/SettingsView.tsx'), 'utf8');
+const settingsSource = [
+  readSourceTree('src/components/SettingsView.tsx'),
+  readSourceTree('src/components/settings'),
+].join('\n');
 const missingSettingsDiagnosticsUsages = requiredSettingsDiagnosticsUsages.filter((usage) => !settingsSource.includes(usage));
 
 if (missingSettingsDiagnosticsUsages.length > 0) {
@@ -403,4 +464,4 @@ if (missingShortcutHelpUsages.length > 0) {
   fail('Shortcut help strings are not routed through i18n', missingShortcutHelpUsages);
 }
 
-console.log(`i18n coverage check passed: ${requiredLocaleKeys.length} locale keys, ${requiredExplorerUsages.length} ExplorerView usages, ${requiredAIRenameUsages.length} AIRenamePanel usages, ${requiredAppDiagnosticsUsages.length} app diagnostics usages, ${requiredSettingsDiagnosticsUsages.length} settings diagnostics usages, ${requiredSettingsBackupUsages.length} settings backup usages, ${requiredSettingsViewUsages.length} SettingsView high-risk usages, and ${requiredShortcutHelpUsages.length} shortcut help usages verified.`);
+console.log(`i18n coverage check passed: ${requiredLocaleKeys.length} locale keys, ${requiredExplorerUsages.length} ExplorerView usages, ${requiredPermissionRecoveryUsages.length} Full Disk Access recovery usages, ${requiredAIRenameUsages.length} AIRenamePanel usages, ${requiredAppDiagnosticsUsages.length} app diagnostics usages, ${requiredSettingsDiagnosticsUsages.length} settings diagnostics usages, ${requiredSettingsBackupUsages.length} settings backup usages, ${requiredSettingsViewUsages.length} SettingsView high-risk usages, and ${requiredShortcutHelpUsages.length} shortcut help usages verified.`);

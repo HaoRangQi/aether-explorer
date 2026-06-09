@@ -11,10 +11,12 @@ import {
   startDirSizeTask,
 } from '../../api/filesystem';
 import type { DirectorySizeTaskSnapshot, OpenWithOption } from '../../api/filesystem';
-import { normalizeAppError } from '../../lib/app-error';
+import { directoryErrorKindForFullDiskAccess, normalizeAppError } from '../../lib/app-error';
+import { checkFullDiskAccessPermission } from '../../lib/full-disk-access';
 import type { FileItem } from '../../types';
 import { DIR_SIZE_POLL_INTERVAL_MS, OPEN_WITH_SELECT_OTHER, OPEN_WITH_SELECT_PLACEHOLDER } from './explorer-constants';
 import { directorySizeInfoFromTaskSnapshot, makeFolderItemFromPath } from './explorer-utils';
+import type { ProtectedRootInfo } from './explorer-types';
 import type { DirectorySizeInfo } from './preview-panel-types';
 
 type UseExplorerInspectorInput = {
@@ -22,6 +24,7 @@ type UseExplorerInspectorInput = {
   currentPath: string;
   favorites: string[];
   getFileTypeLabel: (type: FileItem['type']) => string;
+  getProtectedRootForPath: (path: string) => ProtectedRootInfo | null;
   getTagsForItem: (item: FileItem) => string[];
   isLocalFilesystemPath: (path?: string | null) => boolean;
   lastSelectedFile: FileItem | null;
@@ -37,6 +40,7 @@ export default function useExplorerInspector({
   currentPath,
   favorites,
   getFileTypeLabel,
+  getProtectedRootForPath,
   getTagsForItem,
   isLocalFilesystemPath,
   lastSelectedFile,
@@ -149,7 +153,7 @@ export default function useExplorerInspector({
   );
   const inspectorSizeStatusText = inspectorSizeInfo
     ? inspectorSizeInfo.status === 'failed'
-      ? t('explorer.sizeUpdateFailed', '统计未完成')
+      ? inspectorSizeInfo.error || t('explorer.sizeUpdateFailed', '统计未完成')
       : inspectorSizeInfo.status === 'cancelled'
         ? t('explorer.sizeUpdateCancelled', '统计已取消')
         : inspectorSizeInfo.isApproximate
@@ -295,6 +299,36 @@ export default function useExplorerInspector({
     inspectorSupportsOpenWith,
   ]);
 
+  const getDirectorySizePermissionMessage = useCallback((path: string) => {
+    const protectedRoot = getProtectedRootForPath(path);
+    return t('explorer.sizePermissionRequired', {
+      root: protectedRoot?.label ?? path,
+      defaultValue: `Full Disk Access is required to calculate “${protectedRoot?.label ?? path}”. Enable it in System Settings, then retry.`,
+    });
+  }, [getProtectedRootForPath, t]);
+
+  const resolveDirectorySizeErrorMessage = useCallback(async (error: unknown, path: string) => {
+    const appError = normalizeAppError(error);
+    const protectedRoot = getProtectedRootForPath(appError.path || path);
+    if (!protectedRoot || appError.kind !== 'PermissionDenied') return appError.userMessage;
+
+    const result = await checkFullDiskAccessPermission({ force: true });
+    return directoryErrorKindForFullDiskAccess(appError, result.status, true) === 'permission'
+      ? getDirectorySizePermissionMessage(appError.path || path)
+      : appError.userMessage;
+  }, [getDirectorySizePermissionMessage, getProtectedRootForPath]);
+
+  const resolveDirectorySizeTaskSnapshot = useCallback(async (
+    snapshot: DirectorySizeTaskSnapshot,
+  ): Promise<DirectorySizeTaskSnapshot> => {
+    if (snapshot.status === 'failed' && snapshot.error) {
+      const message = await resolveDirectorySizeErrorMessage(snapshot.error, snapshot.path);
+      return message === snapshot.error ? snapshot : { ...snapshot, error: message };
+    }
+
+    return snapshot;
+  }, [resolveDirectorySizeErrorMessage]);
+
   useEffect(() => {
     if (!inspectorVisible || !inspectorPath) {
       clearDirSizePolling(true);
@@ -373,7 +407,9 @@ export default function useExplorerInspector({
         dirSizeTaskIdRef.current = null;
         return;
       }
-      applyTaskSnapshot(snapshot);
+      const resolvedSnapshot = await resolveDirectorySizeTaskSnapshot(snapshot);
+      if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
+      applyTaskSnapshot(resolvedSnapshot);
     };
 
     void (async () => {
@@ -407,9 +443,14 @@ export default function useExplorerInspector({
         if (disposed || !dirSizeTaskIdRef.current) return;
 
         dirSizePollTimerRef.current = window.setInterval(() => {
-          void pollTask(taskId).catch(error => {
+          void pollTask(taskId).catch(async error => {
             if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
-            setDirSizeError(normalizeAppError(error).userMessage);
+            const message = await resolveDirectorySizeErrorMessage(error, path);
+            if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
+            setDirSize(prev => (prev?.path === path
+              ? { ...prev, status: 'failed', isApproximate: true, error: message }
+              : prev));
+            setDirSizeError(message);
             setDirSizeLoading(false);
             stopPolling();
             dirSizeTaskIdRef.current = null;
@@ -417,7 +458,23 @@ export default function useExplorerInspector({
         }, DIR_SIZE_POLL_INTERVAL_MS);
       } catch (error) {
         if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
-        setDirSizeError(normalizeAppError(error).userMessage);
+        const message = await resolveDirectorySizeErrorMessage(error, path);
+        if (disposed || requestId !== dirSizeRequestSeqRef.current) return;
+        setDirSize(prev => (prev?.path === path
+          ? { ...prev, status: 'failed', isApproximate: true, error: message }
+          : {
+            path,
+            bytes: 0,
+            formatted: '--',
+            allocated_bytes: 0,
+            formatted_allocated: '--',
+            file_count: 0,
+            skipped_count: 0,
+            isApproximate: true,
+            status: 'failed',
+            error: message,
+          }));
+        setDirSizeError(message);
         setDirSizeLoading(false);
       }
     })();
@@ -426,7 +483,16 @@ export default function useExplorerInspector({
       disposed = true;
       clearDirSizePolling(true);
     };
-  }, [clearDirSizePolling, inspectorVisible, inspectorPath, inspectorType, isLocalFilesystemPath, t]);
+  }, [
+    clearDirSizePolling,
+    inspectorVisible,
+    inspectorPath,
+    inspectorType,
+    isLocalFilesystemPath,
+    resolveDirectorySizeErrorMessage,
+    resolveDirectorySizeTaskSnapshot,
+    t,
+  ]);
 
   useEffect(() => () => {
     clearDirSizePolling(true);

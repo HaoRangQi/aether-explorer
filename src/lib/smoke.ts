@@ -1,11 +1,20 @@
 /**
- * Dev-only smoke checks，挂在 window.__aether.smoke
+ * Runtime evidence helpers and dev-only smoke checks，挂在 window.__aether
  *
  * 在 DevTools 控制台调用 `window.__aether.smoke()` 可一键自检 10+ 隐式假设。
- * 生产构建经 vite esbuild drop 后整个模块被消除。
+ * `window.__aether.permissionEvidence()` 可在发版候选中采集 FDA 验收证据。
  */
 
 import type { ThemeSettings } from '../types';
+import {
+  collectFullDiskAccessAcceptanceEvidence,
+  validateFullDiskAccessSmokeResult,
+} from './full-disk-access-evidence';
+export {
+  collectFullDiskAccessAcceptanceEvidence,
+  validateFullDiskAccessAcceptanceEvidence,
+  validateFullDiskAccessSmokeResult,
+} from './full-disk-access-evidence';
 
 interface SmokeResult {
   ok: boolean;
@@ -37,6 +46,12 @@ function setupAetherSmokeDevtools() {
       const { invoke } = await import('@tauri-apps/api/core');
       const home = await invoke<string>('get_home_dir');
       return typeof home === 'string' && home.startsWith('/');
+    }],
+
+    ['full_disk_access_status returns status/probes', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<{ status: string; probes: unknown[] }>('full_disk_access_status');
+      return validateFullDiskAccessSmokeResult(result);
     }],
 
     ['list_directory($HOME) returns array', async () => {
@@ -133,8 +148,21 @@ function setupAetherSmokeDevtools() {
     return result;
   };
 
-  (window as unknown as { __aether?: unknown }).__aether = { smoke };
-  console.info('[aether] DevTools smoke ready — run `window.__aether.smoke()` to verify N implicit assumptions.');
+  const target = window as unknown as { __aether?: Record<string, unknown> };
+  target.__aether = {
+    ...(target.__aether ?? {}),
+    smoke,
+  };
+  console.info('[aether] DevTools smoke ready — run `window.__aether.smoke()`. FDA evidence is available via `window.__aether.permissionEvidence()`.');
+}
+
+function setupAetherPermissionEvidence() {
+  const target = window as unknown as { __aether?: Record<string, unknown> };
+  target.__aether = {
+    ...(target.__aether ?? {}),
+    permissionEvidence: collectFullDiskAccessAcceptanceEvidence,
+  };
 }
 
 setupAetherSmokeDevtools();
+setupAetherPermissionEvidence();

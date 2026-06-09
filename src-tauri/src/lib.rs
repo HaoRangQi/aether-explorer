@@ -9,9 +9,9 @@ mod native_menu;
 mod remote;
 
 pub(crate) use commands::fs::{detect_mime, format_size, safe_canonicalize, unique_destination};
-pub(crate) use error::AppError;
 use commands::fs::{DirectoryLoadState, DirectorySizeTaskState};
 use commands::transfer::{FileClipboardState, FileDragState, TransferTaskState};
+pub(crate) use error::AppError;
 use error::AppErrorKind;
 use models::FileEntry;
 
@@ -108,8 +108,11 @@ pub fn run() {
             commands::fs::list_directory,
             commands::fs::cancel_directory_loads,
             commands::fs::get_home_dir,
-            commands::fs::preflight_file_permissions,
+            commands::fs::full_disk_access_status,
+            commands::fs::register_full_disk_access,
             commands::diagnostics::open_system_settings,
+            commands::diagnostics::get_app_identity,
+            commands::diagnostics::reveal_app_in_finder,
             commands::diagnostics::get_logs_dir,
             commands::diagnostics::get_config_dir,
             commands::diagnostics::open_logs_dir,
@@ -148,6 +151,9 @@ pub fn run() {
             commands::fs::rename_file,
             commands::fs::delete_to_trash,
             commands::fs::create_file,
+            commands::fs::create_text_file,
+            commands::fs::read_clipboard_text,
+            commands::fs::has_clipboard_text,
             commands::fs::create_folder,
             commands::fs::duplicate_as_alias,
             commands::fs::calculate_file_hash,
@@ -199,7 +205,6 @@ pub fn run() {
         }
     });
 }
-
 
 #[cfg(test)]
 mod lib_tests;

@@ -8,6 +8,7 @@ import {
   startMoveFilesTask,
 } from '../../api/filesystem';
 import type { MoveConflictStrategy, TransferTaskSnapshot } from '../../api/filesystem';
+import { formatOperationPermissionError } from '../../lib/operation-permission-error';
 import { isRemotePath } from '../../lib/path-helpers';
 import type { FileItem } from '../../types';
 import type {
@@ -16,6 +17,7 @@ import type {
   MoveConflictChoice,
   MoveConflictDialogState,
   MoveExecutionSummary,
+  ProtectedRootInfo,
   TransferTaskWaitMessages,
 } from './explorer-types';
 import {
@@ -37,7 +39,9 @@ type UseExplorerTransferWorkflowInput = {
   ) => Promise<MoveExecutionSummary>>;
   finishSharedFileDrag: () => void;
   getActionDirectory: (preferredPath?: string) => string;
+  getProtectedRootForPath: (path: string) => ProtectedRootInfo | null;
   logDragDebug: (message: string) => void;
+  moveConflictDialog: MoveConflictDialogState | null;
   onStartTransfer: () => void;
   recordManualOperationHistory: (input: ManualHistoryRecordInput) => Promise<void>;
   refreshCurrentDirRef: React.MutableRefObject<(fullRefresh?: boolean, targetPath?: string) => Promise<FileItem[]>>;
@@ -58,7 +62,9 @@ export default function useExplorerTransferWorkflow({
   executeMoveFilesRef,
   finishSharedFileDrag,
   getActionDirectory,
+  getProtectedRootForPath,
   logDragDebug,
+  moveConflictDialog,
   onStartTransfer,
   recordManualOperationHistory,
   refreshCurrentDirRef,
@@ -71,16 +77,34 @@ export default function useExplorerTransferWorkflow({
     taskId: string,
     refreshTargetPath?: string,
   ): Promise<TransferTaskSnapshot | null> => {
+    logDragDebug(`transferWait start taskId=${taskId} refreshTargetPath=${refreshTargetPath ?? '(current)'}`);
     for (;;) {
       const task = (await listTransferTasks()).find(item => item.id === taskId);
-      if (!task) return null;
+      if (!task) {
+        logDragDebug(`transferWait missing taskId=${taskId} refreshTargetPath=${refreshTargetPath ?? '(current)'}`);
+        return null;
+      }
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+        logDragDebug([
+          `transferWait settled taskId=${taskId}`,
+          `status=${task.status}`,
+          `kind=${task.kind}`,
+          `copied=${task.copied}`,
+          `moved=${task.moved}`,
+          `copiedCrossDevice=${task.copiedCrossDevice}`,
+          `failed=${task.failed}`,
+          `conflicts=${task.conflicts}`,
+          `skipped=${task.skipped}`,
+          `error=${task.error ?? '(none)'}`,
+          `errorPath=${task.errorPath ?? '(none)'}`,
+          `refreshTargetPath=${refreshTargetPath ?? '(current)'}`,
+        ].join(' '));
         await refreshCurrentDirRef.current(false, refreshTargetPath);
         return task;
       }
       await new Promise(resolve => window.setTimeout(resolve, 800));
     }
-  }, [refreshCurrentDirRef]);
+  }, [logDragDebug, refreshCurrentDirRef]);
 
   const waitForTransferTask = useCallback(async (
     taskId: string,
@@ -109,20 +133,32 @@ export default function useExplorerTransferWorkflow({
       } else if (task.status === 'cancelled') {
         showFeedback(t('messages.transferCancelled', { defaultValue: '传输已取消' }));
       } else {
-        showFeedback(t(messages.failed, {
+        const error = await formatOperationPermissionError({
           error: task.error || t('messages.operationFailed', { error: '' }),
+          getProtectedRootForPath,
+          pathHints: [task.errorPath, ...(messages.failurePathHints ?? [])],
+          t,
+        });
+        showFeedback(t(messages.failed, {
+          error,
           defaultValue: messages.failedDefaultValue,
         }));
       }
     } catch (error) {
+      const message = await formatOperationPermissionError({
+        error,
+        getProtectedRootForPath,
+        pathHints: messages.failurePathHints ?? [],
+        t,
+      });
       showFeedback(t(messages.failed, {
-        error: formatAppError(error),
+        error: message,
         defaultValue: messages.failedDefaultValue,
       }));
     } finally {
       await messages.onSettled?.(settledTask);
     }
-  }, [showFeedback, t, waitForTransferTaskResult]);
+  }, [getProtectedRootForPath, showFeedback, t, waitForTransferTaskResult]);
 
   const waitForCrossWindowTask = useCallback(async (
     taskId: string,
@@ -141,17 +177,29 @@ export default function useExplorerTransferWorkflow({
         return null;
       }
       if (task.status === 'failed') {
-        showFeedback(t('messages.operationFailed', {
+        const error = await formatOperationPermissionError({
           error: task.error || t('messages.operationFailed', { error: '' }),
+          getProtectedRootForPath,
+          pathHints: [task.errorPath, refreshTargetPath],
+          t,
+        });
+        showFeedback(t('messages.operationFailed', {
+          error,
         }));
         return null;
       }
       return task;
     } catch (error) {
-      showFeedback(t('messages.operationFailed', { error: formatAppError(error) }));
+      const message = await formatOperationPermissionError({
+        error,
+        getProtectedRootForPath,
+        pathHints: [refreshTargetPath],
+        t,
+      });
+      showFeedback(t('messages.operationFailed', { error: message }));
       return null;
     }
-  }, [showFeedback, t, waitForTransferTaskResult]);
+  }, [getProtectedRootForPath, showFeedback, t, waitForTransferTaskResult]);
 
   const showMoveTaskCompletedFeedback = useCallback((task: TransferTaskSnapshot | null, expectedCount: number) => {
     if (!task) {
@@ -227,6 +275,7 @@ export default function useExplorerTransferWorkflow({
         success: 'messages.importedFromFinder',
         failed: 'messages.finderImportFailed',
         failedDefaultValue: '导入失败：{{error}}',
+        failurePathHints: [targetDir, ...cleanPaths],
         onSettled: async task => {
           await recordManualOperationHistory({
             category: 'copy',
@@ -245,8 +294,14 @@ export default function useExplorerTransferWorkflow({
       }, targetDir);
       return true;
     } catch (error) {
+      const message = await formatOperationPermissionError({
+        error,
+        getProtectedRootForPath,
+        pathHints: [targetDir, ...cleanPaths],
+        t,
+      });
       showFeedback(t('messages.finderImportFailed', {
-        error: formatAppError(error),
+        error: message,
         defaultValue: '导入失败：{{error}}',
       }));
       return true;
@@ -254,6 +309,7 @@ export default function useExplorerTransferWorkflow({
   }, [
     confirmLargeBatchOperation,
     getActionDirectory,
+    getProtectedRootForPath,
     onStartTransfer,
     recordManualOperationHistory,
     setMoveConflictDialog,
@@ -366,6 +422,7 @@ export default function useExplorerTransferWorkflow({
         success: 'messages.copyCompleted',
         failed: 'messages.operationFailed',
         failedDefaultValue: '复制失败：{{error}}',
+        failurePathHints: [targetFolder.path, ...paths],
         onCompleted: async task => {
           if (task && task.failed === 0 && options.clearClipboardOnSuccess) {
             await clearFileClipboardState();
@@ -386,15 +443,22 @@ export default function useExplorerTransferWorkflow({
             volumeHint: resolveTransferTaskVolumeHint(task),
           });
         },
-      });
+      }, targetFolder.path);
     } catch (error) {
       logDragDebug(`copyError error=${formatAppError(error)}`);
-      showFeedback(t('messages.operationFailed', { error: formatAppError(error) }));
+      const message = await formatOperationPermissionError({
+        error,
+        getProtectedRootForPath,
+        pathHints: [targetFolder.path, ...filesToCopy.map(file => file.path)],
+        t,
+      });
+      showFeedback(t('messages.operationFailed', { error: message }));
     }
     return true;
   }, [
     clearFileClipboardState,
     confirmLargeBatchOperation,
+    getProtectedRootForPath,
     logDragDebug,
     onStartTransfer,
     recordManualOperationHistory,
@@ -404,11 +468,16 @@ export default function useExplorerTransferWorkflow({
     waitForTransferTask,
   ]);
 
-  const handleMoveConflictChoice = useCallback(async (
-    moveConflictDialog: MoveConflictDialogState | null,
-    strategy: MoveConflictChoice,
-  ) => {
+  const handleMoveConflictChoice = useCallback(async (strategy: MoveConflictChoice) => {
     const dialog = moveConflictDialog;
+    logDragDebug([
+      'conflictChoice',
+      `strategy=${strategy}`,
+      `hasDialog=${dialog ? 'yes' : 'no'}`,
+      `operation=${dialog?.operation ?? '(none)'}`,
+      `count=${dialog?.filesToMove.length ?? 0}`,
+      `targetPath=${dialog?.targetFolder.path ?? '(none)'}`,
+    ].join(' '));
     setMoveConflictDialog(null);
     if (!dialog) return;
     if (strategy === 'cancel') {
@@ -438,7 +507,15 @@ export default function useExplorerTransferWorkflow({
       clearDragPayloadOnSuccess: dialog.clearDragPayloadOnSuccess,
       skipLargeBatchConfirm: true,
     });
-  }, [executeCopyFiles, executeMoveFilesRef, finishSharedFileDrag, setMoveConflictDialog, startMoveTaskFromDialogRef]);
+  }, [
+    executeCopyFiles,
+    executeMoveFilesRef,
+    finishSharedFileDrag,
+    logDragDebug,
+    moveConflictDialog,
+    setMoveConflictDialog,
+    startMoveTaskFromDialogRef,
+  ]);
 
   const moveDraggedFiles = useCallback(async (
     draggedFileId: string,
@@ -446,46 +523,65 @@ export default function useExplorerTransferWorkflow({
     selectedFileIds: string[],
     findFileById: (id: string) => FileItem | undefined,
   ) => {
+    logDragDebug(`moveDraggedFiles enter draggedFileId=${draggedFileId || '(none)'} targetFolderId=${targetFolderId || '(none)'} selectedIds=${selectedFileIds.join('|') || '(none)'}`);
     if (!draggedFileId || draggedFileId === targetFolderId) {
-      logDragDebug(`moveAbort reason=${!draggedFileId ? 'missing-dragged-id' : 'same-target'}`);
+      logDragDebug(`moveAbort reason=${!draggedFileId ? 'missing-dragged-id' : 'same-target'} draggedFileId=${draggedFileId || '(none)'} targetFolderId=${targetFolderId || '(none)'}`);
       return;
     }
 
     const targetFolder = findFileById(targetFolderId);
+    logDragDebug(`moveDraggedFiles targetResolved targetFolderId=${targetFolderId} targetExists=${Boolean(targetFolder)} targetType=${targetFolder?.type ?? '(missing)'} targetPath=${targetFolder?.path ?? '(none)'}`);
     if (targetFolder?.type !== 'folder') {
-      logDragDebug(`moveAbort reason=target-not-folder targetExists=${Boolean(targetFolder)} targetType=${targetFolder?.type ?? ''}`);
+      logDragDebug(`moveAbort reason=target-not-folder targetFolderId=${targetFolderId} targetExists=${Boolean(targetFolder)} targetType=${targetFolder?.type ?? '(missing)'}`);
       return;
     }
     if (isRemotePath(targetFolder.path)) {
-      logDragDebug('moveAbort reason=remote-target');
+      logDragDebug(`moveAbort reason=remote-target targetPath=${targetFolder.path}`);
       showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
       return;
     }
 
     const idsToMove = selectedFileIds.includes(draggedFileId) ? selectedFileIds : [draggedFileId];
+    const missingIds = idsToMove.filter(id => !findFileById(id));
     const filesToMove = idsToMove
       .map(id => findFileById(id))
       .filter((file): file is FileItem => Boolean(file));
-    logDragDebug(`moveResolve targetPath=${targetFolder.path} ids=${idsToMove.join('|')} files=${filesToMove.map(file => file.path).join('|')}`);
+    logDragDebug(`moveResolve targetPath=${targetFolder.path} ids=${idsToMove.join('|') || '(none)'} files=${filesToMove.map(file => file.path).join('|') || '(none)'} missingIds=${missingIds.join('|') || '(none)'}`);
     if (filesToMove.length === 0) {
-      logDragDebug('moveAbort reason=no-files-to-move');
+      logDragDebug(`moveAbort reason=no-files-to-move targetPath=${targetFolder.path} ids=${idsToMove.join('|') || '(none)'}`);
       return;
     }
     if (filesToMove.some(file => isRemotePath(file.path))) {
-      logDragDebug('moveAbort reason=remote-source');
+      logDragDebug(`moveAbort reason=remote-source files=${filesToMove.map(file => file.path).join('|') || '(none)'}`);
       showFeedback(t('messages.remoteReadOnly', { defaultValue: '远程访问第一版仅支持浏览。' }));
       return;
     }
 
     if (filesToMove.some(file => targetFolder.path === file.path || targetFolder.path.startsWith(`${file.path}/`))) {
-      logDragDebug('moveAbort reason=move-into-self');
+      logDragDebug(`moveAbort reason=move-into-self targetPath=${targetFolder.path} files=${filesToMove.map(file => file.path).join('|') || '(none)'}`);
       showFeedback(t('messages.cannotMoveToSelf'));
       return;
     }
 
-    await executeMoveFilesRef.current(filesToMove, targetFolder, 'abort', {
-      useTransferTask: true,
-    });
+    logDragDebug(`moveDraggedFiles executeStart targetPath=${targetFolder.path} count=${filesToMove.length} files=${filesToMove.map(file => file.path).join('|') || '(none)'}`);
+    try {
+      const summary = await executeMoveFilesRef.current(filesToMove, targetFolder, 'abort', {
+        useTransferTask: true,
+      });
+      logDragDebug([
+        'moveDraggedFiles executeSettled',
+        `started=${summary.started ? 'yes' : 'no'}`,
+        `moved=${summary.moved}`,
+        `copiedCrossDevice=${summary.copiedCrossDevice}`,
+        `failed=${summary.failed}`,
+        `conflicts=${summary.conflicts}`,
+        `skipped=${summary.skipped}`,
+        `targetPath=${targetFolder.path}`,
+      ].join(' '));
+    } catch (error) {
+      logDragDebug(`moveDraggedFiles executeError targetPath=${targetFolder.path} error=${formatAppError(error)}`);
+      throw error;
+    }
   }, [executeMoveFilesRef, logDragDebug, showFeedback, t]);
 
   return {

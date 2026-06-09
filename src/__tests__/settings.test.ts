@@ -3,6 +3,8 @@ import {
   CURRENT_SETTINGS_BACKUP_SCHEMA_VERSION,
   CURRENT_SETTINGS_VERSION,
   buildSettingsBackup,
+  applyCustomColorPalettePreset,
+  buildCustomColorPalettePreset,
   normalizeThemeSettings,
   normalizeContextMenuExtensions,
   migrateThemeSettings,
@@ -121,6 +123,11 @@ describe('normalizeThemeSettings', () => {
     expect(result.enableLiquidGlass).toBe(false);
   });
 
+  it('default base font is System Default', () => {
+    const result = normalizeThemeSettings({});
+    expect(result.fontFamily).toBe('system-ui, sans-serif');
+  });
+
   it('default showFolderSizeInList is true', () => {
     const result = normalizeThemeSettings({});
     expect(result.showFolderSizeInList).toBe(true);
@@ -129,6 +136,94 @@ describe('normalizeThemeSettings', () => {
   it('falls back to favorites when default home path is blank', () => {
     expect(normalizeThemeSettings({ defaultHomePath: '' }).defaultHomePath).toBe('aether://favorites');
     expect(normalizeThemeSettings({ defaultHomePath: '   ' }).defaultHomePath).toBe('aether://favorites');
+  });
+
+  it('normalizes saved custom color palette presets', () => {
+    const result = normalizeThemeSettings({
+      customColorPalettes: [
+        {
+          id: ' bamboo ',
+          name: ' 竹青细化 ',
+          accentColor: '#789262',
+          colors: {
+            colorIcon: '#2B5B45',
+            colorSearchBg: '#D8E8D1',
+            colorPanelBg: 'not-a-color',
+            injected: '#000000',
+          },
+        },
+        {
+          id: '',
+          name: '',
+          accentColor: 'bad',
+          colors: {
+            colorIcon: '#111111',
+          },
+        },
+      ] as any,
+    });
+
+    expect(result.customColorPalettes).toEqual([
+      {
+        id: 'bamboo',
+        name: '竹青细化',
+        accentColor: '#789262',
+        colors: {
+          colorIcon: '#2B5B45',
+          colorSearchBg: '#D8E8D1',
+        },
+      },
+    ]);
+  });
+});
+
+describe('custom color palette presets', () => {
+  it('captures the current accent and detailed color controls as a named preset', () => {
+    const theme = normalizeThemeSettings({
+      accentColor: '#789262',
+      colorIcon: '#2B5B45',
+      colorSearchBg: '#D8E8D1',
+      colorHoverFg: undefined,
+    });
+
+    const result = buildCustomColorPalettePreset({
+      name: ' 竹青工作区 ',
+      theme,
+      now: 12345,
+    });
+
+    expect(result).toEqual({
+      id: 'custom-12345',
+      name: '竹青工作区',
+      accentColor: '#789262',
+      colors: {
+        colorIcon: '#2B5B45',
+        colorSearchBg: '#D8E8D1',
+      },
+    });
+  });
+
+  it('applies a saved custom preset and clears detailed colors that are not part of the saved snapshot', () => {
+    const theme = normalizeThemeSettings({
+      accentColor: '#007aff',
+      colorIcon: '#111111',
+      colorSelectedFg: '#222222',
+      colorSearchBg: '#333333',
+    });
+
+    const result = applyCustomColorPalettePreset(theme, {
+      id: 'bamboo',
+      name: '竹青',
+      accentColor: '#789262',
+      colors: {
+        colorIcon: '#2B5B45',
+      },
+    });
+
+    expect(result.accentColor).toBe('#789262');
+    expect(result.colorIcon).toBe('#2B5B45');
+    expect(result.colorSelectedFg).toBeUndefined();
+    expect(result.colorSearchBg).toBeUndefined();
   });
 });
 
@@ -415,6 +510,45 @@ describe('sanitizeImportedSettingsBackup', () => {
     expect(result.favorites).toEqual(['/a', '/b']);
     expect(result.recentItems).toEqual(['/recent']);
     expect(result.fileTags).toEqual({ '/a': ['tag-red', 'tag-blue'] });
+  });
+
+  it('preserves sanitized custom color palettes from settings backups', () => {
+    const result = sanitizeImportedSettingsBackup({
+      theme: {
+        customColorPalettes: [
+          {
+            id: ' bamboo ',
+            name: ' 竹青细化 ',
+            accentColor: '#789262',
+            colors: {
+              colorIcon: '#2B5B45',
+              colorSearchBg: '#D8E8D1',
+              injected: '#000000',
+            },
+          },
+          {
+            id: 'bad',
+            name: 'Bad',
+            accentColor: 'not-a-color',
+            colors: {
+              colorIcon: '#111111',
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.theme?.customColorPalettes).toEqual([
+      {
+        id: 'bamboo',
+        name: '竹青细化',
+        accentColor: '#789262',
+        colors: {
+          colorIcon: '#2B5B45',
+          colorSearchBg: '#D8E8D1',
+        },
+      },
+    ]);
   });
 
   it('throws when backup has no importable data', () => {

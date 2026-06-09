@@ -185,6 +185,7 @@ export interface TransferTaskSnapshot {
   completedBytes: number;
   currentName?: string | null;
   error?: string | null;
+  errorPath?: string | null;
   startedAt: number;
   finishedAt?: number | null;
   copied: number;
@@ -248,6 +249,14 @@ export async function getFileClipboard(): Promise<FileTransferPayload | null> {
 
 export async function clearFileClipboard(): Promise<void> {
   return invokeFs('clear_file_clipboard');
+}
+
+export async function readClipboardText(): Promise<string> {
+  return invokeFs('read_clipboard_text');
+}
+
+export async function hasClipboardText(): Promise<boolean> {
+  return invokeFs('has_clipboard_text');
 }
 
 export interface FileDragMeta {
@@ -316,6 +325,10 @@ export async function deleteToTrash(path: string): Promise<void> {
 
 export async function createFile(parentDir: string, name: string): Promise<string> {
   return invokeFs('create_file', { parentDir, name });
+}
+
+export async function createTextFile(parentDir: string, name: string, content: string): Promise<string> {
+  return invokeFs('create_text_file', { parentDir, name, content });
 }
 
 export async function createFolder(parentDir: string, name: string): Promise<string> {

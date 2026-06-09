@@ -33,9 +33,12 @@ export type OpenExplorerSystemContextMenuArgs = {
   handleNewFile: (targetPath?: string) => MaybePromise<void>;
   handleNewFolder: (targetPath?: string) => MaybePromise<void>;
   handleOpenFile: (file: FileItem) => MaybePromise<void>;
+  handleOpenInNewTab: (file?: FileItem | null) => MaybePromise<void>;
+  handleOpenInNewWindow: (file?: FileItem | null) => MaybePromise<void>;
   handleOpenTerminal: (file?: FileItem | null) => MaybePromise<void>;
   handleOpenWith: (file: FileItem, appName: string) => MaybePromise<void>;
   handleOpenWithOther: (file: FileItem) => MaybePromise<void>;
+  handlePasteAsTextFile: (targetPath?: string) => MaybePromise<void>;
   handlePasteFromClipboard: (targetPath?: string) => MaybePromise<void>;
   handleQuickLook: (file?: FileItem) => MaybePromise<void>;
   handleRenameStart: (file: FileItem) => void;
@@ -49,6 +52,7 @@ export type OpenExplorerSystemContextMenuArgs = {
   position?: SystemContextMenuPosition;
   refreshCurrentDir: (fullRefresh?: boolean, refreshPath?: string) => MaybePromise<unknown>;
   refreshFileClipboardState: () => Promise<{ paths: string[] } | null>;
+  refreshTextClipboardState: () => Promise<boolean>;
   setShowAIRename: (show: boolean) => void;
   setShowOperationHistory: (show: boolean) => void;
   showFeedback: (message: string) => void;
@@ -79,9 +83,12 @@ export async function openExplorerSystemContextMenu({
   handleNewFile,
   handleNewFolder,
   handleOpenFile,
+  handleOpenInNewTab,
+  handleOpenInNewWindow,
   handleOpenTerminal,
   handleOpenWith,
   handleOpenWithOther,
+  handlePasteAsTextFile,
   handlePasteFromClipboard,
   handleQuickLook,
   handleRenameStart,
@@ -95,6 +102,7 @@ export async function openExplorerSystemContextMenu({
   position,
   refreshCurrentDir,
   refreshFileClipboardState,
+  refreshTextClipboardState,
   setShowAIRename,
   setShowOperationHistory,
   showFeedback,
@@ -148,6 +156,12 @@ export async function openExplorerSystemContextMenu({
     items.push(await MenuItem.new({
       text: t('explorer.newFile', '新建文件'),
       action: () => { void handleNewFile(targetDir); },
+    }));
+    const canPasteText = await refreshTextClipboardState();
+    items.push(await MenuItem.new({
+      text: t('explorer.pasteAsTextFile', '粘贴为 txt'),
+      enabled: canPasteText,
+      action: () => { void handlePasteAsTextFile(targetDir); },
     }));
     await addSeparator();
     items.push(await MenuItem.new({
@@ -237,6 +251,14 @@ export async function openExplorerSystemContextMenu({
     items.push(await MenuItem.new({
       text: t('explorer.rename', '重命名'),
       action: () => { void handleRenameStart(primary); },
+    }));
+    items.push(await MenuItem.new({
+      text: t('explorer.openInNewTab', '在新标签页中打开'),
+      action: () => { void handleOpenInNewTab(primary); },
+    }));
+    items.push(await MenuItem.new({
+      text: t('explorer.openInNewWindow', '在新窗口中打开'),
+      action: () => { void handleOpenInNewWindow(primary); },
     }));
     items.push(await MenuItem.new({
       text: t('explorer.aiAssistant', 'AI 文件助手'),

@@ -158,9 +158,13 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
     handleTestProvider,
   } = useSettingsAiProviders({ theme, onThemeChange });
   const {
-    permChecks,
-    permChecksLoaded,
+    permissionStatus,
+    probeResults,
+    permissionCheckLoaded,
+    permissionCheckLoading,
     checkPermissions,
+    appIdentity,
+    appIdentityError,
   } = useSettingsPermissions(t);
 
   const renderAppearanceCategory = () => (
@@ -260,9 +264,13 @@ export default function SettingsView({ theme, onThemeChange, initialCategory = '
   const renderPermissionsCategory = () => (
     <PermissionsDiagnosticsSettings
       t={t}
-      permChecks={permChecks}
-      permChecksLoaded={permChecksLoaded}
+      permissionStatus={permissionStatus}
+      probeResults={probeResults}
+      permissionCheckLoaded={permissionCheckLoaded}
+      permissionCheckLoading={permissionCheckLoading}
       checkPermissions={checkPermissions}
+      appIdentity={appIdentity}
+      appIdentityError={appIdentityError}
     />
   );
 

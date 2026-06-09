@@ -2,7 +2,7 @@
 
 > 日期：2026-05-25
 > 分支：`codex-fix-review-findings`
-> 目标：尽快交付一版公益 / 社区预览版，不扩大商业化、订阅、Developer ID 签名、notarization、App Store 范围。
+> 目标：尽快交付一版公益 / 社区预览版，不扩大商业化、订阅、notarization、App Store 范围；macOS Full Disk Access 发版候选验收必须使用稳定签名身份，不能用未签名 / ad-hoc 构建替代。
 
 ## 一、当前结论
 
@@ -16,7 +16,7 @@
 - Smoke Test 文档和实际命令输出必须一致。
 - README / Release Audit / TODO 不能出现与当前交付口径冲突的承诺。
 - 不再主动大改 `ExplorerView` 拖拽、外部导入、键盘快捷键、刷新链路。
-- 不再新增商业分发、签名、公证、订阅相关目标。
+- 不再新增商业分发、公证、订阅相关目标；稳定签名身份只作为 Full Disk Access release evidence 的必要条件，不扩展为 App Store / 商业分发路线。
 
 ## 二、已完成且可作为交付基础的内容
 
@@ -28,7 +28,7 @@
   - 8 个 test gates。
   - 8 个 release gates。
   - 8 个 local release gates。
-  - 10 个 npm script 实现。
+  - 14 个 npm script 实现。
   - 3 个 dependency resolution checks。
   - 19 个 CI setup checks。
   - 3 个 timeout checks。
@@ -105,9 +105,9 @@ git diff --check
 - `docs/SMOKE_TEST.md` 的命令说明与当前 `lint:i18n` / `lint:ci-gates` 输出一致。
 - `docs/RELEASE_AUDIT.md` 不再把已完成项写成待修。
 - `TODO.md` 不把暂缓项写成当前交付必做。
-- README 明确这是未签名的公益 / 社区预览版，不包装成商业级签名应用。
+- README 明确未签名 / ad-hoc 构建只适合开发或高级用户风险测试，不包装成商业级签名应用，也不能作为稳定 Full Disk Access release evidence。
 
-验收标准：无明显过期状态、无签名 / notarization / 商业化承诺。
+验收标准：无明显过期状态、无 notarization / App Store / 商业化承诺；签名相关表述必须与 FDA release evidence gate（`npm run validate:macos-permission-release`）一致。
 
 4. 最终确认 Git 状态：
 
@@ -131,7 +131,7 @@ git diff --cached --stat
 - 不补完整组件级自动化测试。
 - 不做 Tauri command 集成测试体系。
 - 不引入覆盖率阈值。
-- 不做 Developer ID 签名、notarization、App Store。
+- 不做 notarization、App Store 或商业分发路线扩展；稳定签名身份仍是 Full Disk Access 发版候选验收前置条件。
 - 不做商业化、订阅、云同步、团队协作。
 - 不做完整插件市场。
 
@@ -155,7 +155,7 @@ git diff --cached --stat
 
 ## 六、风险说明
 
-- 当前仍是未签名社区预览版，不能包装成正式签名应用。
+- 未签名 / ad-hoc 构建仍只能作为社区预览或开发测试路径，不能包装成正式签名应用，也不能作为稳定 Full Disk Access release evidence。
 - `ExplorerView` 仍是大型组件，后续维护风险存在，但不作为本次交付阻塞项。
 - 拖拽、跨窗口、Finder 外部导入属于系统集成路径，自动化覆盖有限，交付前必须人工 smoke。
 - 当前 worktree 有大量未提交 WIP，任何 stage / commit 都必须只选明确文件，不能 `git add .`。

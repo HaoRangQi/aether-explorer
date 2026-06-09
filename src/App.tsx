@@ -6,6 +6,7 @@ import { load } from '@tauri-apps/plugin-store';
 import Sidebar from './components/Sidebar';
 import TopBar, { TabTransferPayload } from './components/TopBar';
 import RemoteConnectionDialog from './components/RemoteConnectionDialog';
+import StartupPermissionPrompt from './components/StartupPermissionPrompt';
 import type { SettingsCategory } from './components/SettingsView';
 import { ThemeSettings, ViewMode, TabData, RemoteConnection } from './types';
 import {
@@ -17,6 +18,7 @@ import {
 } from './api/filesystem';
 import {
   DEFAULT_THEME,
+  DEFAULT_FONT_FAMILY,
   FAVORITES_VIRTUAL_PATH,
   normalizeThemeSettings,
   loadThemeFromLocalStorage,
@@ -24,9 +26,11 @@ import {
 } from './lib/settings';
 import { getPathLeaf, getInitialTabs as buildInitialTabs, parseRemotePath } from './lib/path-helpers';
 import { normalizeAppError } from './lib/app-error';
+import { useAppIdentity } from './lib/app-identity';
+import { FULL_DISK_ACCESS_POLL_INTERVAL_MS, startFullDiskAccessPolling, useFullDiskAccessPermission } from './lib/full-disk-access';
 import { resolveAppShortcut } from './lib/keyboard-shortcuts';
 import { NATIVE_MENU_COMMAND_EVENT, type NativeMenuCommand } from './lib/native-menu';
-import { currentWindowLabel, safeCurrentWindow, safeEmitTo, safeInvoke, safeListen } from './lib/tauri-runtime';
+import { currentWindowLabel, isTauriRuntime, safeCurrentWindow, safeEmitTo, safeInvoke, safeListen } from './lib/tauri-runtime';
 import { isValidWallpaperUrl } from './lib/url-guard';
 import {
   STARTUP_PANIC_LOG_SEEN_KEY,
@@ -36,9 +40,10 @@ import {
 
 const MAX_RECENT_ITEMS = 100;
 const LIQUID_GLASS_PRIMARY = '#ffffff';
-const STARTUP_PERMISSION_PREFLIGHT_STATE_KEY = 'aether-startup-permission-preflight-state-v1';
-const STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY = 'aether-startup-permission-preflight-lock-v1';
+const STARTUP_PERMISSION_PREFLIGHT_STATE_KEY = 'aether-startup-full-disk-access-state-v1';
+const STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY = 'aether-startup-full-disk-access-lock-v1';
 const STARTUP_PERMISSION_PREFLIGHT_LOCK_TTL_MS = 15_000;
+const isDevelopmentRuntime = import.meta.env.DEV === true;
 type ResolvedAppearance = 'light' | 'dark';
 const LIQUID_GLASS_COLOR_VARS: Record<ResolvedAppearance, Record<string, string>> = {
   light: {
@@ -85,12 +90,6 @@ type NativeLiquidGlassStatus = {
   supported: boolean;
   applied: boolean;
   reason?: string | null;
-};
-
-type PermissionPreflightResult = {
-  path: string;
-  ok: boolean;
-  error?: string | null;
 };
 
 function resolveAppearance(mode: ThemeSettings['mode'], systemTheme: ResolvedAppearance): ResolvedAppearance {
@@ -161,7 +160,9 @@ export default function App() {
   const [settingsInitialCategory, setSettingsInitialCategory] = useState<SettingsCategory>('appearance');
   const [startupPanicPrompt, setStartupPanicPrompt] = useState<StartupPanicPrompt | null>(null);
   const [startupPermissionPromptOpen, setStartupPermissionPromptOpen] = useState(false);
-  const [startupPermissionPromptLoading, setStartupPermissionPromptLoading] = useState(false);
+  const [startupOpenSettingsError, setStartupOpenSettingsError] = useState<string | null>(null);
+  const [startupRevealAppLoading, setStartupRevealAppLoading] = useState(false);
+  const [startupRevealAppError, setStartupRevealAppError] = useState<string | null>(null);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
   const [editingRemoteConnection, setEditingRemoteConnection] = useState<RemoteConnection | null>(null);
@@ -174,6 +175,14 @@ export default function App() {
   const [favorites, setFavorites] = useState<string[]>(loadFavoritesFromLocalStorage);
   const [fileTags, setFileTags] = useState<Record<string, string[]>>(loadFileTagsFromLocalStorage);
   const [recentItems, setRecentItems] = useState<string[]>(loadRecentItemsFromLocalStorage);
+  const {
+    permissionCheckLoading: startupPermissionPromptLoading,
+    checkPermissions: checkFullDiskAccessPermissions,
+  } = useFullDiskAccessPermission();
+  const {
+    appIdentity: startupAppIdentity,
+    appIdentityError: startupAppIdentityError,
+  } = useAppIdentity();
   const activeTab = useMemo(() => tabs.find(tab => tab.id === view), [tabs, view]);
   const activeTabPath = activeTab?.currentPath || activeTab?.initialPath;
 
@@ -453,24 +462,43 @@ export default function App() {
       // Ignore storage failures and just close prompt for this window.
     }
     setStartupPermissionPromptOpen(false);
-    setStartupPermissionPromptLoading(false);
   }, []);
 
   const runStartupPermissionPreflight = useCallback(async () => {
     if (startupPermissionPromptLoading) return;
-    setStartupPermissionPromptLoading(true);
     try {
-      const results = await safeInvoke<PermissionPreflightResult[]>('preflight_file_permissions');
-      const denied = results.filter(result => !result.ok);
-      if (denied.length > 0) {
-        console.info('Permission preflight denied paths:', denied.map(result => result.path));
+      const result = await checkFullDiskAccessPermissions({ force: true, registration: true });
+      if (result.status === 'granted') {
+        markStartupPermissionPromptDone();
+        return;
       }
-      markStartupPermissionPromptDone();
+      console.info('Full Disk Access is not granted:', result.status, result.probes);
     } catch (err) {
-      console.warn('Permission preflight failed:', normalizeAppError(err).userMessage);
-      setStartupPermissionPromptLoading(false);
+      console.warn('Full Disk Access check failed:', normalizeAppError(err).userMessage);
     }
-  }, [markStartupPermissionPromptDone, startupPermissionPromptLoading]);
+  }, [checkFullDiskAccessPermissions, markStartupPermissionPromptDone, startupPermissionPromptLoading]);
+
+  const openStartupPermissionSettings = useCallback(async () => {
+    setStartupOpenSettingsError(null);
+    try {
+      await safeInvoke('open_system_settings');
+    } catch (err) {
+      setStartupOpenSettingsError(normalizeAppError(err).userMessage);
+    }
+  }, []);
+
+  const revealStartupPermissionApp = useCallback(async () => {
+    if (startupRevealAppLoading) return;
+    setStartupRevealAppError(null);
+    setStartupRevealAppLoading(true);
+    try {
+      await safeInvoke('reveal_app_in_finder');
+    } catch (err) {
+      setStartupRevealAppError(normalizeAppError(err).userMessage);
+    } finally {
+      setStartupRevealAppLoading(false);
+    }
+  }, [startupRevealAppLoading]);
 
   // Apply theme to document
   useEffect(() => {
@@ -486,7 +514,7 @@ export default function App() {
     }
 
     root.style.setProperty('--primary', liquidGlassEnabled ? LIQUID_GLASS_PRIMARY : theme.accentColor);
-    root.style.setProperty('--font-sans', theme.fontFamily || 'Inter');
+    root.style.setProperty('--font-sans', theme.fontFamily || DEFAULT_FONT_FAMILY);
 
     // 纯色背景（无壁纸时生效）
     const defaultBg = resolvedMode === 'dark' ? '#1E1E2E' : '#FCFCFD';
@@ -576,36 +604,50 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (isDevelopmentRuntime || !isTauriRuntime()) return;
+
     let cancelled = false;
     let timer: number | null = null;
 
-    let shouldPrompt = false;
+    let shouldRunStartupProbe = false;
     try {
-      const state = localStorage.getItem(STARTUP_PERMISSION_PREFLIGHT_STATE_KEY);
-      if (state !== 'done') {
-        const now = Date.now();
-        const lockRaw = localStorage.getItem(STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY);
-        const lockAt = lockRaw ? Number(lockRaw) : 0;
-        const lockValid = Number.isFinite(lockAt) && now - lockAt < STARTUP_PERMISSION_PREFLIGHT_LOCK_TTL_MS;
-        if (!lockValid) {
-          localStorage.setItem(STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY, String(now));
-          shouldPrompt = true;
-        }
+      const now = Date.now();
+      const lockRaw = localStorage.getItem(STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY);
+      const lockAt = lockRaw ? Number(lockRaw) : 0;
+      const lockValid = Number.isFinite(lockAt) && now - lockAt < STARTUP_PERMISSION_PREFLIGHT_LOCK_TTL_MS;
+      if (!lockValid) {
+        localStorage.setItem(STARTUP_PERMISSION_PREFLIGHT_LOCK_KEY, String(now));
+        shouldRunStartupProbe = true;
       }
     } catch {
-      shouldPrompt = true;
+      shouldRunStartupProbe = true;
     }
 
-    if (shouldPrompt) {
+    if (shouldRunStartupProbe) {
       timer = window.setTimeout(() => {
-        if (!cancelled) setStartupPermissionPromptOpen(true);
+        // localStorage prevents near-duplicate windows from starting new setup UI;
+        // the shared FDA coordinator still single-flights backend probes if they race.
+        void checkFullDiskAccessPermissions({ force: true, registration: true })
+          .then(result => {
+            if (cancelled) return;
+            if (result.status === 'granted') {
+              markStartupPermissionPromptDone();
+              return;
+            }
+            console.info('Full Disk Access startup probe is not granted:', result.status, result.probes);
+            setStartupPermissionPromptOpen(true);
+          })
+          .catch(err => {
+            if (cancelled) return;
+            console.warn('Full Disk Access startup probe failed:', normalizeAppError(err).userMessage);
+            setStartupPermissionPromptOpen(true);
+          });
       }, 550);
     }
 
     const onStorage = (event: StorageEvent) => {
       if (event.key === STARTUP_PERMISSION_PREFLIGHT_STATE_KEY && event.newValue === 'done') {
         setStartupPermissionPromptOpen(false);
-        setStartupPermissionPromptLoading(false);
       }
     };
     window.addEventListener('storage', onStorage);
@@ -615,7 +657,27 @@ export default function App() {
       if (timer) window.clearTimeout(timer);
       window.removeEventListener('storage', onStorage);
     };
-  }, []);
+  }, [checkFullDiskAccessPermissions, markStartupPermissionPromptDone]);
+
+  useEffect(() => {
+    if (!isTauriRuntime() || isDevelopmentRuntime || !startupPermissionPromptOpen) return undefined;
+
+    let cancelled = false;
+    const stopPolling = startFullDiskAccessPolling({
+      intervalMs: FULL_DISK_ACCESS_POLL_INTERVAL_MS,
+      checkOptions: { force: true },
+      onResult: (result) => {
+        if (!cancelled && result.status === 'granted') {
+          markStartupPermissionPromptDone();
+        }
+      },
+    });
+
+    return () => {
+      cancelled = true;
+      stopPolling();
+    };
+  }, [markStartupPermissionPromptDone, startupPermissionPromptOpen]);
 
   // DevTools 打开
   const handleOpenDevTools = useCallback(() => {
@@ -884,7 +946,7 @@ export default function App() {
     <MotionConfig reducedMotion="user">
     <div
       className={`h-screen w-screen overflow-hidden antialiased transition-all duration-700 flex rounded-[24px] ${liquidGlassEnabled ? 'liquid-glass-shell' : ''}`}
-      style={{ fontFamily: theme.fontFamily || 'unset' }}
+      style={{ fontFamily: theme.fontFamily || DEFAULT_FONT_FAMILY }}
     >
 
 
@@ -1132,58 +1194,18 @@ export default function App() {
           </motion.div>
         )}
         {startupPermissionPromptOpen && (
-          <motion.div
-            className="fixed inset-0 z-[119] flex items-center justify-center bg-black/35 backdrop-blur-sm px-6"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <motion.div
-              initial={{ scale: 0.96, y: 12, opacity: 0 }}
-              animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.96, y: 12, opacity: 0 }}
-              className={`${liquidGlassEnabled ? 'liquid-glass' : 'border border-primary/15 bg-surface/95'} w-full max-w-[560px] rounded-3xl shadow-2xl shadow-black/20 overflow-hidden`}
-            >
-              <div className="flex items-start gap-4 p-6">
-                <div className="w-11 h-11 rounded-2xl bg-primary/15 flex items-center justify-center shrink-0">
-                  <AlertTriangle className="w-5 h-5 text-primary" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-[17px] font-black text-on-surface">{t('appPermissions.startupTitle')}</h3>
-                  <p className="text-[13px] text-on-surface/55 mt-2 leading-relaxed">
-                    {t('appPermissions.startupDescription')}
-                  </p>
-                  <p className="text-[12px] text-on-surface/35 mt-3 leading-relaxed">
-                    {t('appPermissions.systemBehaviorHint')}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setStartupPermissionPromptOpen(false)}
-                  disabled={startupPermissionPromptLoading}
-                  className="p-2 rounded-xl hover:bg-primary/10 transition-colors shrink-0 disabled:opacity-50"
-                  title={t('common.cancel')}
-                >
-                  <X className="w-4 h-4 text-on-surface/45" />
-                </button>
-              </div>
-              <div className="flex items-center justify-end gap-3 p-6">
-                <button
-                  onClick={() => setStartupPermissionPromptOpen(false)}
-                  disabled={startupPermissionPromptLoading}
-                  className="px-5 py-3 rounded-2xl bg-primary/10 text-primary text-[12px] font-black hover:bg-primary/20 transition-colors disabled:opacity-50"
-                >
-                  {t('appPermissions.later')}
-                </button>
-                <button
-                  onClick={runStartupPermissionPreflight}
-                  disabled={startupPermissionPromptLoading}
-                  className="px-5 py-3 rounded-2xl bg-primary text-on-primary text-[12px] font-black shadow-lg shadow-primary/20 hover:bg-primary/90 transition-colors disabled:opacity-60"
-                >
-                  {startupPermissionPromptLoading ? t('appPermissions.requesting') : t('appPermissions.continue')}
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
+          <StartupPermissionPrompt
+            liquidGlassEnabled={liquidGlassEnabled}
+            appIdentity={startupAppIdentity}
+            appIdentityError={startupAppIdentityError}
+            permissionCheckLoading={startupPermissionPromptLoading}
+            openSettingsError={startupOpenSettingsError}
+            revealAppLoading={startupRevealAppLoading}
+            revealAppError={startupRevealAppError}
+            onOpenSystemSettings={openStartupPermissionSettings}
+            onRevealApp={revealStartupPermissionApp}
+            onCheckAuthorization={runStartupPermissionPreflight}
+          />
         )}
         {isTransferring && (
           <Suspense fallback={null}>

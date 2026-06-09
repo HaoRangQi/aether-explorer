@@ -1,10 +1,20 @@
 use crate::error::AppError;
+use serde::Serialize;
 use std::fs;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use tauri_plugin_log::{Target, TargetKind};
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AppIdentity {
+    pub(crate) app_name: String,
+    pub(crate) bundle_identifier: String,
+    pub(crate) version: String,
+    pub(crate) app_path: String,
+}
 
 pub(crate) fn aether_log_dir(home_dir: &Path) -> PathBuf {
     home_dir
@@ -108,7 +118,52 @@ pub(crate) fn open_system_settings() -> Result<(), AppError> {
     std::process::Command::new("open")
         .args(["x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])
         .spawn()
-        .map_err(|e| AppError::internal(format!("无法打开系统设置: {}", e)))?;
+        .map_err(|e| AppError::internal(format!("Failed to open System Settings: {}", e)))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn get_app_identity(app: tauri::AppHandle) -> Result<AppIdentity, AppError> {
+    let package_info = app.package_info();
+    let config = app.config();
+    let exe_path = std::env::current_exe()
+        .map_err(|e| AppError::internal(format!("Failed to locate current application: {}", e)))?;
+    let app_path = resolve_app_reveal_path(&exe_path).to_string_lossy().into_owned();
+    Ok(AppIdentity {
+        app_name: config
+            .product_name
+            .clone()
+            .unwrap_or_else(|| package_info.name.clone()),
+        bundle_identifier: config.identifier.clone(),
+        version: package_info.version.to_string(),
+        app_path,
+    })
+}
+
+pub(crate) fn resolve_app_reveal_path(exe_path: &Path) -> PathBuf {
+    exe_path
+        .ancestors()
+        // Prefer the outermost app bundle, e.g. Aether.app over nested Helper.app.
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+        })
+        .last()
+        .unwrap_or(exe_path)
+        .to_path_buf()
+}
+
+#[tauri::command]
+pub(crate) fn reveal_app_in_finder() -> Result<(), AppError> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| AppError::internal(format!("Failed to locate current application: {}", e)))?;
+    let reveal_path = resolve_app_reveal_path(&exe_path);
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(&reveal_path)
+        .spawn()
+        .map_err(|e| AppError::internal(format!("Failed to reveal current application in Finder: {}", e)))?;
     Ok(())
 }
 

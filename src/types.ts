@@ -46,6 +46,30 @@ export interface LanguageOption {
   enabled: boolean;
 }
 
+export type ThemeColorToken =
+  | 'colorIcon'
+  | 'colorSelectedFg'
+  | 'colorSelectedBg'
+  | 'colorHoverFg'
+  | 'colorHoverBg'
+  | 'colorPanelBg'
+  | 'colorTextPrimary'
+  | 'colorTextSecondary'
+  | 'colorBorder'
+  | 'colorDivider'
+  | 'colorShadow'
+  | 'colorActiveIconBg'
+  | 'colorTagSelected'
+  | 'colorSearchBg'
+  | 'colorAppBg';
+
+export interface CustomColorPalettePreset {
+  id: string;
+  name: string;
+  accentColor: string;
+  colors: Partial<Record<ThemeColorToken, string>>;
+}
+
 export interface VolumeInfo {
   name: string;
   path: string;
@@ -134,8 +158,9 @@ export interface ThemeSettings {
   language?: string;
   followSystemLanguage?: boolean;
   languageOptions?: LanguageOption[];
+  customColorPalettes?: CustomColorPalettePreset[];
 
-  // 颜色细化控制（14项）
+  // 颜色细化控制（15项）
   colorIcon?: string;              // 图标颜色
   colorSelectedFg?: string;        // 选中前景色
   colorSelectedBg?: string;        // 选中背景色

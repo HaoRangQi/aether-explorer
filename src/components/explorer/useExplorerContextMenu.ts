@@ -34,9 +34,12 @@ type UseExplorerContextMenuInput = {
   handleNewFile: OpenExplorerSystemContextMenuArgs['handleNewFile'];
   handleNewFolder: OpenExplorerSystemContextMenuArgs['handleNewFolder'];
   handleOpenFile: OpenExplorerSystemContextMenuArgs['handleOpenFile'];
+  handleOpenInNewTab: OpenExplorerSystemContextMenuArgs['handleOpenInNewTab'];
+  handleOpenInNewWindow: OpenExplorerSystemContextMenuArgs['handleOpenInNewWindow'];
   handleOpenTerminal: OpenExplorerSystemContextMenuArgs['handleOpenTerminal'];
   handleOpenWith: OpenExplorerSystemContextMenuArgs['handleOpenWith'];
   handleOpenWithOther: OpenExplorerSystemContextMenuArgs['handleOpenWithOther'];
+  handlePasteAsTextFile: OpenExplorerSystemContextMenuArgs['handlePasteAsTextFile'];
   handlePasteFromClipboard: OpenExplorerSystemContextMenuArgs['handlePasteFromClipboard'];
   handleQuickLook: OpenExplorerSystemContextMenuArgs['handleQuickLook'];
   handleRenameStart: OpenExplorerSystemContextMenuArgs['handleRenameStart'];
@@ -49,6 +52,7 @@ type UseExplorerContextMenuInput = {
   onSelectFiles: (ids: string[]) => void;
   refreshCurrentDir: OpenExplorerSystemContextMenuArgs['refreshCurrentDir'];
   refreshFileClipboardState: OpenExplorerSystemContextMenuArgs['refreshFileClipboardState'];
+  refreshTextClipboardState: OpenExplorerSystemContextMenuArgs['refreshTextClipboardState'];
   selectedFileIds: string[];
   setContextMenu: React.Dispatch<React.SetStateAction<ExplorerContextMenuState | null>>;
   setContextMenuSize: React.Dispatch<React.SetStateAction<ContextMenuSize>>;
@@ -88,9 +92,12 @@ export default function useExplorerContextMenu({
   handleNewFile,
   handleNewFolder,
   handleOpenFile,
+  handleOpenInNewTab,
+  handleOpenInNewWindow,
   handleOpenTerminal,
   handleOpenWith,
   handleOpenWithOther,
+  handlePasteAsTextFile,
   handlePasteFromClipboard,
   handleQuickLook,
   handleRenameStart,
@@ -103,6 +110,7 @@ export default function useExplorerContextMenu({
   onSelectFiles,
   refreshCurrentDir,
   refreshFileClipboardState,
+  refreshTextClipboardState,
   selectedFileIds,
   setContextMenu,
   setContextMenuSize,
@@ -196,9 +204,12 @@ export default function useExplorerContextMenu({
       handleNewFile,
       handleNewFolder,
       handleOpenFile,
+      handleOpenInNewTab,
+      handleOpenInNewWindow,
       handleOpenTerminal,
       handleOpenWith,
       handleOpenWithOther,
+      handlePasteAsTextFile,
       handlePasteFromClipboard,
       handleQuickLook,
       handleRenameStart,
@@ -212,6 +223,7 @@ export default function useExplorerContextMenu({
       position,
       refreshCurrentDir,
       refreshFileClipboardState,
+      refreshTextClipboardState,
       setShowAIRename,
       setShowOperationHistory,
       showFeedback,
@@ -241,9 +253,12 @@ export default function useExplorerContextMenu({
     handleNewFile,
     handleNewFolder,
     handleOpenFile,
+    handleOpenInNewTab,
+    handleOpenInNewWindow,
     handleOpenTerminal,
     handleOpenWith,
     handleOpenWithOther,
+    handlePasteAsTextFile,
     handlePasteFromClipboard,
     handleQuickLook,
     handleRenameStart,
@@ -255,6 +270,7 @@ export default function useExplorerContextMenu({
     isRemoteRoot,
     refreshCurrentDir,
     refreshFileClipboardState,
+    refreshTextClipboardState,
     setShowAIRename,
     setShowOperationHistory,
     showFeedback,
@@ -286,7 +302,12 @@ export default function useExplorerContextMenu({
       return;
     }
 
-    if (isBlank) void refreshFileClipboardState();
+    if (isBlank) {
+      await Promise.all([
+        refreshFileClipboardState(),
+        refreshTextClipboardState(),
+      ]);
+    }
     clearContextSubmenuCloseTimer();
     setContextSubmenu(null);
     setContextMenu({ x: event.clientX, y: event.clientY, fileIds: newSelection, isBlank, targetDir: blankTargetDir });
@@ -298,6 +319,7 @@ export default function useExplorerContextMenu({
     onSelectFiles,
     openSystemContextMenu,
     refreshFileClipboardState,
+    refreshTextClipboardState,
     selectedFileIds,
     setContextMenu,
     setContextSubmenu,

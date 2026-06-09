@@ -9,6 +9,11 @@ import { LIST_COLS, LIST_MODIFIED_COL_BY_DENSITY } from './view-constants';
 
 type FileIconRenderer = (target: FileItem | FileItem['type'], thumbnailOverride?: string) => React.ReactNode;
 
+const DROP_TARGET_ITEM_CLASS = 'drop-target-active relative bg-emerald-400/30 !border-emerald-300 shadow-[0_0_0_4px_rgba(52,211,153,0.55),0_18px_36px_rgba(5,150,105,0.28)] ring-2 ring-emerald-100/90 outline-none scale-[1.02] z-30';
+const DROP_TARGET_ICON_CLASS = '!bg-emerald-300/35 ring-2 ring-emerald-200/80 shadow-[0_0_18px_rgba(52,211,153,0.35)]';
+const DROP_TARGET_NAME_CLASS = '!text-emerald-950 dark:!text-emerald-50 drop-shadow-sm';
+const DROP_TARGET_META_CLASS = '!text-emerald-900/80 dark:!text-emerald-100/85';
+
 export type ExplorerFileItemRendererProps = {
   columnPaths: string[];
   displayMode: DisplayMode;
@@ -108,6 +113,8 @@ export default function FileItemRenderer({
   const isHiddenFile = file.name.startsWith('.');
   const fileNameClass = isHiddenFile ? 'text-on-surface/45 group-hover:text-on-surface/60' : 'text-primary-custom group-hover:text-hover-custom';
   const fileMetaClass = isHiddenFile ? 'text-on-surface/35' : 'text-primary-custom';
+  const visibleFileNameClass = isDropTarget ? DROP_TARGET_NAME_CLASS : fileNameClass;
+  const visibleFileMetaClass = isDropTarget ? DROP_TARGET_META_CLASS : fileMetaClass;
   const mediaNameClass = isHiddenFile ? 'text-white/55' : 'text-white';
   const mediaMetaClass = isHiddenFile ? 'text-white/45' : 'text-white/90';
 
@@ -143,8 +150,8 @@ export default function FileItemRenderer({
         className={`file-item select-none flex items-center transition-all duration-200 group border px-4 cursor-pointer
           ${config.py} ${config.gap}
           ${isPulsing ? 'ring-2 ring-primary/35' : ''}
-          ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
           ${isSelected ? 'bg-selected border-custom shadow-custom rounded-xl z-10' : 'bg-panel-custom border-transparent hover:bg-hover-custom hover:border-custom shadow-sm rounded-lg'}
+          ${isDropTarget ? DROP_TARGET_ITEM_CLASS : ''}
         `}
       >
         {showCheckboxCol && (
@@ -170,7 +177,7 @@ export default function FileItemRenderer({
           <div className={`${LIST_COLS.sortNum} shrink-0 text-[10px] font-black text-on-surface/25 tabular-nums pl-1`}>{sortIndex ?? ''}</div>
         )}
         <div className={`flex items-center flex-1 min-w-0 ${config.gap}`}>
-          <div className={`${config.icon} flex items-center justify-center shrink-0 overflow-hidden`}>
+          <div className={`${config.icon} flex items-center justify-center shrink-0 overflow-hidden rounded-xl ${isDropTarget ? DROP_TARGET_ICON_CLASS : ''}`}>
             <div className={`w-full h-full flex items-center justify-center transition-transform ${
               file.thumbnail && (file.type === 'application' || file.type === 'image') ? '' : config.scale
             }`}>
@@ -187,7 +194,7 @@ export default function FileItemRenderer({
               autoFocus
               className={`${config.text} font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none min-w-0 flex-1`} />
           ) : (
-            <span className={`${config.text} select-none font-black ${fileNameClass} truncate pr-2 transition-all duration-300`}>{formattedName}</span>
+            <span className={`${config.text} select-none font-black ${visibleFileNameClass} truncate pr-2 transition-all duration-300`}>{formattedName}</span>
           )}
           {tags.length > 0 && (
             <div className="flex gap-1 shrink-0">
@@ -196,13 +203,13 @@ export default function FileItemRenderer({
           )}
         </div>
         <div className={`${listModifiedColClass} shrink-0 pl-1.5 flex items-center gap-1 transition-all duration-300 min-w-0`}>
-          <span className={`${config.subText} ${fileMetaClass} font-black truncate min-w-0 flex-1`}>{file.modified}</span>
+          <span className={`${config.subText} ${visibleFileMetaClass} font-black truncate min-w-0 flex-1`}>{file.modified}</span>
           {relativeModifiedLabel && (
             <span className="text-[10px] font-medium text-on-surface/35 shrink-0 max-w-[3.5rem] truncate">{relativeModifiedLabel}</span>
           )}
         </div>
-        <div className={`${LIST_COLS.size} shrink-0 ${config.subText} ${fileMetaClass} font-mono font-black pl-2 text-right tabular-nums transition-all duration-300`}>{file.size || '--'}</div>
-        <div className={`${LIST_COLS.type} shrink-0 ${config.subText} ${fileMetaClass} truncate font-black tracking-tight pl-2 text-right opacity-70 transition-all duration-300`}>{getFileTypeLabel(file.type)}</div>
+        <div className={`${LIST_COLS.size} shrink-0 ${config.subText} ${visibleFileMetaClass} font-mono font-black pl-2 text-right tabular-nums transition-all duration-300`}>{file.size || '--'}</div>
+        <div className={`${LIST_COLS.type} shrink-0 ${config.subText} ${visibleFileMetaClass} truncate font-black tracking-tight pl-2 text-right opacity-70 transition-all duration-300`}>{getFileTypeLabel(file.type)}</div>
         <div className={`${LIST_COLS.actions} shrink-0 flex justify-end overflow-visible`}>
           <button
             onClick={(event) => openFileActionsMenu(event, file)}
@@ -236,8 +243,8 @@ export default function FileItemRenderer({
         transition={isPulsing ? { duration: 0.26 } : undefined}
         className={`file-item select-none flex items-center gap-3 px-3 rounded-xl cursor-pointer transition-all duration-300 group border
           ${isPulsing ? 'ring-2 ring-primary/35' : ''}
-          ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
           ${isSelected ? 'bg-selected border-custom shadow-custom' : 'bg-panel-custom border-transparent hover:bg-hover-custom hover:border-custom shadow-sm'}
+          ${isDropTarget ? DROP_TARGET_ITEM_CLASS : ''}
         `}
         style={{
           height: `${theme.columnHeight || 60}px`,
@@ -245,7 +252,7 @@ export default function FileItemRenderer({
           marginBottom: '8px',
         }}
       >
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-panel-custom group-hover:bg-hover-custom transition-colors shrink-0 p-1">
+        <div className={`w-10 h-10 rounded-xl flex items-center justify-center bg-panel-custom group-hover:bg-hover-custom transition-colors shrink-0 p-1 ${isDropTarget ? DROP_TARGET_ICON_CLASS : ''}`}>
           {getFileIcon(file)}
         </div>
         <div className="flex-1 min-w-0 flex flex-col justify-center">
@@ -255,13 +262,13 @@ export default function FileItemRenderer({
               onBlur={handleRenameSubmit} autoFocus onClick={event => event.stopPropagation()}
               className="text-[14px] font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none w-full" />
           ) : (
-            <h3 className={`select-none text-[14px] font-black ${fileNameClass} truncate leading-tight transition-colors`}>{formattedName}</h3>
+            <h3 className={`select-none text-[14px] font-black ${visibleFileNameClass} truncate leading-tight transition-colors`}>{formattedName}</h3>
           )}
-          <p className={`text-[11px] ${fileMetaClass} font-black truncate`}>{file.size && file.size !== '--' ? `${file.size} • ` : ''}{file.modified}</p>
+          <p className={`text-[11px] ${visibleFileMetaClass} font-black truncate`}>{file.size && file.size !== '--' ? `${file.size} • ` : ''}{file.modified}</p>
           {tags.length > 0 && <div className="flex gap-1 mt-1">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full" style={{ backgroundColor: tagColors[tag] || '#8e8e93' }} />)}</div>}
         </div>
         {file.type === 'folder' && (
-          <ChevronRight className="w-4 h-4 text-on-surface shrink-0" />
+          <ChevronRight className={`w-4 h-4 text-on-surface shrink-0 ${isDropTarget ? DROP_TARGET_NAME_CLASS : ''}`} />
         )}
       </motion.div>
     );
@@ -292,8 +299,8 @@ export default function FileItemRenderer({
         transition={isPulsing ? { duration: 0.26 } : undefined}
         className={`file-item file-item-grid select-none relative rounded-2xl p-4 flex flex-col justify-between group cursor-pointer transition-[transform,background-color,border-color,box-shadow] duration-200 border
           ${isPulsing ? 'ring-2 ring-primary/35' : ''}
-          ${isDropTarget ? 'ring-4 ring-primary outline-none scale-[1.01] z-20' : ''}
           ${isSelected ? 'bg-selected border-custom shadow-custom' : 'bg-panel-custom border-transparent hover:bg-hover-custom hover:border-custom shadow-sm'}
+          ${isDropTarget ? DROP_TARGET_ITEM_CLASS : ''}
           ${isMediaItem ? 'p-0 overflow-hidden' + (!isSelected ? ' !border-none !bg-transparent' : '') : ''}
         `}
         style={{
@@ -336,7 +343,7 @@ export default function FileItemRenderer({
         ) : (
           <>
             <div className="flex justify-between items-start">
-              <div className="w-14 h-14 rounded-2xl flex items-center justify-center bg-panel-custom group-hover:bg-hover-custom transition-colors shrink-0 p-1">
+              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center bg-panel-custom group-hover:bg-hover-custom transition-colors shrink-0 p-1 ${isDropTarget ? DROP_TARGET_ICON_CLASS : ''}`}>
                 {getFileIcon(file)}
               </div>
             </div>
@@ -347,9 +354,9 @@ export default function FileItemRenderer({
                   onBlur={handleRenameSubmit} autoFocus onClick={event => event.stopPropagation()}
                   className="text-[13px] font-black text-on-surface bg-primary/20 border border-primary rounded-md px-2 py-0.5 outline-none w-full" />
               ) : (
-                <h3 className={`select-none text-[13px] font-black ${fileNameClass} whitespace-normal break-all line-clamp-3 transition-colors leading-snug`}>{formattedName}</h3>
+                <h3 className={`select-none text-[13px] font-black ${visibleFileNameClass} whitespace-normal break-all line-clamp-3 transition-colors leading-snug`}>{formattedName}</h3>
               )}
-              <p className={`text-[10px] ${fileMetaClass} font-black mt-1`}>{formatFileMeta(file)}</p>
+              <p className={`text-[10px] ${visibleFileMetaClass} font-black mt-1`}>{formatFileMeta(file)}</p>
               {tags.length > 0 && <div className="flex gap-1 mt-2">{tags.slice(0, 4).map(tag => <span key={tag} className="w-2 h-2 rounded-full" style={{ backgroundColor: tagColors[tag] || '#8e8e93' }} />)}</div>}
             </div>
             <button

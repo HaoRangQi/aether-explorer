@@ -51,6 +51,7 @@ export interface TransferTaskWaitMessages {
   success: string;
   failed: string;
   failedDefaultValue: string;
+  failurePathHints?: string[];
   onCompleted?: (task: TransferTaskSnapshot | null) => void | Promise<void>;
   onFinished?: (task: TransferTaskSnapshot) => boolean;
   onSettled?: (task: TransferTaskSnapshot | null) => void | Promise<void>;
