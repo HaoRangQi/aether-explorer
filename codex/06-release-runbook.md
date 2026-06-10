@@ -209,11 +209,21 @@ bash scripts/release.sh
 
 `-adhoc` tag 会跳过 `.github/workflows/release.yml` 的正式 release job。正式 release 仍按 [06.5 验收清单](#065-验收清单) 执行。
 
+构建命令必须显式使用完整 ad-hoc bundle 签名，否则下载后容易被 Gatekeeper 报成“已损坏”：
+
+```bash
+npm run clean:release
+npx @tauri-apps/cli build --bundles dmg --ci \
+  --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+```
+
 推荐 release notes 必须包含：
 
 ```text
 这是 ad-hoc 单 DMG 测试包，不是 stable updater 正式通道。
 Full Disk Access 可能需要重新授权；如遇权限异常，请在系统设置中移除旧 Aether Explorer 项后重新添加当前 app。
+如果 macOS 仍提示“已损坏，无法打开”，先把 app 拖到 /Applications，然后执行：
+xattr -rd com.apple.quarantine /Applications/Aether\ Explorer.app
 ```
 
 ## 06.7 失败模式与处理

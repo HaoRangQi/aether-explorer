@@ -11,7 +11,7 @@
 ### Ad-hoc 单 DMG 发布
 
 - 新增 `v0.5.0-adhoc.1` 单 DMG 发布口径：只上传本机 `src-tauri/target/release/bundle/dmg/` 生成的 `.dmg`，不上传 updater tar、`.sig`、`latest.json` 或 `SHA256SUMS`。
-- 该版本是 ad-hoc 本机包，不使用 Apple Developer ID `.p12` 给 `.app` 做稳定代码签名；Full Disk Access 可能需要重新授权，不保证跨版本继承。
+- 该版本是完整 ad-hoc bundle 签名包，不使用 Apple Developer ID `.p12` 给 `.app` 做稳定代码签名；Full Disk Access 可能需要重新授权，不保证跨版本继承。
 - `-adhoc` tag 会跳过正式 release workflow，避免误更新 `stable/latest.json` 或被当作稳定 updater 通道。
 
 ## [0.4.10] - 2026-06-10

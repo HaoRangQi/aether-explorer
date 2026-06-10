@@ -1,0 +1,12 @@
+{
+  "id": "fix-adhoc-dmg-gatekeeper-damaged",
+  "title": "修复 ad-hoc DMG 下载后被 macOS 判定损坏",
+  "status": "in_progress",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "release",
+  "currentPhase": "completed",
+  "nextAction": "归档任务并提交文档证据",
+  "createdAt": "2026-06-10T04:02:00Z",
+  "branch": "codex/remote-access"
+}
