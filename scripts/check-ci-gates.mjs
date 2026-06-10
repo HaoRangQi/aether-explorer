@@ -9,6 +9,7 @@ const files = {
   testWorkflow: resolve(root, '.github/workflows/test.yml'),
   releaseWorkflow: resolve(root, '.github/workflows/release.yml'),
   eslintConfig: resolve(root, 'eslint.config.js'),
+  cargoToml: resolve(root, 'src-tauri/Cargo.toml'),
 };
 
 const packageJson = JSON.parse(readFileSync(files.packageJson, 'utf8'));
@@ -17,6 +18,7 @@ const releaseScript = readFileSync(files.releaseScript, 'utf8');
 const testWorkflow = readFileSync(files.testWorkflow, 'utf8');
 const releaseWorkflow = readFileSync(files.releaseWorkflow, 'utf8');
 const eslintConfig = readFileSync(files.eslintConfig, 'utf8');
+const cargoToml = readFileSync(files.cargoToml, 'utf8');
 
 const requiredScripts = [
   'lint',
@@ -263,6 +265,10 @@ for (const [dependencyName, lockPath, versionPattern] of requiredDependencyResol
   if (!lockedVersion || !versionPattern.test(lockedVersion)) {
     failures.push(`package-lock.json must resolve ${dependencyName} to the expected major version.`);
   }
+}
+
+if (!/ssh2\s*=\s*\{[^\n]*features\s*=\s*\[[^\]]*"vendored-openssl"/.test(cargoToml)) {
+  failures.push('src-tauri/Cargo.toml must enable ssh2 vendored-openssl for universal macOS release builds.');
 }
 
 if (!eslintConfig.includes("'react-hooks/exhaustive-deps': 'error'")) {

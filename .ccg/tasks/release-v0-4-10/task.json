@@ -5,8 +5,8 @@
   "complexity": "L",
   "risk": "high",
   "domain": "release",
-  "currentPhase": "release",
-  "nextAction": "推送修正后的 release workflow 并重跑 v0.4.10 发布",
+  "currentPhase": "review",
+  "nextAction": "提交修复，移动 v0.4.10 tag，重跑发布并验证远程资产",
   "createdAt": "2026-06-10T00:00:00+08:00",
   "branch": "codex/remote-access"
 }

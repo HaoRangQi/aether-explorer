@@ -10,14 +10,16 @@ The release runbook had drifted from the actual workflow: the workflow now valid
 
 The first `v0.4.10` release run exposed an implementation error in the release workflow update: Apple Developer ID `.p12` signing was incorrectly promoted from Full Disk Access acceptance evidence into a hard release workflow prerequisite. That contradicts the prior working `v0.4.4` workflow and the `codex/06` release definition, which require updater signing artifacts and remote manifest validation.
 
+The second run exposed the actual packaging regression introduced by the new remote access scope: SFTP added `ssh2`, which pulls `libssh2-sys` and `openssl-sys`. On the GitHub ARM macOS runner, the universal build compiles an `x86_64-apple-darwin` target, and `openssl-sys` cannot use normal pkg-config discovery for that cross-target. The dependency owner is `src-tauri/Cargo.toml`, not the release workflow environment.
+
 ## Evidence
 
 See `90-evidence.md`.
 
 ## Residual Risk
 
-The corrected workflow still needs to be pushed and rerun before the release can be called complete. The release must not be considered complete until the remote `v0.4.10` release plus `stable/latest.json` pass verification.
+The corrected dependency declaration still needs to be checked, pushed, retagged as `v0.4.10`, and rerun before the release can be called complete. The release must not be considered complete until the remote `v0.4.10` release plus `stable/latest.json` pass verification.
 
 ## Decision
 
-Repair the release workflow contract, keep the existing `v0.4.10` tag, dispatch the corrected workflow against that tag, and keep `.ccg/tasks/release-v0-4-10` unarchived until remote release verification passes.
+Repair the release workflow contract, vendor OpenSSL through the SFTP dependency, move the existing incomplete `v0.4.10` tag to the corrected release commit, dispatch the corrected workflow against that tag, and keep `.ccg/tasks/release-v0-4-10` unarchived until remote release verification passes.

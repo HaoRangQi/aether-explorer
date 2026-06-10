@@ -210,6 +210,7 @@ bash scripts/release.sh
 | 客户端报 `The signature verification failed` | 手写 `latest.json` 并复用旧版本的签名，导致签名与 app 包内容不匹配 | 删除该 release，重新打 tag 让 CI 自动构建；或用正确的密钥为新版本 app 包重新签名 |
 | Release 里出现 `latest-json.xxxxx.json` 而不是 `latest.json` | `gh release upload/create` 的 `file#label` 只改显示标签，不改真实资产名 | 上传前先把文件写成真正的 `latest.json`，不要依赖 label 冒充文件名 |
 | `latest.json` 里的 URL 指向 `Aether Explorer.app.tar.gz` 等旧名 | manifest 用了原始构建文件 basename，而不是最终上传资产名 | 先把 release 资产归一化命名，再基于最终文件名生成 manifest |
+| universal 构建日志显示 `openssl-sys` 在 `$HOST = aarch64-apple-darwin`、`$TARGET = x86_64-apple-darwin` 下找不到 OpenSSL | 新增 SSH/SFTP 依赖后，`ssh2 -> libssh2-sys -> openssl-sys` 试图用 runner 的 pkg-config 查找目标架构 OpenSSL | 不要在 workflow 里硬猜 Homebrew OpenSSL 路径；在 `src-tauri/Cargo.toml` 给 `ssh2` 启用 `vendored-openssl`，让 Cargo 为 universal 两个 target 构建一致的 OpenSSL 依赖 |
 
 ## 06.8 流程防卡规则
 
@@ -218,6 +219,7 @@ bash scripts/release.sh
 - CI 和本地脚本都必须在上传后验收，不准只负责上传。
 - 新增或修改发布资产命名时，必须同步修改 workflow、`scripts/release.sh` 和本文件的资产清单。
 - universal 构建产物优先从 `src-tauri/target/universal-apple-darwin/release/bundle` 读取，`src-tauri/target/release/bundle` 只作为 fallback。
+- 引入 SSH/SFTP 原生依赖时，release 构建必须避免依赖 runner 的跨架构 pkg-config；`ssh2` 必须启用 `vendored-openssl`。
 - 发布时先把产物复制到 staging 目录并改成最终上传名，再生成 `latest.json`；不要直接拿临时文件名或原始构建名拼 URL。
 - `latest.json` 不手写，不临时凑字段，只从实际 `.app.tar.gz.sig` 生成。
 - 任何一次发布事故都要把根因写回本文件或 `codex/01-updater.md`，不能只靠聊天记录记忆。

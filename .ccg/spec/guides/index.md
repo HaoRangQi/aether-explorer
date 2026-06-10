@@ -19,3 +19,9 @@
 - macOS permission configuration changes must pass `npm run lint:macos-permissions`; `npm run lint` includes this preflight.
 - Packaged release candidates must pass `npm run validate:macos-app:release -- /path/to/Aether\ Explorer.app` before clean-user Full Disk Access acceptance; this requires a stable non-ad-hoc signing identity with TeamIdentifier and code-signing Identifier `com.aether.explorer`, validates bundle id/name/version, `Info.plist` privacy keys, and inspectable entitlements when present, and does not replace FDA evidence.
 - Final clean-user Full Disk Access release evidence must also pass `npm run validate:macos-permission-release -- --app /path/to/Aether\ Explorer.app --evidence /path/to/fda-evidence.json`; this read-only gate pairs the signed `.app` and saved FDA evidence and rejects app identity, bundle id, version, or app path drift.
+
+## Release Workflow
+
+- GitHub Release completion follows `codex/06-release-runbook.md`: versioned release assets, updater `.app.tar.gz.sig`, `latest.json`, `SHA256SUMS`, and `stable/latest.json` must all validate before a release is complete.
+- Do not promote manual Full Disk Access acceptance or Apple Developer ID `.p12` material into the automated release workflow prerequisites unless a future task explicitly changes the release contract.
+- SSH/SFTP native dependencies must keep `ssh2` on `vendored-openssl`; universal macOS release builds run on ARM runners and must not depend on pkg-config discovering x86_64 Homebrew OpenSSL.
