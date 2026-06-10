@@ -102,6 +102,7 @@ const requiredReleaseWorkflowTriggers = [
 const requiredReleaseWorkflowSecurityChecks = [
   'permissions:',
   'contents: write',
+  "if: ${{ !contains(github.ref_name, '-adhoc') && !(github.event_name == 'workflow_dispatch' && contains(inputs.tag_name, '-adhoc')) }}",
   'TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}',
   'TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}',
   'APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}',

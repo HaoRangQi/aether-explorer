@@ -1,7 +1,7 @@
 {
   "name": "aether-explorer",
   "private": true,
-  "version": "0.4.10",
+  "version": "0.5.0-adhoc.1",
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",

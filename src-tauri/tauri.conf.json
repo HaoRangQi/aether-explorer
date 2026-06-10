@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Aether Explorer",
-  "version": "0.4.10",
+  "version": "0.5.0-adhoc.1",
   "identifier": "com.aether.explorer",
   "build": {
     "frontendDist": "../dist",

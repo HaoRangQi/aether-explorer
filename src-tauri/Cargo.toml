@@ -1,6 +1,6 @@
 [package]
 name = "aether-explorer"
-version = "0.4.10"
+version = "0.5.0-adhoc.1"
 description = "A local-first macOS file workbench"
 authors = ["Aether Team"]
 license = "MIT"

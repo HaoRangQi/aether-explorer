@@ -26,3 +26,4 @@
 - Formal macOS releases that are expected to preserve Full Disk Access must require Apple app code signing inputs in the automated release workflow: `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD`. These are distinct from `TAURI_SIGNING_PRIVATE_KEY`, which only signs updater artifacts.
 - Do not promote manual Full Disk Access acceptance into automated release workflow prerequisites. Manual acceptance remains evidence, not a CI secret or automated action.
 - SSH/SFTP native dependencies must keep `ssh2` on `vendored-openssl`; universal macOS release builds run on ARM runners and must not depend on pkg-config discovering x86_64 Homebrew OpenSSL.
+- Ad-hoc single-DMG releases must use a `vX.Y.Z-adhoc.N` prerelease tag, upload only the local DMG, skip `stable/latest.json`, and state that Full Disk Access may need reauthorization because the app is not Developer ID-signed.

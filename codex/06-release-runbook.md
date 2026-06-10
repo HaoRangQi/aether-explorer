@@ -196,6 +196,26 @@ bash scripts/release.sh
 
 本地脚本内置同一套上传后验收。脚本显示 `Release vX.Y.Z is complete.` 才算完成；如果中途失败，按 [06.5 验收清单](#065-验收清单) 手动复核远程状态。
 
+## 06.6.1 Ad-hoc 单 DMG 发布
+
+当没有 Apple Developer ID `.p12`，但需要把本机可用的 DMG 快速发给用户测试时，使用 `-adhoc` tag 发布单 DMG：
+
+- tag 格式：`vX.Y.Z-adhoc.N`
+- GitHub Release 必须标记为 prerelease。
+- 只上传一个资产：`src-tauri/target/release/bundle/dmg/*.dmg`。
+- 不上传 updater `.app.tar.gz`、`.sig`、`latest.json` 或 `SHA256SUMS`。
+- 不更新 `stable/latest.json`。
+- 不声称 Full Disk Access 跨版本稳定继承；用户可能需要重新授权。
+
+`-adhoc` tag 会跳过 `.github/workflows/release.yml` 的正式 release job。正式 release 仍按 [06.5 验收清单](#065-验收清单) 执行。
+
+推荐 release notes 必须包含：
+
+```text
+这是 ad-hoc 单 DMG 测试包，不是 stable updater 正式通道。
+Full Disk Access 可能需要重新授权；如遇权限异常，请在系统设置中移除旧 Aether Explorer 项后重新添加当前 app。
+```
+
 ## 06.7 失败模式与处理
 
 | 现象 | 根因 | 处理 |

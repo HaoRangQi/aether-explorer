@@ -1,0 +1,12 @@
+{
+  "id": "simple-adhoc-dmg-release",
+  "title": "发布单 DMG ad-hoc release",
+  "status": "in_progress",
+  "complexity": "M",
+  "risk": "medium",
+  "domain": "release",
+  "currentPhase": "completed",
+  "nextAction": "归档任务，提交并发布 v0.5.0-adhoc.1",
+  "createdAt": "2026-06-10T03:43:22Z",
+  "branch": "codex/remote-access"
+}
