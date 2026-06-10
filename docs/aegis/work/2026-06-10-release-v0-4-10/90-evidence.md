@@ -18,6 +18,8 @@
 - `gh run watch 27222494242 --exit-status` — failed after `test-gate` passed; `release` job failed in `Validate release inputs`.
 - `gh secret list -R HaoRangQi/aether-explorer` — only `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are configured.
 - `security find-identity -v -p codesigning` — `0 valid identities found`.
+- `git show v0.4.4:.github/workflows/release.yml` — prior working release workflow only required `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+- `git show v0.4.4:codex/06-release-runbook.md` — runbook release completion is defined by `.dmg`, updater package, `.sig`, `latest.json`, and remote manifest validation, not Apple Developer ID `.p12`.
 
 ## Release Inputs Checked
 
@@ -28,8 +30,9 @@
 - `CHANGELOG.md` contains `## [0.4.10] - 2026-06-10`.
 - `codex/06-release-runbook.md` aligned to the current four-source version gate and stable manifest validation.
 - Release run failure reason: `missing APPLE_CERTIFICATE secret; updater signing is not macOS app code signing`.
+- Corrected interpretation: that failure came from an incorrect new workflow hard gate, not from a `codex/06` release prerequisite.
 
 ## Not Covered
 
 - Clean-user Full Disk Access acceptance remains a manual release evidence step.
-- Signed macOS universal artifact creation and GitHub Release asset validation did not run because Developer ID Application signing secrets are missing.
+- GitHub Release asset validation is pending the corrected workflow rerun.

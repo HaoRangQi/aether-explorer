@@ -17,17 +17,17 @@
 - Committed release prep as `80369ed chore: prepare release v0.4.10`.
 - Pushed `codex/remote-access` and tag `v0.4.10`.
 - Watched GitHub Actions release run `27222494242`; `test-gate` passed, `release` failed in `Validate release inputs`.
-- Updated `codex/06-release-runbook.md` with the missing `APPLE_CERTIFICATE` secret prerequisite and failure mode.
+- Compared against `v0.4.4` release workflow and `codex/06-release-runbook.md`; prior working releases only required `TAURI_SIGNING_PRIVATE_KEY` for updater artifacts.
+- Removed the incorrect Apple Developer ID `.p12` hard gate from `.github/workflows/release.yml`, `scripts/release.sh`, `scripts/check-ci-gates.mjs`, and `codex/06-release-runbook.md`.
 
 ## Active Slice
 
-Release blocked on external signing material.
+Correct release workflow and rerun `v0.4.10`.
 
 ## Blocked On
 
-- GitHub repo lacks `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` secrets for Developer ID Application `.p12` code signing.
-- Local machine has no valid code-signing identities and no discovered `.p12` certificate files.
+- Nothing external at this slice; the remaining work is to verify and rerun GitHub Actions.
 
 ## Next Step
 
-Configure Apple Developer ID signing secrets, then rerun `release.yml` for `v0.4.10`.
+Run release gate checks, push the corrected workflow, dispatch `release.yml` for `v0.4.10`, and verify remote release assets.

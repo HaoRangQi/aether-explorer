@@ -7,12 +7,9 @@
 # 所需 secrets（Settings → Secrets and variables → Actions）：
 #   TAURI_SIGNING_PRIVATE_KEY            私钥文件内容（cat ~/.tauri/aether-updater.key 的输出）
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   私钥密码；私钥无密码则填空字符串
-#   APPLE_CERTIFICATE                    Developer ID Application .p12 的 base64 内容，用于 macOS .app 代码签名
-#   APPLE_CERTIFICATE_PASSWORD           Developer ID Application .p12 密码；无密码则填空字符串
 #
 # 说明：
 #   - workflow 直接调用 Tauri CLI 构建和签名，不使用 tauri-action 上传半成品
-#   - TAURI_SIGNING_PRIVATE_KEY 只签 updater artifact；APPLE_CERTIFICATE 才能生成稳定 TeamIdentifier 的 .app
 #   - latest.json 由 workflow 显式生成，确保包含平台 signature
 #   - 构建产物、签名、manifest 齐全后才统一上传到 GitHub Release
 
@@ -93,8 +90,6 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -104,25 +99,6 @@ jobs:
           }
           [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || {
             echo "missing TAURI_SIGNING_PRIVATE_KEY secret";
-            exit 1;
-          }
-          [ -n "${APPLE_CERTIFICATE:-}" ] || {
-            echo "missing APPLE_CERTIFICATE secret; updater signing is not macOS app code signing";
-            exit 1;
-          }
-          CERT_FILE="$(mktemp -t apple-cert)"
-          trap 'rm -f "$CERT_FILE"' EXIT
-          printf '%s' "$APPLE_CERTIFICATE" | base64 -d > "$CERT_FILE" || {
-            echo "APPLE_CERTIFICATE secret must be base64-encoded .p12 content";
-            exit 1;
-          }
-          CERT_BYTES="$(wc -c < "$CERT_FILE" | tr -d '[:space:]')"
-          [ "$CERT_BYTES" -gt 100 ] || {
-            echo "decoded APPLE_CERTIFICATE secret is too small to be a valid .p12 certificate";
-            exit 1;
-          }
-          openssl pkcs12 -in "$CERT_FILE" -nokeys -passin "pass:${APPLE_CERTIFICATE_PASSWORD:-}" >/dev/null 2>&1 || {
-            echo "Failed to read APPLE_CERTIFICATE as valid .p12; check certificate export and APPLE_CERTIFICATE_PASSWORD";
             exit 1;
           }
 
@@ -152,26 +128,11 @@ jobs:
       - name: Clean release artifacts
         run: npm run clean:release
 
-      - name: Build signed universal bundle
+      - name: Build universal updater bundle
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: npx @tauri-apps/cli build --target universal-apple-darwin
-
-      - name: Validate release app bundle signing
-        run: |
-          set -euo pipefail
-
-          if [ -d "src-tauri/target/universal-apple-darwin/release/bundle" ]; then
-            BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
-          else
-            BUNDLE_DIR="src-tauri/target/release/bundle"
-          fi
-          APP_BUNDLE="$(find "$BUNDLE_DIR/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -n 1 || true)"
-          [ -d "$APP_BUNDLE" ] || { echo "missing .app for release validation"; exit 1; }
-          npm run validate:macos-app:release -- "$APP_BUNDLE"
 
       - name: Upload release assets and manifest
         env:

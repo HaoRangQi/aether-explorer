@@ -38,7 +38,7 @@
 - 明确项目采用非沙盒、用户手动授权 Full Disk Access 的 macOS 权限模型，并增加源码级 `lint:macos-permissions` 防回退。
 - 新增 release 候选 `.app` 验证器、FDA evidence 验证器、`.app + evidence` 联合验证器，发版证据要求稳定签名身份、bundle id、版本和安装路径一致。
 - release workflow 和本地 `scripts/release.sh` 统一四个版本源校验：`package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 必须与 tag 一致。
-- release workflow 和本地脚本在打包前清理旧产物，构建 signed universal macOS bundle，上传 `.dmg`、`.app.tar.gz`、`.sig`、`latest.json` 和 `SHA256SUMS`，并同步 `stable/latest.json`。
+- release workflow 和本地脚本在打包前清理旧产物，构建 universal macOS bundle 并生成 updater 签名，上传 `.dmg`、`.app.tar.gz`、`.sig`、`latest.json` 和 `SHA256SUMS`，并同步 `stable/latest.json`。
 - README、SECURITY、PRIVACY、SMOKE_TEST、TEST_PLAN、RELEASE_AUDIT 和 QUICK_DELIVERY_PLAN 已对齐当前社区预览分发、未签名/ad-hoc 风险、稳定签名身份和 FDA release evidence 口径。
 
 ### 测试

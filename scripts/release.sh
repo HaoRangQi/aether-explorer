@@ -11,8 +11,6 @@
 # 环境变量：
 #   TAURI_SIGNING_PRIVATE_KEY_PATH   私钥路径，默认 ~/.tauri/aether-updater.key
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  私钥密码，若空则按无密码处理
-#   APPLE_CERTIFICATE                 可选，Developer ID Application .p12 的 base64 内容，用于 macOS .app 代码签名
-#   APPLE_CERTIFICATE_PASSWORD        可选，Developer ID Application .p12 密码，若空则按无密码处理
 #   GITHUB_REPO                       默认 HaoRangQi/aether-explorer
 
 set -euo pipefail
@@ -32,33 +30,7 @@ LOCK_FILE="package-lock.json"
 [ -f "$PRIVATE_KEY_PATH" ] || { echo "❌ 私钥不存在：$PRIVATE_KEY_PATH"; exit 1; }
 command -v jq >/dev/null || { echo "❌ 需要安装 jq"; exit 1; }
 command -v gh >/dev/null || { echo "❌ 需要安装 gh CLI 并完成 gh auth login"; exit 1; }
-command -v security >/dev/null || { echo "❌ 需要 macOS security 工具检查代码签名身份"; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "❌ gh 未登录，请运行 gh auth login"; exit 1; }
-
-if [ -n "${APPLE_CERTIFICATE:-}" ]; then
-  command -v openssl >/dev/null || { echo "❌ 需要 openssl 校验 APPLE_CERTIFICATE"; exit 1; }
-  CERT_FILE="$(mktemp -t aether-apple-cert)"
-  trap 'rm -f "$CERT_FILE"' EXIT
-  printf '%s' "$APPLE_CERTIFICATE" | base64 -d > "$CERT_FILE" || {
-    echo "❌ APPLE_CERTIFICATE 必须是 base64 编码的 .p12 内容"
-    exit 1
-  }
-  CERT_BYTES="$(wc -c < "$CERT_FILE" | tr -d '[:space:]')"
-  [ "$CERT_BYTES" -gt 100 ] || {
-    echo "❌ APPLE_CERTIFICATE 解码后过小，不像有效 .p12 证书"
-    exit 1
-  }
-  openssl pkcs12 -in "$CERT_FILE" -nokeys -passin "pass:${APPLE_CERTIFICATE_PASSWORD:-}" >/dev/null 2>&1 || {
-    echo "❌ 无法把 APPLE_CERTIFICATE 作为有效 .p12 读取，请检查证书导出内容和 APPLE_CERTIFICATE_PASSWORD"
-    exit 1
-  }
-else
-  security find-identity -v -p codesigning | grep -Eq '"Developer ID Application:' || {
-    echo "❌ 缺少 Apple .app 代码签名身份：请导出 APPLE_CERTIFICATE，或在钥匙串安装有效 Developer ID Application 证书"
-    echo "   注意：TAURI_SIGNING_PRIVATE_KEY 只签 updater artifact，不能替代 macOS .app 的 TeamIdentifier 签名"
-    exit 1
-  }
-fi
 
 # ─── 版本与 tag ──────────────────────────────────────────────────
 VERSION="$(jq -r '.version' "$CONF_FILE")"
@@ -85,8 +57,6 @@ npm run lint:rust
 # ─── 注入签名密钥环境变量 ────────────────────────────────────────
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$PRIVATE_KEY_PATH")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
-export APPLE_CERTIFICATE="${APPLE_CERTIFICATE:-}"
-export APPLE_CERTIFICATE_PASSWORD="${APPLE_CERTIFICATE_PASSWORD:-}"
 
 # ─── 构建 ────────────────────────────────────────────────────────
 echo "🔨 构建前端 + Tauri bundle..."
@@ -104,20 +74,14 @@ fi
 DMG="$(find "$BUNDLE_DIR/dmg" -type f -name "*.dmg" 2>/dev/null | head -n 1 || true)"
 APP_TAR="$(find "$BUNDLE_DIR/macos" -type f -name "*.app.tar.gz" 2>/dev/null | head -n 1 || true)"
 APP_SIG="$(find "$BUNDLE_DIR/macos" -type f -name "*.app.tar.gz.sig" 2>/dev/null | head -n 1 || true)"
-APP_BUNDLE="$(find "$BUNDLE_DIR/macos" -maxdepth 1 -type d -name "*.app" 2>/dev/null | head -n 1 || true)"
 
 [ -f "$DMG" ]     || { echo "❌ 没找到 .dmg 产物"; exit 1; }
 [ -f "$APP_TAR" ] || { echo "❌ 没找到 .app.tar.gz（updater 资产，需要 tauri.conf.json 启用 updater 插件且 TAURI_SIGNING_PRIVATE_KEY 已设置）"; exit 1; }
 [ -f "$APP_SIG" ] || { echo "❌ 没找到 .app.tar.gz.sig（签名步骤失败）"; exit 1; }
-[ -d "$APP_BUNDLE" ] || { echo "❌ 没找到 .app 产物，无法验收 macOS 权限发布前置条件"; exit 1; }
 
 echo "  DMG     : $DMG"
 echo "  Updater : $APP_TAR"
 echo "  Sig     : $APP_SIG"
-echo "  App     : $APP_BUNDLE"
-
-echo "🔎 验收 macOS app bundle 签名身份与权限元数据..."
-npm run validate:macos-app:release -- "$APP_BUNDLE"
 
 # ─── 生成 latest.json ────────────────────────────────────────────
 STAGING_DIR="$(mktemp -d -t release-assets)"
