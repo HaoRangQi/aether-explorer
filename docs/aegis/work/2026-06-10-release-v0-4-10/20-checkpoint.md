@@ -22,10 +22,14 @@
 - Dispatched release run `27247626585`; `test-gate` passed and release input validation passed, then universal build failed while compiling `openssl-sys` for `x86_64-apple-darwin` on an ARM macOS runner.
 - Traced `openssl-sys` to `ssh2 -> libssh2-sys`, a new remote SFTP dependency absent from the working `v0.4.4` release.
 - Enabled `ssh2` `vendored-openssl` in `src-tauri/Cargo.toml` and added a `lint:ci-gates` guard so future release builds do not depend on cross-arch pkg-config OpenSSL discovery.
+- Committed and pushed `33fed26 fix: vendor openssl for universal release builds`.
+- Moved remote tag `v0.4.10` from `80369ed` to `33fed26` because release workflow checks out `${RELEASE_TAG}`.
+- Watched release run `27248872308`; `test-gate` and `release` both passed, including `Build universal updater bundle` and `Upload release assets and manifest`.
+- Verified `v0.4.10` release assets, versioned `latest.json`, `stable/latest.json`, and `SHA256SUMS` using the `codex/06` command checks.
 
 ## Active Slice
 
-Repair universal release build and rerun `v0.4.10`.
+Complete and archive `v0.4.10`.
 
 ## Blocked On
 
@@ -33,4 +37,4 @@ Repair universal release build and rerun `v0.4.10`.
 
 ## Next Step
 
-Run release gate checks, move `v0.4.10` to the corrected release commit, push branch and tag, dispatch `release.yml` for `v0.4.10`, and verify remote release assets.
+Archive `.ccg/tasks/release-v0-4-10` and push the archive commit.

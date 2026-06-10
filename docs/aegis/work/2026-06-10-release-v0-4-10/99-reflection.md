@@ -18,8 +18,8 @@ See `90-evidence.md`.
 
 ## Residual Risk
 
-The corrected dependency declaration still needs to be checked, pushed, retagged as `v0.4.10`, and rerun before the release can be called complete. The release must not be considered complete until the remote `v0.4.10` release plus `stable/latest.json` pass verification.
+The automated release is complete under `codex/06`: release assets, updater signature, versioned `latest.json`, `SHA256SUMS`, and `stable/latest.json` all validate remotely. Clean-user Full Disk Access acceptance remains intentionally outside this code-only release task.
 
 ## Decision
 
-Repair the release workflow contract, vendor OpenSSL through the SFTP dependency, move the existing incomplete `v0.4.10` tag to the corrected release commit, dispatch the corrected workflow against that tag, and keep `.ccg/tasks/release-v0-4-10` unarchived until remote release verification passes.
+Repair the release workflow contract, vendor OpenSSL through the SFTP dependency, move the incomplete `v0.4.10` tag to the corrected release commit, publish the GitHub Release, verify the updater manifests remotely, then archive `.ccg/tasks/release-v0-4-10`.

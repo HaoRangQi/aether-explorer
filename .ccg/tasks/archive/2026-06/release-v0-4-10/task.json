@@ -1,12 +1,12 @@
 {
   "id": "release-v0-4-10",
   "title": "发布 Aether Explorer v0.4.10",
-  "status": "in_progress",
+  "status": "completed",
   "complexity": "L",
   "risk": "high",
   "domain": "release",
-  "currentPhase": "review",
-  "nextAction": "提交修复，移动 v0.4.10 tag，重跑发布并验证远程资产",
+  "currentPhase": "completed",
+  "nextAction": "归档任务",
   "createdAt": "2026-06-10T00:00:00+08:00",
   "branch": "codex/remote-access"
 }

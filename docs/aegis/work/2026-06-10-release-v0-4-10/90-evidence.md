@@ -37,6 +37,15 @@
 - `npm run lint:readme` — passed.
 - `npm run lint:i18n` — passed.
 - `git diff --check` — passed.
+- `git commit -m "fix: vendor openssl for universal release builds"` — created `33fed26`.
+- `git push origin codex/remote-access` — pushed `33fed26`.
+- `git tag -f v0.4.10 HEAD && git push --force origin v0.4.10` — moved the incomplete release tag from `80369ed` to `33fed26` so workflow checkout builds the corrected dependency declaration.
+- `gh run watch 27248872308 --exit-status` — passed; `test-gate` completed in 3m46s and `release` completed in 12m08s.
+- `gh release view v0.4.10 -R HaoRangQi/aether-explorer --json isDraft,isPrerelease,assets,url` with the `codex/06` asset predicate — passed.
+- `curl -fsSL https://github.com/HaoRangQi/aether-explorer/releases/download/v0.4.10/latest.json | jq ...` — passed; both `darwin-aarch64` and `darwin-x86_64` signatures are present and point at the `v0.4.10` updater package.
+- `curl -fsSL https://github.com/HaoRangQi/aether-explorer/releases/download/stable/latest.json | jq ...` — passed; stable manifest version is `0.4.10`.
+- `curl -fsSL https://github.com/HaoRangQi/aether-explorer/releases/download/v0.4.10/SHA256SUMS | grep -E ...` — passed; checksums include the universal `.dmg`, updater `.app.tar.gz`, `.sig`, and `latest.json`.
+- `gh release view v0.4.10 -R HaoRangQi/aether-explorer --json name,url,body,assets` — release notes are sourced from `CHANGELOG.md` and explicitly describe changes compared with `v0.4.4`.
 
 ## Release Inputs Checked
 
@@ -53,5 +62,4 @@
 
 ## Not Covered
 
-- Clean-user Full Disk Access acceptance remains a manual release evidence step.
-- GitHub Release asset validation is pending the corrected universal build rerun.
+- Clean-user Full Disk Access acceptance remains intentionally out of scope for this code-only release task.
