@@ -1,0 +1,12 @@
+{
+  "id": "fix-release-macos-permission-identity",
+  "title": "修复正式版 macOS 权限身份导致的目录访问弹窗回归",
+  "status": "in_progress",
+  "complexity": "M",
+  "risk": "high",
+  "domain": "release",
+  "currentPhase": "completed",
+  "nextAction": "归档任务并提交代码相关改动",
+  "createdAt": "2026-06-10T03:11:06Z",
+  "branch": "codex/remote-access"
+}

@@ -22,8 +22,9 @@
 
 不变量：
 - `com.apple.security.app-sandbox` 必须为 `false`（`src-tauri/Entitlements.plist:5`）
-- `Info.plist` 必须包含所有受保护目录的 `NS*UsageDescription`，否则 TCC 授权不持久
-- 无 Apple Developer 签名时，dev 模式每次构建二进制不同，TCC 仍会重复弹框——这是正常行为，正式 .dmg 安装后只弹一次
+- `Info.plist` 必须包含受保护目录的 `NS*UsageDescription`，否则 TCC 弹框文案和授权记录会退化
+- `Info.plist` 不是稳定身份；正式 .dmg 必须有非 ad-hoc Apple app 代码签名、有效 `TeamIdentifier` 和 code-signing `Identifier=com.aether.explorer`，否则 TCC 可能把更新后的 app 当成新 client
+- 无 Apple Developer 签名时，dev/release/ad-hoc 构建都只能作为本地或高级用户测试，不能作为 Full Disk Access 正式版可用证据
 
 ---
 

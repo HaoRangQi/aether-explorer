@@ -23,5 +23,6 @@
 ## Release Workflow
 
 - GitHub Release completion follows `codex/06-release-runbook.md`: versioned release assets, updater `.app.tar.gz.sig`, `latest.json`, `SHA256SUMS`, and `stable/latest.json` must all validate before a release is complete.
-- Do not promote manual Full Disk Access acceptance or Apple Developer ID `.p12` material into the automated release workflow prerequisites unless a future task explicitly changes the release contract.
+- Formal macOS releases that are expected to preserve Full Disk Access must require Apple app code signing inputs in the automated release workflow: `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD`. These are distinct from `TAURI_SIGNING_PRIVATE_KEY`, which only signs updater artifacts.
+- Do not promote manual Full Disk Access acceptance into automated release workflow prerequisites. Manual acceptance remains evidence, not a CI secret or automated action.
 - SSH/SFTP native dependencies must keep `ssh2` on `vendored-openssl`; universal macOS release builds run on ARM runners and must not depend on pkg-config discovering x86_64 Homebrew OpenSSL.
